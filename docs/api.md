@@ -116,4 +116,15 @@ memglow("read", ["alice"]);
 - **Keep the token out of logs and command lines**: read it from `~/.memglow/token` or an
   environment variable.
 - If you only need writes, you may not need a hook at all: memglow already notices every note
-  whose body changes on disk (see [Works with](../README.md#works-with)).
+  whose body changes on disk (see [Works with](../README.md#works-with)). Such a write is counted
+  in Memory cost too; if your hook reports the same write within 15 seconds, it is counted once.
+
+## The saved view — `GET` / `PUT /api/view` (used by the page)
+
+The page itself saves its view (settings, bubble layout, camera) on the instance; you do not need
+this route for hooks. It is behind `MEMGLOW_PASSWORD` like the page. `GET` returns
+`{ settings, positions, pinned, camera, updated }`. `PUT` takes any of these parts (a part sent
+replaces the saved one; `{"reset": true}` clears the layout and keeps the settings) and answers
+`204`. A `PUT` must carry `X-Memglow: 1` and an `Origin` of the same host, otherwise `403`; body
+over 256 KB: `413`; not a JSON object: `400`; too many writes: `429`. Unknown settings, values out
+of bounds and ids of notes that do not exist are dropped.

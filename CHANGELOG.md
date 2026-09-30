@@ -27,6 +27,30 @@ Memory cost: see which notes cost your assistant the most tokens, and which ones
 - Token estimate in the note tooltip and the note panel.
 - Demo: a long fictional incident log to show the split suggestion; `demo/simulate.js --counted`
   fills Memory cost.
+- **View saved on the instance** (`GET`/`PUT /api/view`): settings, bubble layout (positions,
+  pinned bubbles) and camera, in `view.json` in memglow's data folder (`/data` in Docker). One
+  view per instance: every browser and device that opens it gets the same view. The page reads
+  it before building the graph (falls back to its `localStorage` copy if the server does not
+  answer within 2.5 s), restores the camera without animation, puts new notes next to their
+  sub-theme bubble, and saves in groups (settings after 0.5 s, layout and camera after 2 s, a
+  last save when the page is closed). Reduced motion is respected.
+- **Rearrange** button in Settings: a fresh layout, settings kept.
+
+### Changed — journal and counts
+
+- Journal lines read **action · group · note · source** — *Write · Projects · Release notes ·
+  Claude Code* — with the group (top-level theme) as a small tag tinted with its colour; the dot
+  keeps the action's colour. Same for *Note changed / New note / Note removed* (source *File*).
+  Known tools get their product name (Claude Code, Codex, Gemini CLI, Cursor, Copilot, Windsurf,
+  Cline, MCP).
+- Memory cost counts are **dynamic and de-duplicated**: a note whose body changes on disk counts
+  as a write even without a hook (an assistant without hooks, an edit by hand); a hook reporting
+  the same write within 15 s is not counted twice, whichever comes first. Frontmatter-only
+  changes and moved files are not writes. The panel refreshes about 1.5 s after an activity or a
+  note change (bursts grouped); the server recomputes only when counts or notes changed.
+- *Copy prompt for your AI*: the group is spelled out, the split is given as K numbered parts,
+  a costly note under the size threshold is described as such (not as "too large"), and a
+  partial first week says "counted since …".
 
 ### Changed — visual polish
 
@@ -42,11 +66,23 @@ Memory cost: see which notes cost your assistant the most tokens, and which ones
 
 ### Fixed
 
+- Clicking a sub-theme bubble now lights its notes (it lit none).
+- memglow writes nothing if its data folder is set inside the notes folder (counts and view are
+  then kept in memory only, with a warning).
 - **Spacing**: "Minimum spacing" had almost no effect at the default spread. It is now relative
   to the spread and the collision is firmer, so spacing wins over gravity.
 - Hidden themes (legend) were dropped on reload with custom themes.
 - A masked secret-looking heading now stays a heading, so a note keeps its sections.
 - Release workflow: GitHub Actions moved to their Node 24 majors.
+
+### Security
+
+- `/api/view` follows the page's access rule (`MEMGLOW_PASSWORD`). Writes need memglow's own
+  `X-Memglow` header and a same-host `Origin` (else `403`), are capped at 256 KB (`413`), rate
+  limited (`429`), and strictly validated: a closed list of settings with types and bounds,
+  finite bounded coordinates for existing notes and sub-theme bubbles only (2,000 at most),
+  pinned ⊆ positions, bounded camera; everything else — `__proto__` included — is dropped.
+  Written atomically (mode 600) in the data folder, never in the notes folder.
 
 ## 0.2.1 — 2026-09-30
 

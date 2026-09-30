@@ -83,20 +83,28 @@ own memory, from the activity your hooks report:
 - **Never read in 30 days** — once 30 days of counts exist (before that: "Data since …").
 - **Copy prompt for your AI** on each large or costly note: a ready-to-paste prompt with the
   note, its size, its reads, the threshold and the suggested parts, plus rules that keep the
-  memory consistent (same theme and folder, top-level themes unchanged, `theme`/`subtheme`
+  memory consistent (same group and folder, top-level groups unchanged, `theme`/`subtheme`
   frontmatter kept, `[[links]]` kept valid, the original becomes a short summary, only the
   agent's memory tool is used, and the plan is shown before anything is written).
 
 Numbers are **estimates** (≈ bytes ÷ 4, not a tokenizer), meant to compare notes with each
 other — memglow promises no saving. memglow still never touches your notes: the counts (note
 ids and numbers only, 90 days) live in its own data folder, `~/.memglow` by default
-(`MEMGLOW_DATA_DIR`, `/data` in Docker). Activity sent with `"demo": true` is animated but not
-counted. The bubble size can follow the token cost too: *Settings → Size by → Token cost*.
+(`MEMGLOW_DATA_DIR`, `/data` in Docker). A note whose text changes on disk counts as a write even
+without a hook (an assistant without hooks, an edit by hand); when a hook reports the same write
+within 15 seconds, it is counted once. Activity sent with `"demo": true` is animated but not
+counted. The panel refreshes a second or two after each activity or note change. The bubble size can follow the token cost too: *Settings → Size by → Token cost*.
 
 <a id="settings"></a>
 ## 🎛️ Settings
 
-The **Settings** panel on the graph, saved in your browser (`localStorage`, keys `memglow.*`):
+The **Settings** panel on the graph. Your **view** — these settings, the layout of the bubbles
+(where they are, which ones you pinned by dragging) and the camera — is **saved on the memglow
+instance**, in its data folder (`view.json` in `~/.memglow`, `MEMGLOW_DATA_DIR`, or the `/data`
+volume in Docker). memglow has one user per instance, so every browser and device that opens it
+gets the **same view**: set it up on your laptop, open it on your phone, same picture. The page
+also keeps a copy in the browser (`localStorage`, keys `memglow.*`) and uses it if the server does
+not answer within a few seconds.
 
 | Section | Setting | What it does |
 |---|---|---|
@@ -115,7 +123,9 @@ The **Settings** panel on the graph, saved in your browser (`localStorage`, keys
 | | Ambient flow | slow comets at rest |
 
 Drag a bubble to move it, double-click it to release it; double-click the background to go
-back to the overview.
+back to the overview. **Rearrange** starts again from a fresh layout (your settings stay). A note
+added later appears next to its sub-theme bubble, without shaking the saved layout. With
+*reduced motion* on, a saved layout is restored without animation.
 
 <a id="how-it-works"></a>
 ## 🧭 How it works
@@ -177,8 +187,9 @@ link is in each adapter's README.
 
 **Writes from anything are already covered.** memglow polls the notes folder: whenever a note's
 body changes on disk — whoever changed it — the note blooms, the camera goes to it and the
-journal says *Note changed*. Hooks and the proxy add what the disk cannot tell: **reads and
-searches**, and *which* tool did it.
+journal says *Note changed · Projects · Release notes · File* (it also counts as a write in
+Memory cost). Hooks and the proxy add what the disk cannot tell: **reads and searches**, and
+*which* tool did it — *Read · Projects · Release notes · Claude Code*.
 
 <a id="install"></a>
 ## 🛠️ Install: `memglow init`
@@ -261,7 +272,8 @@ curl -H "Authorization: Bearer $(cat ~/.memglow/token)" -H 'Content-Type: applic
 ```
 
 `type` is `read`, `search` or `write`; `ids` are note names or paths (only existing notes are
-kept); `source` is the label in the journal. Full reference with Python and Node examples:
+kept); `source` is the label in the journal (each line reads *action · group · note · source*,
+e.g. *Write · Projects · Release notes · my-agent*). Full reference with Python and Node examples:
 [docs/api.md](docs/api.md).
 
 <a id="mcp-proxy"></a>
@@ -310,7 +322,7 @@ With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 | `MEMGLOW_PASSWORD` | — | HTTP Basic auth on the viewer (user `memglow`, 12+ chars) |
 | `MEMGLOW_SHOW_BODIES` | `true` | show note text in the side panel |
 | `MEMGLOW_POLL_MS` | `2000` | how often the folder is checked |
-| `MEMGLOW_DATA_DIR` / `dataDir` | `~/.memglow` | memglow's own data (Memory cost counts); never the notes folder |
+| `MEMGLOW_DATA_DIR` / `dataDir` | `~/.memglow` | memglow's own data (Memory cost counts, saved view); never the notes folder |
 | `MEMGLOW_LARGE_NOTE_TOKENS` / `largeNoteTokens` | `5000` | Memory cost: a note above this is "too large" |
 | `splitChunkTokens` | `2000` | Memory cost: target size of each part of a split suggestion |
 | `themes`, `themeByFolder`, `defaultTheme`, `subthemeLabels`, `title` | — | config file only |
@@ -326,7 +338,8 @@ docker run -d --name memglow -p 127.0.0.1:4747:4747 \
   ghcr.io/r0zumnik/memglow:0.3.0
 ```
 
-`/data` keeps the Memory cost counts across restarts (note ids and numbers only).
+`/data` keeps the Memory cost counts (note ids and numbers only) and the saved view (settings,
+layout, camera) across restarts.
 
 Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
 then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
@@ -357,6 +370,16 @@ container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same toke
 - Memory cost (`GET /api/cost`) is behind the same password as the rest. It sends note titles,
   sizes and counts; section titles only when note bodies may be shown, with secret-looking
   headings masked. Its counts are written to memglow's data folder, never to `MEMORY_DIR`.
+- The saved view (`GET`/`PUT /api/view`) follows the same rule as the page: behind
+  `MEMGLOW_PASSWORD` when it is set. A write must come from the page itself: it needs memglow's
+  own `X-Memglow: 1` header and an `Origin` of the same host (`Host`, or `X-Forwarded-Host` behind
+  a reverse proxy); anything else gets `403` (no cross-site request can save a view). Bodies are
+  capped at 256 KB (`413`), unreadable ones get `400`, writes are rate limited (`429`), and the
+  content is **strictly validated**: a closed list of settings with their types and bounds, finite
+  bounded coordinates for existing notes and sub-theme bubbles only (2,000 at most), pinned
+  bubbles among them, a bounded camera — anything else is dropped, never stored as sent. It is
+  written atomically in memglow's data folder; if that folder is inside `MEMORY_DIR`, memglow
+  writes nothing and keeps counts and view in memory only.
 - Strict Content-Security-Policy (`script-src 'self'`), `nosniff`, no framing, no referrer.
   No CDN, no analytics, no network calls from the page.
 
