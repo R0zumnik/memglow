@@ -10,6 +10,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
+const os = require("os");
 const path = require("path");
 const { loadConfig } = require("./lib/config");
 const { createMemory } = require("./lib/memory");
@@ -150,18 +151,41 @@ function createServer(config, memory) {
   });
 }
 
-if (require.main === module) {
-  const config = loadConfig();
+/**
+ * Environment for the CLI: when nothing is configured here (no MEMGLOW_CONFIG, no
+ * ./memglow.config.json, no MEMORY_DIR), fall back to what `memglow init` wrote in ~/.memglow
+ * (config file and token). An explicit setting always wins.
+ */
+function withInstalledDefaults(env = process.env, cwd = process.cwd()) {
+  const home = env.MEMGLOW_HOME || path.join(os.homedir(), ".memglow");
+  const out = { ...env };
+  const installed = path.join(home, "memglow.config.json");
+  if (!out.MEMGLOW_CONFIG && !out.MEMORY_DIR && !fs.existsSync(path.join(cwd, "memglow.config.json")) && fs.existsSync(installed)) {
+    out.MEMGLOW_CONFIG = installed;
+  }
+  if (!out.MEMGLOW_TOKEN) {
+    try {
+      const t = fs.readFileSync(path.join(home, "token"), "utf8").trim();
+      if (t.length >= 32) out.MEMGLOW_TOKEN = t;
+    } catch { /* no token: live activity stays off */ }
+  }
+  return out;
+}
+
+function main(env = process.env) {
+  const config = loadConfig(withInstalledDefaults(env));
   if (!fs.existsSync(config.memoryDir)) {
-    console.error(`memglow: memory folder not found: ${config.memoryDir}\nSet MEMORY_DIR to a folder of Markdown notes (try MEMORY_DIR=./demo/memory).`);
+    console.error(`memglow: memory folder not found: ${config.memoryDir}\nRun \`memglow init\`, or set MEMORY_DIR to a folder of Markdown notes (try MEMORY_DIR=./demo/memory).`);
     process.exit(1);
   }
   const memory = createMemory({ dir: config.memoryDir, config, pollMs: config.pollMs });
-  createServer(config, memory).listen(config.port, config.host, () => {
+  return createServer(config, memory).listen(config.port, config.host, () => {
     console.log(`memglow: ${config.memoryDir}`);
     console.log(`memglow: open http://${config.host === "0.0.0.0" ? "localhost" : config.host}:${config.port}`);
     if (!config.token) console.log("memglow: MEMGLOW_TOKEN not set — /api/activity is disabled (live assistant activity off)");
   });
 }
 
-module.exports = { createServer };
+if (require.main === module) main();
+
+module.exports = { createServer, main, withInstalledDefaults };

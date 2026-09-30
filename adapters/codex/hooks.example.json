@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*|apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /ABSOLUTE/PATH/TO/.memglow/app/adapters/codex/hook.js",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -6,7 +6,7 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-0F4F46?style=flat-square&labelColor=04120F"></a>
   <img alt="Node 18+" src="https://img.shields.io/badge/node-18%2B-009597?style=flat-square&labelColor=04120F&logo=nodedotjs&logoColor=white">
   <img alt="No build step" src="https://img.shields.io/badge/no%20build%20step-zero%20deps-00696B?style=flat-square&labelColor=04120F">
-  <img alt="Works with Claude Code" src="https://img.shields.io/badge/works%20with-Claude%20Code-2EE89B?style=flat-square&labelColor=04120F">
+  <a href="#works-with"><img alt="Works with Claude Code, Codex, Gemini CLI, Cursor, Copilot and more" src="https://img.shields.io/badge/works%20with-Claude%20·%20Codex%20·%20Gemini%20·%20Cursor%20·%20Copilot%20·%20more-2EE89B?style=flat-square&labelColor=04120F"></a>
 </p>
 
 <p align="center">
@@ -14,13 +14,16 @@
 </p>
 
 <p align="center">
-  <b>Watch your AI assistant think.</b> memglow turns the Markdown memory of Claude Code, a basic-memory<br>
-  knowledge base or an Obsidian vault into a live 3D brain that lights up as notes are read, searched and written.
+  <b>Watch your AI assistant think.</b> memglow turns the Markdown memory of your AI tools — a basic-memory<br>
+  knowledge base, an Obsidian vault, any folder of notes — into a live 3D brain that lights up as notes are read, searched and written.
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
-  <a href="#live-activity-from-claude-code">Claude Code hook</a> ·
+  <a href="#works-with">Works with</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#activity-api">API</a> ·
+  <a href="#mcp-proxy">MCP proxy</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#security">Security</a> ·
   <a href="#faq">FAQ</a> ·
@@ -29,18 +32,20 @@
 
 ---
 
+<a id="features"></a>
 ## ✨ Features
 
-| | |
+| Feature | What it does |
 |---|---|
 | 🧠 **Live 3D brain** | Every note is a glowing neuron, every `[[wikilink]]` a connection. Recent notes shine brighter. |
-| ⚡ **Assistant activity, live** | A tiny Claude Code hook reports each read, search and write. The note flashes — 🔵 cyan for a read, 🔴 red-orange for a write, 🟣 violet for a search — and comets run along its links. |
+| ⚡ **Assistant activity, live** | Hooks for Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Copilot and Cline — or an MCP proxy for any other client — report each read, search and write. The note flashes — 🔵 cyan for a read, 🔴 red-orange for a write, 🟣 violet for a search — and comets run along its links. |
 | 🎥 **Camera that follows** | Glides to what the assistant touches, frames a search's results, drifts back to the overview after a few calm seconds. |
 | 🗂️ **Themes & sub-themes** | Notes cluster by theme with relay bubbles for sub-themes — from frontmatter or folder names. |
 | 🎛️ **Tune it live** | Glow, names, spread, gravity, spacing, links at rest, auto-rotate, find-a-note. Saved in your browser. |
-| 🔒 **Private by design** | Localhost by default, read-only access to your notes, secret-looking lines masked. No CDN, no analytics, no outbound calls. |
-| 📦 **Zero dependencies** | One `node server.js`, Node 18+. No `npm install`, no build step, no database. Or one Docker container. |
+| 🔒 **Private by design** | Localhost by default, read-only access to your notes, secret-looking lines masked. Hooks send note names only, never content. No CDN, no analytics. |
+| 📦 **Zero dependencies** | One command, Node 18+. No build step, no database. Or one Docker container. |
 
+<a id="screenshots"></a>
 ## 📸 Screenshots
 
 <table>
@@ -56,28 +61,35 @@
 
 <sub>Captured from the fictional demo memory in <code>demo/memory</code>.</sub>
 
+<a id="how-it-works"></a>
 ## 🧭 How it works
 
 <p align="center">
-  <img src="docs/assets/how-it-works.svg" alt="Claude Code runs a PostToolUse hook, which posts note ids to POST /api/activity on memglow. memglow reads the Markdown notes folder read-only and streams everything to the live 3D brain in the browser." width="100%">
+  <img src="docs/assets/how-it-works.svg" alt="An AI tool runs a hook, which posts note ids to POST /api/activity on memglow. memglow reads the Markdown notes folder read-only and streams everything to the live 3D brain in the browser." width="100%">
 </p>
 
-memglow does two things: it **polls a folder of Markdown notes** (read-only) and it **listens to a
-hook** that tells it what your assistant just did. Both reach the browser over a server-sent events
-stream. That's it.
+memglow does two things: it **polls a folder of Markdown notes** (read-only) and it **listens for
+activity** — from a hook in your AI tool, from the MCP proxy, or from any script through the
+[activity API](#activity-api). Both reach the browser over a server-sent events stream. That's it.
 
+<a id="quick-start"></a>
 ## 🚀 Quick start
+
+One command sets everything up — notes folder, token, and the hooks of the AI tools it finds:
+
+```bash
+npx github:R0zumnik/memglow init     # interactive; add --yes to accept everything
+npx github:R0zumnik/memglow          # start the viewer, then open http://127.0.0.1:4747
+```
+
+(`npx memglow init` once the npm package is published — coming soon.)
+
+Just want to look at the demo?
 
 ```bash
 git clone https://github.com/R0zumnik/memglow && cd memglow
 MEMORY_DIR=./demo/memory node server.js     # the fictional demo memory
 open http://127.0.0.1:4747                  # or just open it in your browser
-```
-
-Point it at your own notes:
-
-```bash
-MEMORY_DIR=~/path/to/notes node server.js
 ```
 
 Want to see it move without an assistant? Start the server with a token, then run the simulator:
@@ -88,40 +100,133 @@ MEMORY_DIR=./demo/memory node server.js &
 node demo/simulate.js 60
 ```
 
-## 🤖 Live activity from Claude Code
+<a id="works-with"></a>
+## 🤝 Works with
 
-memglow can show what the assistant is doing, not only what changed on disk. A small
-**PostToolUse hook** reports every read, search and write of a memory note (note ids only, never
-content).
+| Tool | How memglow sees it | Reads | Searches | Writes |
+|---|---|:---:|:---:|:---:|
+| **Claude Code** | native hook · `PostToolUse` · [adapter](adapters/claude-code/) | ✅ | ✅ MCP | ✅ |
+| **OpenAI Codex CLI** | native hook · `PostToolUse` · [adapter](adapters/codex/) | ✅ MCP | ✅ MCP | ✅ |
+| **Gemini CLI** | native hook · `AfterTool` · [adapter](adapters/gemini/) | ✅ | ✅ MCP | ✅ |
+| **Cursor** | native hooks · `beforeReadFile`, `afterFileEdit`, `afterMCPExecution` · [adapter](adapters/cursor/) | ✅ | ✅ MCP | ✅ |
+| **Windsurf / Devin Desktop** | native Cascade hooks · `post_read_code`, `post_write_code`, `post_mcp_tool_use` · [adapter](adapters/windsurf/) | ✅ | ✅ MCP | ✅ |
+| **GitHub Copilot CLI** | native hook · `postToolUse` · [adapter](adapters/copilot/) | ✅ | ✅ MCP | ✅ |
+| **Cline** (3.36+, macOS / Linux) | native hook · `PostToolUse` script · [adapter](adapters/cline/) | ✅ | ✅ MCP | ✅ |
+| **Claude Desktop, Continue, Roo Code**, any MCP client | [MCP proxy](#mcp-proxy) in front of the memory server | ✅ MCP | ✅ MCP | ✅ |
+| **Aider**, editors, sync tools, anything that writes files | file detection (built in) | — | — | ✅ |
+| **Your own agent or script** | [activity API](#activity-api) | ✅ | ✅ | ✅ |
 
-1. Choose a token (32+ characters) and give it to the server: `MEMGLOW_TOKEN=...`
-2. Store the same token for the hook: `mkdir -p ~/.memglow && printf '%s' "$MEMGLOW_TOKEN" > ~/.memglow/token && chmod 600 ~/.memglow/token`
-3. Add the hook to `~/.claude/settings.json`:
+**✅ MCP** = seen when the tool goes through a memory MCP server (basic-memory, an Obsidian or
+filesystem server…). Plain file reads and edits of `.md` notes are seen directly where the tool's
+hooks expose them. Each hook mechanism was checked against the vendor's documentation; the
+link is in each adapter's README.
+
+**Writes from anything are already covered.** memglow polls the notes folder: whenever a note's
+body changes on disk — whoever changed it — the note blooms, the camera goes to it and the
+journal says *Note changed*. Hooks and the proxy add what the disk cannot tell: **reads and
+searches**, and *which* tool did it.
+
+<a id="install"></a>
+## 🛠️ Install: `memglow init`
+
+```bash
+npx github:R0zumnik/memglow init             # asks before each change
+npx github:R0zumnik/memglow init --yes       # non-interactive
+```
+
+It:
+
+1. **finds your notes** — the default basic-memory project, `~/basic-memory`, or your most recent
+   Obsidian vault (`--dir <folder>` to choose);
+2. writes `~/.memglow/memglow.config.json` and a **random token** in `~/.memglow/token` (mode 600);
+3. **detects your AI tools** and proposes each hook (Claude Code, Codex, Gemini CLI, Cursor,
+   Windsurf, Copilot CLI, Cline). Every file it changes is **backed up** first
+   (`<file>.memglow-backup`), existing entries are kept, a file it cannot parse is left untouched;
+4. proposes to put the [MCP proxy](#mcp-proxy) in front of Claude Desktop's memory servers.
+
+| Option | Meaning |
+|---|---|
+| `--yes`, `-y` | accept every proposal (non-interactive) |
+| `--dir <folder>` | notes folder |
+| `--port <n>` | viewer port (default `4747`) |
+| `--agents <list>` | `claude-code,codex,gemini,cursor,windsurf,copilot,cline`, `all` (default: every detected tool) or `none` |
+| `--wrap-mcp` | with `--yes`: also wrap Claude Desktop's memory MCP servers |
+| `--docker` | also write `~/.memglow/docker-compose.yml` and `.env` |
+
+**Undo:** `memglow uninstall` removes exactly what `init` added — hooks, the Cline script, MCP
+wrappings — and nothing else, even if you edited those files since. `--restore-backups` puts the
+original files back instead; `--purge` also deletes `~/.memglow`.
+
+Then start the viewer (`npx github:R0zumnik/memglow`) and restart your AI tools.
+
+<a id="claude-code-hook"></a>
+<a id="live-activity-from-claude-code"></a>
+## 🤖 Hooks by hand
+
+Prefer to edit config files yourself? Each [adapter](adapters/) has a README with the official
+mechanism, its source, and a ready-to-paste config snippet. For Claude Code, for example, add to
+`~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "mcp__basic-memory__.*|Read|Write|Edit",
-        "hooks": [{ "type": "command", "command": "node /path/to/memglow/hooks/memglow-activity.js", "timeout": 5 }]
+        "matcher": "mcp__.*|Read|Write|Edit|MultiEdit",
+        "hooks": [{ "type": "command", "command": "node /path/to/memglow/adapters/claude-code/hook.js", "timeout": 5 }]
       }
     ]
   }
 }
 ```
 
-Hook settings (environment of the Claude Code session):
+and store the server's token: `mkdir -p ~/.memglow && printf '%s' "$MEMGLOW_TOKEN" > ~/.memglow/token && chmod 600 ~/.memglow/token`.
 
-| Variable | Default | |
+Adapter settings (environment of the AI tool, else `~/.memglow/memglow.config.json`):
+
+| Variable | Default | What it does |
 |---|---|---|
 | `MEMGLOW_URL` | `http://127.0.0.1:4747` | where memglow runs |
-| `MEMGLOW_MEMORY_DIR` | — | so plain `Read` / `Write` / `Edit` of `.md` files in that folder count |
-| `MEMGLOW_MCP_PREFIX` | `mcp__basic-memory__` | MCP tool prefix of your memory server |
-| `MEMGLOW_SOURCE` | `claude` | label shown in the live journal |
+| `MEMGLOW_TOKEN` / `MEMGLOW_TOKEN_FILE` | `~/.memglow/token` | the server's activity token |
+| `MEMGLOW_MEMORY_DIR` | from `memglow init` | plain file reads / edits count only for `.md` files in this folder |
+| `MEMGLOW_MCP_SERVERS` | `basic-memory,memory,obsidian,notes,filesystem` | MCP servers that count as "memory" |
 
-The hook never blocks the session: it detaches, gives up after 3 s and prints nothing.
+Every adapter answers its tool at once, sends the event from a detached process that gives up
+after 3 s, prints nothing else and exits 0: memglow being down never slows your assistant.
 
+The v0.1 Claude Code hook, `hooks/memglow-activity.js`, keeps working unchanged.
+
+<a id="activity-api"></a>
+## 📡 Activity API
+
+Any program can light notes up:
+
+```bash
+curl -H "Authorization: Bearer $(cat ~/.memglow/token)" -H 'Content-Type: application/json' \
+  -d '{"type":"read","ids":["alice"],"source":"my-agent"}' http://127.0.0.1:4747/api/activity
+```
+
+`type` is `read`, `search` or `write`; `ids` are note names or paths (only existing notes are
+kept); `source` is the label in the journal. Full reference with Python and Node examples:
+[docs/api.md](docs/api.md).
+
+<a id="mcp-proxy"></a>
+## 🔌 MCP proxy
+
+For MCP clients without hooks (Claude Desktop, Continue, Roo Code…), put the proxy in front of
+the memory server. It relays every byte unchanged and reports note names only:
+
+```json
+"basic-memory": {
+  "command": "node",
+  "args": ["/path/to/memglow/mcp-proxy/memglow-mcp-proxy.js", "--name", "basic-memory", "--", "uvx", "basic-memory", "mcp"]
+}
+```
+
+Streamable HTTP servers too: `memglow-mcp-proxy --upstream http://127.0.0.1:8000/mcp --listen 127.0.0.1:8765`.
+Tool-name mapping is configurable. Details: [mcp-proxy/README.md](mcp-proxy/README.md).
+
+<a id="your-notes"></a>
 ## 📝 Your notes
 
 Any folder of `*.md` files works. memglow reads, if present:
@@ -137,11 +242,13 @@ Links are `[[wikilinks]]` to another note's file name (links quoted inside code 
 A note named `MEMORY` or `index` sits at the centre. Without a `theme`, a note inherits one from
 its folder (`themeByFolder`), else `defaultTheme`.
 
+<a id="configuration"></a>
 ## ⚙️ Configuration
 
-Environment variables, or `memglow.config.json` (see [`memglow.config.example.json`](memglow.config.example.json)):
+Environment variables, or `memglow.config.json` (see [`memglow.config.example.json`](memglow.config.example.json)).
+With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 
-| Setting | Default | |
+| Setting | Default | What it does |
 |---|---|---|
 | `MEMORY_DIR` | `./memory` | folder of notes (read-only access is enough) |
 | `PORT` / `HOST` | `4747` / `127.0.0.1` | use `HOST=0.0.0.0` to expose it (then set a password) |
@@ -149,18 +256,28 @@ Environment variables, or `memglow.config.json` (see [`memglow.config.example.js
 | `MEMGLOW_PASSWORD` | — | HTTP Basic auth on the viewer (user `memglow`, 12+ chars) |
 | `MEMGLOW_SHOW_BODIES` | `true` | show note text in the side panel |
 | `MEMGLOW_POLL_MS` | `2000` | how often the folder is checked |
-| `themes`, `themeByFolder`, `defaultTheme`, `subthemeLabels`, `title` | | config file only |
+| `themes`, `themeByFolder`, `defaultTheme`, `subthemeLabels`, `title` | — | config file only |
 
+<a id="docker"></a>
 ## 🐳 Docker
 
 ```bash
-docker build -t memglow .
-docker run -d --name memglow -p 4747:4747 \
+docker run -d --name memglow -p 127.0.0.1:4747:4747 \
   -v /path/to/notes:/memory:ro \
-  -e MEMGLOW_TOKEN=... -e MEMGLOW_PASSWORD=... \
-  memglow
+  -e MEMGLOW_TOKEN=$(cat ~/.memglow/token) \
+  ghcr.io/r0zumnik/memglow
 ```
 
+Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
+then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
+
+> The `ghcr.io/r0zumnik/memglow` image is **not published yet**. Until it is, build it locally —
+> `docker build -t memglow .` — and use `memglow` as the image name in the commands above.
+
+The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
+container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.
+
+<a id="security"></a>
 ## 🔒 Security
 
 - Notes are read **read-only**; memglow never writes to `MEMORY_DIR`.
@@ -170,26 +287,41 @@ docker run -d --name memglow -p 4747:4747 \
   the same `404` as any unknown route (it does not reveal itself). Tokens are compared in constant
   time, bodies are capped at 4 KB, 30 events/s at most, and note ids are checked against existing
   notes.
+- Hooks and the MCP proxy send **note names only** — never note content, prompts or tool results.
+  The token is read from a mode-600 file and passed to the sender through its environment, never
+  on a command line.
+- `memglow init` backs up every file before changing it, never rewrites a file it cannot parse,
+  and `memglow uninstall` removes only its own entries.
 - What is **never** exposed: note bodies in the graph or the live stream (only in the note panel,
   and only if `MEMGLOW_SHOW_BODIES` is on), files outside `MEMORY_DIR`, hidden folders. Lines that
   look like secrets (API keys, tokens, `password: …`) are masked before a body is sent.
 - Strict Content-Security-Policy (`script-src 'self'`), `nosniff`, no framing, no referrer.
   No CDN, no analytics, no network calls from the page.
 
+<a id="faq"></a>
 ## ❓ FAQ
 
 <details>
 <summary><b>Does it work with basic-memory?</b></summary>
 
-Yes — point `MEMORY_DIR` at the project folder of your basic-memory knowledge base; the hook
-understands basic-memory's MCP tools out of the box. memglow is not affiliated with basic-memory
+Yes — `memglow init` finds your default basic-memory project, and the hooks and the MCP proxy
+understand basic-memory's tools out of the box. memglow is not affiliated with basic-memory
 and does not include or modify it.
 </details>
 
 <details>
 <summary><b>With Obsidian?</b></summary>
 
-Yes — any vault works; use `theme` frontmatter or `themeByFolder`.
+Yes — any vault works; `memglow init` finds your most recent one. Use `theme` frontmatter or
+`themeByFolder` for the groups.
+</details>
+
+<details>
+<summary><b>My AI tool is not in the list.</b></summary>
+
+If it writes notes, memglow already sees the writes. If it uses a memory MCP server, put the
+[MCP proxy](#mcp-proxy) in front of it. Otherwise, a few lines against the
+[activity API](#activity-api) are enough.
 </details>
 
 <details>
@@ -213,6 +345,7 @@ Only a change of the note's *body* counts as a write: frontmatter-only rewrites 
 are ignored.
 </details>
 
+<a id="pro-coming-soon"></a>
 ## 💎 Pro (coming soon)
 
 A Pro edition is being considered for people who live in their assistant's memory every day:
@@ -220,12 +353,13 @@ A Pro edition is being considered for people who live in their assistant's memor
 - **Dashboard** — words, notes, links and activity over time, most-read notes, memory health.
 - **History & diffs** — click a write in the journal to see exactly which lines changed.
 - **Several memories and users** — per-person access, theme-level visibility.
-- **Two-factor login** and one-click install.
+- **Two-factor login.**
 
 Interested? Say so in [GitHub Discussions → Pro interest](https://github.com/R0zumnik/memglow/discussions) — no payment, no e-mail, just tell us which feature you'd use. Details: [docs/pro.html](docs/pro.html).
 
 The open-source edition stays free and MIT.
 
+<a id="license"></a>
 ## 📄 License & thanks
 
 MIT — see [`LICENSE`](LICENSE).
@@ -233,7 +367,8 @@ MIT — see [`LICENSE`](LICENSE).
 memglow stands on the shoulders of [three.js](https://threejs.org/) and
 [3d-force-graph](https://github.com/vasturiano/3d-force-graph) by Vasco Asturiano (with
 UnrealBloomPass for the glow). Their licenses (MIT and compatible) are listed in
-[`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES). Thanks to the Claude Code hooks system and to
-basic-memory for making an assistant's memory something you can look at.
+[`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES). Thanks to the hook systems of Claude Code, Codex,
+Gemini CLI, Cursor, Windsurf, Copilot and Cline, and to basic-memory, for making an assistant's
+memory something you can look at.
 
-<p align="center"><sub>Not affiliated with Anthropic, basic-memory or Obsidian.</sub></p>
+<p align="center"><sub>Not affiliated with Anthropic, OpenAI, Google, Anysphere, Cognition, GitHub, Cline, basic-memory or Obsidian.</sub></p>

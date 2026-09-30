@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "node /ABSOLUTE/PATH/TO/.memglow/app/adapters/copilot/hook.js",
+        "powershell": "node /ABSOLUTE/PATH/TO/.memglow/app/adapters/copilot/hook.js",
+        "timeoutSec": 5
+      }
+    ]
+  }
+}

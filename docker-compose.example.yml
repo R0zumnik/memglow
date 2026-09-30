@@ -1,0 +1,22 @@
+# memglow — example Docker Compose file.
+#
+#   cp docker-compose.example.yml docker-compose.yml     # then edit NOTES below
+#   echo "MEMGLOW_TOKEN=$(openssl rand -hex 32)" > .env  # activity token for hooks
+#   docker compose up -d                                 # then open http://127.0.0.1:4747
+#
+# The image is not published yet: until then, build it locally (`docker build -t memglow .`)
+# and replace the `image:` line with `image: memglow`.
+services:
+  memglow:
+    image: ghcr.io/r0zumnik/memglow:latest
+    container_name: memglow
+    restart: unless-stopped
+    ports:
+      # localhost only; to expose it, set MEMGLOW_PASSWORD and put it behind HTTPS
+      - "127.0.0.1:4747:4747"
+    environment:
+      - MEMGLOW_TOKEN=${MEMGLOW_TOKEN:-}
+      # - MEMGLOW_PASSWORD=choose-a-long-password
+    volumes:
+      # your notes folder, read-only: memglow never writes to it
+      - ${NOTES:-./demo/memory}:/memory:ro

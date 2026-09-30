@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "AfterTool": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "name": "memglow",
+            "command": "node /ABSOLUTE/PATH/TO/.memglow/app/adapters/gemini/hook.js",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}

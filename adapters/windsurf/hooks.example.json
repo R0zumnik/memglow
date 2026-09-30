@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "post_read_code": [
+      {
+        "command": "node /ABSOLUTE/PATH/TO/.memglow/app/adapters/windsurf/hook.js",
+        "show_output": false
+      }
+    ],
+    "post_write_code": [
+      {
+        "command": "node /ABSOLUTE/PATH/TO/.memglow/app/adapters/windsurf/hook.js",
+        "show_output": false
+      }
+    ],
+    "post_mcp_tool_use": [
+      {
+        "command": "node /ABSOLUTE/PATH/TO/.memglow/app/adapters/windsurf/hook.js",
+        "show_output": false
+      }
+    ]
+  }
+}

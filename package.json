@@ -1,24 +1,29 @@
 {
   "name": "memglow",
-  "version": "0.1.0",
-  "description": "A live 3D view of your AI assistant's Markdown memory — watch notes light up as Claude reads, searches and writes them.",
+  "version": "0.2.0",
+  "description": "A live 3D view of your AI assistant's Markdown memory — watch notes light up as Claude, Codex, Gemini, Cursor, Copilot and others read, search and write them.",
   "license": "MIT",
   "main": "server.js",
   "bin": {
-    "memglow": "server.js"
+    "memglow": "bin/memglow.js",
+    "memglow-mcp-proxy": "mcp-proxy/memglow-mcp-proxy.js"
   },
   "files": [
     "server.js",
+    "bin/",
     "lib/",
     "public/",
     "hooks/",
+    "adapters/",
+    "mcp-proxy/",
+    "docker-compose.example.yml",
     "memglow.config.example.json",
     "THIRD_PARTY_LICENSES",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "start": "node server.js",
+    "start": "node bin/memglow.js",
     "demo": "MEMORY_DIR=./demo/memory node server.js",
     "simulate": "node demo/simulate.js",
     "test": "node --test"
@@ -36,6 +41,14 @@
     "markdown",
     "knowledge-graph",
     "visualization",
-    "3d"
+    "3d",
+    "codex",
+    "gemini-cli",
+    "cursor",
+    "copilot",
+    "windsurf",
+    "cline",
+    "hooks",
+    "mcp-proxy"
   ]
 }

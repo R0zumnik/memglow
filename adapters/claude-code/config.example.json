@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*|Read|Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /ABSOLUTE/PATH/TO/.memglow/app/adapters/claude-code/hook.js",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

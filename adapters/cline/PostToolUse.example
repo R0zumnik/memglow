@@ -1,0 +1,3 @@
+#!/bin/sh
+# memglow — Cline PostToolUse hook
+exec node /ABSOLUTE/PATH/TO/.memglow/app/adapters/cline/hook.js

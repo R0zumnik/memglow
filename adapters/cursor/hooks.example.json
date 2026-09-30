@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeReadFile": [
+      {
+        "command": "node /ABSOLUTE/PATH/TO/.memglow/app/adapters/cursor/hook.js beforeReadFile",
+        "timeout": 5
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "node /ABSOLUTE/PATH/TO/.memglow/app/adapters/cursor/hook.js afterFileEdit",
+        "timeout": 5
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "node /ABSOLUTE/PATH/TO/.memglow/app/adapters/cursor/hook.js afterMCPExecution",
+        "timeout": 5
+      }
+    ]
+  }
+}
