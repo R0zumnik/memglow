@@ -22,6 +22,7 @@ description: "Index of the demo memory"
 - [[knowledge-api-rate-limits]] — Handling API rate limits: backoff with jitter, cache, respect Retry-After
 - [[reference-calendar-sync]] — Calendar sync: CalDAV quirks, time zones, recurring events
 - [[reference-docker-pitfalls]] — Docker pitfalls met in the home lab: file permissions, DNS, bind mounts
+- [[reference-incident-log]] — Incident log since 2025: symptom, cause and fix of every incident
 - [[reference-backups]] — Backup routine: nightly snapshots, weekly off-site copy, monthly restore test
 - [[knowledge-reverse-proxy]] — Reverse proxy setup: TLS, headers for server-sent events, timeouts
 - [[knowledge-mqtt]] — MQTT basics for home automation: topics, retained messages, QoS

@@ -20,3 +20,7 @@ services:
     volumes:
       # your notes folder, read-only: memglow never writes to it
       - ${NOTES:-./demo/memory}:/memory:ro
+      # memglow's own data (Memory cost counters: note ids and numbers only)
+      - memglow-data:/data
+volumes:
+  memglow-data:

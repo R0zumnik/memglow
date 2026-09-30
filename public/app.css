@@ -343,3 +343,66 @@ a { color: var(--bn-accent-teal); }
     max-height: 58%;
   }
 }
+
+/* Memory cost (public/cost.js, GET /api/cost) */
+.mg-cost__head { margin: 0 0 var(--bn-space-3); }
+.mg-cost__head .bn-label { margin: 0; font-weight: 600; }
+.mg-cost__sub { margin: 4px 0 0; font-size: 12px; color: var(--bn-ink-dim); max-width: 72ch; }
+.mg-cost__figs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--bn-space-3); margin: 0 0 var(--bn-space-3); }
+.mg-cost__fig { background: var(--bn-surface-well); border: 1px solid var(--bn-line); border-radius: 14px; padding: var(--bn-space-3); min-width: 0; }
+.mg-cost__fig p { margin: 0; }
+.mg-cost__fig-name { font-size: 12px; color: var(--bn-ink-dim); letter-spacing: 0.02em; }
+.mg-cost__fig-val { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.25; color: #FFFFFF; overflow-wrap: anywhere; }
+.mg-cost__fig-det { font-size: 11px; color: #7E948D; margin-top: 2px; }
+.mg-cost__share { margin: 0 0 var(--bn-space-4); }
+.mg-cost__share-text { margin: 0 0 6px; font-size: 14px; }
+.mg-cost__share-text strong { color: var(--bn-accent-teal); font-variant-numeric: tabular-nums; }
+.mg-cost__share-bar { height: 6px; border-radius: 3px; background: rgba(169, 201, 191, 0.14); overflow: hidden; max-width: 520px; }
+.mg-cost__share-bar span { display: block; height: 100%; background: var(--bn-accent-teal); border-radius: 3px; }
+.mg-cost__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--bn-space-4); }
+.mg-cost__block { margin: 0; min-width: 0; }
+.mg-cost__block figcaption { margin: 0 0 var(--bn-space-2); font-size: 13px; font-weight: 600; color: var(--bn-ink); }
+.mg-cost__list { list-style: none; margin: 0; padding: 0; }
+.mg-cost__item + .mg-cost__item { margin-top: 6px; }
+.mg-cost__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.mg-cost__row:hover { background: rgba(255, 255, 255, 0.05); }
+.mg-cost__row:focus-visible { outline: 2px solid var(--bn-focus); outline-offset: 1px; }
+/* The ellipsis needs overflow: hidden, which would clip the dot's glow: give the glow 7 px on the
+   left and 4 px above and below, cancelled by a negative vertical margin (same line height). */
+.mg-cost__name { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; padding: 4px 0 4px 7px; margin-block: -4px; }
+.mg-cost__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mg-cost__dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--c); box-shadow: 0 0 6px var(--c); }
+.mg-cost__num { font-variant-numeric: tabular-nums; color: #FFFFFF; font-size: 13px; }
+.mg-cost__bar { grid-column: 1 / -1; height: 5px; border-radius: 3px; background: rgba(169, 201, 191, 0.12); overflow: hidden; }
+.mg-cost__bar span { display: block; height: 100%; border-radius: 3px; }
+.mg-cost__det { grid-column: 1 / -1; font-size: 11px; color: var(--bn-ink-dim); font-variant-numeric: tabular-nums; }
+.mg-cost__row--simple .mg-cost__det { grid-column: auto; }
+.mg-cost__list--compact .mg-cost__row { padding-block: 4px; }
+.mg-cost__sections { margin: 2px 8px 6px; padding: 6px var(--bn-space-3) 8px; background: rgba(255, 255, 255, 0.03); border-radius: 10px; font-size: 12px; color: var(--bn-ink-dim); }
+.mg-cost__sections summary { cursor: pointer; color: #4FD1E0; font-weight: 600; }
+.mg-cost__sections ol { margin: 6px 0; padding-left: 18px; }
+.mg-cost__sections li { margin: 2px 0; overflow-wrap: anywhere; }
+.mg-cost__plan { margin: 4px 0 0; color: var(--bn-ink); overflow-wrap: anywhere; }
+.mg-cost__part em { font-style: normal; color: var(--bn-ink-dim); }
+.mg-cost__copy { margin: 2px 8px 4px; min-height: 28px; font-size: 12px; }
+.mg-cost__copy--done { border-color: var(--bn-accent-teal); color: var(--bn-accent-teal); }
+.mg-cost__manual { display: block; width: calc(100% - 16px); margin: 4px 8px; min-height: 120px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bn-surface); color: var(--bn-ink); border: 1px solid var(--bn-line); border-radius: 8px; }
+.mg-cost__offscreen { position: fixed; top: 0; left: -9999px; opacity: 0; }
+.mg-cost__empty { margin: 0; font-size: 13px; color: var(--bn-ink-dim); }
+@media (max-width: 900px) {
+  .mg-cost__figs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .mg-cost__grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .mg-cost__figs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mg-cost__fig-val { font-size: 18px; }
+}

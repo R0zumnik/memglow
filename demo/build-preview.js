@@ -11,12 +11,14 @@ const path = require("path");
 const { createServer } = require("../server");
 const { createMemory } = require("../lib/memory");
 const { loadConfig } = require("../lib/config");
+const { createCounters } = require("../lib/counters");
 
 const ROOT = path.join(__dirname, "..");
 const dir = path.resolve(process.argv[2] || path.join(__dirname, "memory"));
 const config = loadConfig({ MEMORY_DIR: dir }, ROOT);
 const memory = createMemory({ dir, config });
-const server = createServer(config, memory);
+// Counters kept in memory only: the preview never reads nor writes ~/.memglow.
+const server = createServer(config, memory, { counters: createCounters({}) });
 
 server.listen(0, "127.0.0.1", async () => {
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -24,6 +26,7 @@ server.listen(0, "127.0.0.1", async () => {
     let html = await (await fetch(base + "/")).text();
     const graph = await (await fetch(base + "/api/graph")).json();
     graph.activities = [];
+    const cost = await (await fetch(base + "/api/cost")).json();
     const notes = {};
     for (const n of graph.nodes) notes[n.id] = await (await fetch(base + "/api/note/" + encodeURIComponent(n.id))).json();
     const read = (f) => fs.readFileSync(path.join(ROOT, "public", f), "utf8");
@@ -32,13 +35,14 @@ server.listen(0, "127.0.0.1", async () => {
     // Offline shims: fetch() answers from the embedded data, EventSource does nothing, and a
     // small loop replays read / search / write activity through the page's own demo hook.
     const shim = `
-window.__MEMGLOW_DATA__ = ${JSON.stringify({ graph, notes }).replace(/</g, "\\u003c")};
+window.__MEMGLOW_DATA__ = ${JSON.stringify({ graph, notes, cost }).replace(/</g, "\\u003c")};
 (function () {
   var D = window.__MEMGLOW_DATA__;
   var json = function (o) { return Promise.resolve({ ok: !!o, status: o ? 200 : 404, json: function () { return Promise.resolve(o); } }); };
   window.fetch = function (u) {
     u = String(u);
     if (u.indexOf("/api/graph") === 0) return json(D.graph);
+    if (u.indexOf("/api/cost") === 0) return json(D.cost);
     if (u.indexOf("/api/note/") === 0) return json(D.notes[decodeURIComponent(u.slice(10))] || null);
     return json(null);
   };
@@ -60,7 +64,8 @@ window.__MEMGLOW_DATA__ = ${JSON.stringify({ graph, notes }).replace(/</g, "\\u0
     html = html
       .replace(/<link rel="stylesheet" href="\/app\.css[^"]*">/, () => `<style>${read("app.css")}</style>`)
       .replace(/<script src="\/vendor\/memglow-graph\.js[^"]*"><\/script>/, () => `<script>${shim}</script><script>${safe(read("vendor/memglow-graph.js"))}</script>`)
-      .replace(/<script src="\/app\.js[^"]*"><\/script>/, () => `<script>${safe(read("app.js"))}</script><script>${sim}</script>`);
+      .replace(/<script src="\/app\.js[^"]*"><\/script>/, () => `<script>${safe(read("app.js"))}</script><script>${sim}</script>`)
+      .replace(/<script src="\/cost\.js[^"]*"><\/script>/, () => `<script>${safe(read("cost.js"))}</script>`);
     const out = path.join(__dirname, "apercu.html");
     fs.writeFileSync(out, html);
     console.log(`preview written: ${out} (${(html.length / 1024).toFixed(0)} KB, ${graph.nodes.length} notes, ${graph.links.length} links)`);

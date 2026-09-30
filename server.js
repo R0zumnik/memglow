@@ -14,15 +14,19 @@ const os = require("os");
 const path = require("path");
 const { loadConfig } = require("./lib/config");
 const { createMemory } = require("./lib/memory");
+const { createCounters } = require("./lib/counters");
+const { computeCost } = require("./lib/cost");
 
 const PUBLIC = path.join(__dirname, "public");
 const STATIC = {
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/app.css": ["app.css", "text/css; charset=utf-8"],
+  "/cost.js": ["cost.js", "text/javascript; charset=utf-8"],
   "/vendor/memglow-graph.js": ["vendor/memglow-graph.js", "text/javascript; charset=utf-8"],
 };
 const STREAM_MAX = 20;
 const ACTIVITY_MAX_BYTES = 4096;
+const COST_SECTIONS_MAX = 40; // notes whose sections are listed in one /api/cost answer
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -33,7 +37,9 @@ function sameSecret(given, expected) {
   return crypto.timingSafeEqual(a, b);
 }
 
-function createServer(config, memory) {
+function createServer(config, memory, { counters } = {}) {
+  // Memory cost counters, in memglow's data folder (never in the notes folder).
+  counters = counters || createCounters({ dir: config.dataDir });
   const template = fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8");
   const fingerprints = {};
   for (const [url, [file]] of Object.entries(STATIC)) {
@@ -83,6 +89,25 @@ function createServer(config, memory) {
       .replace(/{{v:([a-z/.-]+)}}/g, (_, u) => fingerprints["/" + u] || "0");
   }
 
+  /**
+   * Memory cost (lib/cost.js): token estimates, counters, notes to split. Section titles are note
+   * content, so they are only included when note bodies may be shown (MEMGLOW_SHOW_BODIES), read
+   * from the notes with secret-looking lines masked.
+   */
+  function cost() {
+    const notes = memory.costNotes();
+    const opts = { since: counters.since(), largeNoteTokens: config.largeNoteTokens, chunkTokens: config.splitChunkTokens };
+    const first = computeCost(counters.days(), notes, Date.now(), opts);
+    if (!config.showBodies) return first;
+    const bodies = {};
+    for (const n of first.tooLarge.concat(first.top).slice(0, COST_SECTIONS_MAX)) {
+      if (n.id in bodies) continue;
+      const b = memory.maskedBody(n.id);
+      if (b != null) bodies[n.id] = b;
+    }
+    return computeCost(counters.days(), notes, Date.now(), { ...opts, bodies });
+  }
+
   return http.createServer((req, res) => {
     const url = new URL(req.url, "http://localhost");
     const p = url.pathname;
@@ -102,6 +127,8 @@ function createServer(config, memory) {
         let body;
         try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return json(res, 400, { error: "bad json" }); }
         const r = memory.activity(body);
+        // Counted for Memory cost, except demo activity (animated, never counted).
+        if (r.ok && body.demo !== true) counters.add({ type: body.type, ids: r.ids, t: Date.now() });
         headers(res);
         res.statusCode = r.ok ? 204 : r.reason === "rate" ? 429 : 202;
         res.end();
@@ -130,6 +157,7 @@ function createServer(config, memory) {
       return fs.createReadStream(path.join(PUBLIC, file)).pipe(res);
     }
     if (p === "/api/graph") return json(res, 200, memory.graph());
+    if (p === "/api/cost") return json(res, 200, cost());
     if (p.startsWith("/api/note/")) {
       const n = memory.note(decodeURIComponent(p.slice("/api/note/".length)), { withBody: config.showBodies });
       return n ? json(res, 200, n) : json(res, 404, { error: "not found" });

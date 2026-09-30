@@ -20,5 +20,7 @@
   "defaultTheme": "knowledge",
   "subthemeLabels": { "home-lab": "Home lab", "client-work": "Client work" },
   "showBodies": true,
+  "largeNoteTokens": 5000,
+  "splitChunkTokens": 2000,
   "pollMs": 2000
 }

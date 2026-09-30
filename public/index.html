@@ -40,6 +40,25 @@
                   <option value="tous">All</option>
                 </select>
               </label>
+              <label class="mem-reglage">Name distance
+                <input type="range" id="mem-dist-noms" min="1" max="20" step="1" value="20">
+              </label>
+              <label class="mem-reglage">Background
+                <select id="mem-fond">
+                  <option value="profond" selected>Deep</option>
+                  <option value="uni">Plain</option>
+                  <option value="nuit">Night blue</option>
+                </select>
+              </label>
+              <label class="mem-reglage">Bubble size
+                <input type="range" id="mem-facteur" min="0.5" max="3" step="0.1" value="1">
+              </label>
+              <label class="mem-reglage">Size by
+                <select id="mem-taille">
+                  <option value="liens" selected>Links</option>
+                  <option value="jetons">Token cost</option>
+                </select>
+              </label>
               <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-grouper" checked> Group by theme</label>
               <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-souscats" checked> Sub-themes</label>
             </fieldset>
@@ -53,6 +72,9 @@
               </label>
               <label class="mem-reglage">Minimum spacing
                 <input type="range" id="mem-marge" min="0" max="20" step="1" value="8">
+              </label>
+              <label class="mem-reglage">Signal speed
+                <input type="range" id="mem-vitesse" min="0.3" max="2" step="0.1" value="1">
               </label>
               <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-rotation" checked> Auto-rotate</label>
               <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-suivre" checked> Follow activity</label>
@@ -73,7 +95,7 @@
               <button type="button" class="bn-btn" id="mem-liberer">Release all bubbles</button>
               <button type="button" class="bn-btn" id="mem-recentrer">Recenter</button>
             </div>
-            <p class="mem-options__aide">Drag a bubble to move it; double-click it to release it.</p>
+            <p class="mem-options__aide">Drag a bubble to move it; double-click it to release it, double-click the background to recenter.</p>
           </div>
         </details>
       </div>
@@ -92,11 +114,19 @@
       <p class="bn-label">Live activity</p>
       <ol class="mem-journal__liste" id="mem-journal"><li class="mem-journal__vide">Waiting for a read, a search or a write…</li></ol>
     </section>
+    <section class="bn-tile mg-cost" id="mg-cost" data-cost="/api/cost" aria-labelledby="mg-cost-title">
+      <div class="mg-cost__head">
+        <h2 class="bn-label" id="mg-cost-title">Memory cost</h2>
+        <p class="mg-cost__sub">Estimate: ≈ bytes ÷ 4, roughly what an assistant receives when it reads a note. Not a promise of savings — a map of where the reading goes, and which notes to split.</p>
+      </div>
+      <div id="mg-cost-body" aria-live="polite"><p class="mg-cost__empty">Loading…</p></div>
+    </section>
   </div>
   <p class="mg-foot">memglow · open source (MIT) · <a href="https://github.com/">GitHub</a></p>
 </div>
 <script type="application/json" id="memglow-config">{{config}}</script>
 <script src="/vendor/memglow-graph.js?v={{v:vendor/memglow-graph.js}}"></script>
 <script src="/app.js?v={{v:app.js}}"></script>
+<script src="/cost.js?v={{v:cost.js}}"></script>
 </body>
 </html>

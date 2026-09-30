@@ -10,9 +10,13 @@ COPY public ./public
 COPY hooks ./hooks
 ENV NODE_ENV=production \
     MEMORY_DIR=/memory \
+    MEMGLOW_DATA_DIR=/data \
     HOST=0.0.0.0 \
     PORT=4747
-# Read-only access to the notes is enough: memglow never writes to MEMORY_DIR.
+# Read-only access to the notes is enough: memglow never writes to MEMORY_DIR. Its own data
+# (Memory cost counters: note ids and numbers) goes to /data — mount a volume to keep it.
+RUN mkdir -p /data && chown node:node /data
+VOLUME /data
 USER node
 EXPOSE 4747
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:4747/api/graph >/dev/null || exit 1
