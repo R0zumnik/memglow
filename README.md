@@ -320,6 +320,7 @@ With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 | `PORT` / `HOST` | `4747` / `127.0.0.1` | use `HOST=0.0.0.0` to expose it (then set a password) |
 | `MEMGLOW_TOKEN` | — | enables `POST /api/activity` for hooks (32+ chars) |
 | `MEMGLOW_PASSWORD` | — | HTTP Basic auth on the viewer (user `memglow`, 12+ chars) |
+| `MEMGLOW_ALLOWED_HOSTS` | — | extra host names served without a password, comma-separated (e.g. `mybox.local`); localhost names are always allowed |
 | `MEMGLOW_SHOW_BODIES` | `true` | show note text in the side panel |
 | `MEMGLOW_POLL_MS` | `2000` | how often the folder is checked |
 | `MEMGLOW_DATA_DIR` / `dataDir` | `~/.memglow` | memglow's own data (Memory cost counts, saved view); never the notes folder |
@@ -355,6 +356,10 @@ container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same toke
 - Notes are read **read-only**; memglow never writes to `MEMORY_DIR`.
 - By default it listens on `127.0.0.1` only. If you expose it, set `MEMGLOW_PASSWORD` and put it
   behind HTTPS.
+- Without a password, memglow only answers requests addressed to `localhost`, `127.0.0.1` or
+  `[::1]` (plus any name you list in `MEMGLOW_ALLOWED_HOSTS`): this blocks DNS-rebinding, where a
+  malicious web page points its own domain at your machine to read the viewer from your browser.
+  Other host names get a `403` explaining what to do. With a password the credentials protect it.
 - `/api/activity` does not exist without `MEMGLOW_TOKEN`; with a wrong or missing token it answers
   the same `404` as any unknown route (it does not reveal itself). Tokens are compared in constant
   time, bodies are capped at 4 KB, 30 events/s at most, and note ids are checked against existing

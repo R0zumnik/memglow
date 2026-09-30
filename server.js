@@ -88,6 +88,20 @@ function createServer(config, memory, { counters, views } = {}) {
     const [user, ...rest] = Buffer.from(m[1], "base64").toString("utf8").split(":");
     return user === "memglow" && sameSecret(rest.join(":"), config.password);
   }
+  /**
+   * DNS-rebinding guard. Without a password, a malicious web page could point its own domain at
+   * 127.0.0.1 and read the viewer from the victim's browser: the browser would treat it as the page's
+   * own origin. So, when no password is set, only requests addressed to localhost, 127.0.0.1, ::1 or a
+   * name listed in MEMGLOW_ALLOWED_HOSTS are served. With a password this is not needed: the attacker's
+   * origin never has the credentials. POST /api/activity (bearer token) is checked before this.
+   */
+  const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+  function hostAllowed(req) {
+    if (config.password) return true;
+    const raw = String(req.headers.host || "").trim().toLowerCase();
+    const name = raw.startsWith("[") ? raw.slice(0, raw.indexOf("]") + 1) : raw.replace(/:\d+$/, "");
+    return LOCAL_HOSTS.has(name) || (config.allowedHosts || []).includes(name);
+  }
   function tokenOk(req) {
     if (!config.token) return false; // not configured: the route does not exist
     const m = /^Bearer ([A-Za-z0-9._~+/=-]{1,256})$/.exec(req.headers.authorization || "");
@@ -193,6 +207,14 @@ function createServer(config, memory, { counters, views } = {}) {
         res.end();
       });
       return;
+    }
+
+    if (!hostAllowed(req)) {
+      req.resume();
+      headers(res, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+      res.statusCode = 403;
+      return res.end("memglow: this host name is not allowed. Open http://127.0.0.1:" + config.port +
+        ", set MEMGLOW_PASSWORD to expose memglow, or list the name in MEMGLOW_ALLOWED_HOSTS.");
     }
 
     const unauthorized = () => {

@@ -77,6 +77,12 @@ Memory cost: see which notes cost your assistant the most tokens, and which ones
 
 ### Security
 
+- **DNS-rebinding guard.** Without `MEMGLOW_PASSWORD`, only requests addressed to `localhost`,
+  `127.0.0.1`, `[::1]` or a name listed in the new `MEMGLOW_ALLOWED_HOSTS` are served; any other
+  host name gets a `403` with instructions. Before, a malicious page could re-point its domain to
+  127.0.0.1 and read the viewer (note bodies included) from a visitor's browser. Hooks are not
+  affected (`/api/activity` is checked by its token first). If you open memglow by a LAN name
+  without a password, add that name to `MEMGLOW_ALLOWED_HOSTS` (or set a password).
 - `/api/view` follows the page's access rule (`MEMGLOW_PASSWORD`). Writes need memglow's own
   `X-Memglow` header and a same-host `Origin` (else `403`), are capped at 256 KB (`413`), rate
   limited (`429`), and strictly validated: a closed list of settings with types and bounds,
