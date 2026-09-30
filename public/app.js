@@ -1268,6 +1268,13 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
         rt.dispose();
       }
     });
+    // Background as a scene colour, not only the renderer's clear colour. With a bloom pass the
+    // scene is drawn into the composer's linear render target, but RenderPass clears it with the
+    // clear colour cached by the previous frame's final pass (which ran on the screen, so it was
+    // stored as sRGB); the output pass then encodes it to sRGB a second time and the background
+    // came out washed-out teal (#224B45 instead of #04120F). A scene background is converted for
+    // whichever target is current, so it is right both through the composer and without it.
+    graphe.scene().background = new THREE.Color("#04120F");
     bloom = new MG.UnrealBloomPass(new THREE.Vector2(el.clientWidth, el.clientHeight), 0.8, 0.28, 0.58);
     composer.addPass(bloom);
   } catch (e) {
