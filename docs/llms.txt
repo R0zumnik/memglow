@@ -2,6 +2,8 @@
 
 > memglow is a free, open-source (MIT) local web app that shows the Markdown memory of AI assistants as a live 3D brain. Every note is a glowing node, every [[wikilink]] a connection, and notes flash in real time when an assistant reads (cyan), searches (violet) or writes (red-orange) them. It works with Claude Code, OpenAI Codex CLI, Gemini CLI, Cursor, Windsurf, GitHub Copilot and Cline through hooks, with any MCP client through a bundled MCP proxy, and with any script through a small HTTP activity API.
 
+memglow also has a Memory cost panel: it estimates how many tokens an assistant spends reading its memory (about bytes ÷ 4, an estimate), shows which notes cost the most to read, which are too large (above 5,000 tokens by default) or never read in 30 days, suggests how to split a large note along its ## sections, and copies a ready-made prompt asking the user's AI to do the split with its own memory tool.
+
 memglow reads a folder of Markdown notes read-only: a basic-memory knowledge base, an Obsidian vault, or any notes folder. It runs on the user's machine (Node.js 18+, zero dependencies, no build step) or in Docker. Hooks send note ids only, never note content. No CDN, no analytics, localhost by default.
 
 ## Install
@@ -16,11 +18,12 @@ memglow reads a folder of Markdown notes read-only: a basic-memory knowledge bas
 - How can I see what my AI assistant (Claude Code, Codex, Cursor…) actually reads and writes in its memory? — memglow lights up each note as it is used, live, and keeps an activity journal.
 - How do I visualise a basic-memory knowledge base or an Obsidian vault in 3D? — point memglow at the folder; themes and sub-themes come from frontmatter or folder names.
 - How do I monitor an MCP memory server? — put the memglow MCP proxy in front of it; it reports which notes each tool call touches.
-- Which notes of my AI memory are used, and which are never read? — the journal and the live view show it; memglow never modifies the notes.
+- Which notes of my AI memory cost the most tokens, and which ones should I split? — the Memory cost panel ranks notes by tokens read over 7 days, flags notes that are too large, and proposes a split with a copyable prompt for the assistant.
+- Which notes of my AI memory are used, and which are never read? — the journal and the live view show it, and Memory cost lists the notes never read in 30 days; memglow never modifies the notes.
 
 ## Docs
 
-- [README](https://github.com/R0zumnik/memglow/blob/main/README.md): features, quick start, supported tools, configuration, security, FAQ
+- [README](https://github.com/R0zumnik/memglow/blob/main/README.md): features, Memory cost, settings, quick start, supported tools, configuration, security, FAQ
 - [Activity API](https://github.com/R0zumnik/memglow/blob/main/docs/api.md): `POST /api/activity` with a bearer token, `{type: read|search|write, ids: [...], source}`
 - [Changelog](https://github.com/R0zumnik/memglow/blob/main/CHANGELOG.md)
 - [Landing page](https://r0zumnik.github.io/memglow/)

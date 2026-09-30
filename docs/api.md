@@ -31,7 +31,7 @@ Content-Type: application/json
 | `type` | yes | `read`, `search` or `write` — the colour of the flash (cyan, violet, red-orange) |
 | `ids` | yes | note references (also accepted as `slugs`); see below |
 | `source` | no | label shown in the live journal: `a-z`, `0-9`, `-`, 1 to 20 characters (else `agent`) |
-| `demo` | no | `true`: animate the page but keep the event out of the history |
+| `demo` | no | `true`: animate the page but keep the event out of the history and out of the Memory cost counts |
 
 **Note references.** Each id is reduced to a note name: the last path segment, without `.md`
 (`people/bob.md`, `memory://people/bob` and `bob` all mean the note `bob.md`). `snake_case` and

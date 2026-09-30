@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.3.0 — 2026-10-01
+
+Memory cost: see which notes cost your assistant the most tokens, and which ones to split.
+
+### Added
+
+- **Memory cost** panel, below the graph (`GET /api/cost`). Token estimates (≈ bytes ÷ 4, shown
+  with "≈" everywhere — an estimate, not a promise of savings): tokens read today and over 7 days,
+  tokens written over 7 days, size of the whole memory and of the index note, "N notes = X % of
+  tokens read", the 10 notes that cost the most to read (click to open), notes above 5,000 tokens
+  with their `##` sections and a deterministic split suggestion (consecutive sections, parts of
+  about 2,000 tokens), and notes never read in 30 days (once 30 days of counts exist; before
+  that, "Data since …").
+- **Copy prompt for your AI** on each large or costly note: a ready-to-paste prompt (note,
+  ≈ tokens, reads over 7 days, threshold, suggested parts) with rules that keep the memory
+  consistent — same theme and folder, top-level themes unchanged, `theme`/`subtheme` frontmatter
+  kept, `[[links]]` kept valid, the original becomes a short summary or goes away, only the
+  agent's memory tool is used, and the plan is shown before anything is written.
+- Activity counts per day, per note and per type (read / search / write) in memglow's own data
+  folder (`MEMGLOW_DATA_DIR`, default `~/.memglow`, `/data` in the Docker image): note ids and
+  numbers only, 90 days kept. Activity sent with `"demo": true` is not counted.
+- New settings: **Size by** (links / token cost), **Bubble size** (0.5× to 3×), **Background**
+  (Deep, Plain, Night blue), **Signal speed**, **Name distance**.
+- Config: `largeNoteTokens` (or `MEMGLOW_LARGE_NOTE_TOKENS`), `splitChunkTokens`, `dataDir`.
+- Token estimate in the note tooltip and the note panel.
+- Demo: a long fictional incident log to show the split suggestion; `demo/simulate.js --counted`
+  fills Memory cost.
+
+### Changed — visual polish
+
+- The signal, not the link: while a comet runs along a link the link stays dark; only the comet
+  lights the way (bigger, brighter head, additive trail), then a trace fades out. Comets are a bit
+  slower by default (1.8 s per link, see *Signal speed*).
+- Deep background by default: radial gradient, vignette and faint fixed star dust, all below the
+  glow threshold (no washed-out background).
+- Bubbles keep a minimum size on screen, so they stay visible when zoomed out.
+- The index note is the "sun" of the graph: larger, warm white, with a soft corona.
+- Double-click on the empty background goes back to the overview.
+- "Links at rest: Hidden" now hides everything, including the threads to sub-theme bubbles.
+
+### Fixed
+
+- **Spacing**: "Minimum spacing" had almost no effect at the default spread. It is now relative
+  to the spread and the collision is firmer, so spacing wins over gravity.
+- Hidden themes (legend) were dropped on reload with custom themes.
+- A masked secret-looking heading now stays a heading, so a note keeps its sections.
+- Release workflow: GitHub Actions moved to their Node 24 majors.
+
 ## 0.2.1 — 2026-09-30
 
 Published on npm (`npx memglow`) and as a Docker image (`ghcr.io/r0zumnik/memglow`, amd64 + arm64).

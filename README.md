@@ -22,6 +22,7 @@
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#works-with">Works with</a> ·
+  <a href="#memory-cost">Memory cost</a> ·
   <a href="#install">Install</a> ·
   <a href="#activity-api">API</a> ·
   <a href="#mcp-proxy">MCP proxy</a> ·
@@ -41,8 +42,9 @@
 | 🧠 **Live 3D brain** | Every note is a glowing neuron, every `[[wikilink]]` a connection. Recent notes shine brighter. |
 | ⚡ **Assistant activity, live** | Hooks for Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Copilot and Cline — or an MCP proxy for any other client — report each read, search and write. The note flashes — 🔵 cyan for a read, 🔴 red-orange for a write, 🟣 violet for a search — and comets run along its links. |
 | 🎥 **Camera that follows** | Glides to what the assistant touches, frames a search's results, drifts back to the overview after a few calm seconds. |
+| 🪙 **Memory cost** | See roughly how many tokens your assistant spends reading its memory (≈ bytes ÷ 4): tokens read today and over 7 days, the notes that cost the most, notes too large to read comfortably, notes never read in 30 days. For each large note, a split along its `##` sections and a **Copy prompt for your AI** button. [More](#memory-cost) |
 | 🗂️ **Themes & sub-themes** | Notes cluster by theme with relay bubbles for sub-themes — from frontmatter or folder names. |
-| 🎛️ **Tune it live** | Glow, names, spread, gravity, spacing, links at rest, auto-rotate, find-a-note. Saved in your browser. |
+| 🎛️ **Tune it live** | Background, glow, bubble size, size by links or token cost, names and name distance, spread, gravity, spacing, signal speed, links at rest, auto-rotate, find-a-note. Saved in your browser. [Settings](#settings) |
 | 🔒 **Private by design** | Localhost by default, read-only access to your notes, secret-looking lines masked. Hooks send note names only, never content. No CDN, no analytics. |
 | 📦 **Zero dependencies** | One command, Node 18+. No build step, no database. Or one Docker container. |
 
@@ -61,6 +63,59 @@
 </table>
 
 <sub>Captured from the fictional demo memory in <code>demo/memory</code>.</sub>
+
+<!-- TODO(screenshots): add captures of the Memory cost panel and of the new Deep background (0.3.0). -->
+
+<a id="memory-cost"></a>
+## 🪙 Memory cost
+
+Below the graph, the **Memory cost** panel shows where your assistant's reading goes — on your
+own memory, from the activity your hooks report:
+
+- **Tokens read** today and over 7 days, **tokens written** over 7 days, the size of the whole
+  memory and of the index note.
+- **"N notes = X % of tokens read"** — reading is often concentrated on a few notes.
+- **Most expensive to read** (7 days): the top 10 by tokens read (reads × size). Click a note to
+  open it in the graph.
+- **Too large**: notes above 5,000 tokens (`largeNoteTokens`), with their `##` sections and a
+  deterministic split suggestion (consecutive sections grouped into parts of about 2,000 tokens,
+  `splitChunkTokens`).
+- **Never read in 30 days** — once 30 days of counts exist (before that: "Data since …").
+- **Copy prompt for your AI** on each large or costly note: a ready-to-paste prompt with the
+  note, its size, its reads, the threshold and the suggested parts, plus rules that keep the
+  memory consistent (same theme and folder, top-level themes unchanged, `theme`/`subtheme`
+  frontmatter kept, `[[links]]` kept valid, the original becomes a short summary, only the
+  agent's memory tool is used, and the plan is shown before anything is written).
+
+Numbers are **estimates** (≈ bytes ÷ 4, not a tokenizer), meant to compare notes with each
+other — memglow promises no saving. memglow still never touches your notes: the counts (note
+ids and numbers only, 90 days) live in its own data folder, `~/.memglow` by default
+(`MEMGLOW_DATA_DIR`, `/data` in Docker). Activity sent with `"demo": true` is animated but not
+counted. The bubble size can follow the token cost too: *Settings → Size by → Token cost*.
+
+<a id="settings"></a>
+## 🎛️ Settings
+
+The **Settings** panel on the graph, saved in your browser (`localStorage`, keys `memglow.*`):
+
+| Section | Setting | What it does |
+|---|---|---|
+| Display | Glow | strength of the glow |
+| | Names | none, active notes only, or all |
+| | Name distance | names fade out beyond this distance (20 = always shown) |
+| | Background | Deep (gradient and faint stars, default), Plain, Night blue |
+| | Bubble size | 0.5× to 3× |
+| | Size by | number of links, or token cost |
+| | Group by theme / Sub-themes | clusters and sub-theme bubbles |
+| Motion | Spread, Gravity | size of the graph, pull towards each theme |
+| | Minimum spacing | gap kept between bubbles; wins over gravity |
+| | Signal speed | how fast comets run along the links (default 1.8 s per link) |
+| | Auto-rotate, Follow activity, Dragged bubbles stay put | camera and dragging |
+| Links | Links at rest | hidden, subtle or visible; comets light the way anyway |
+| | Ambient flow | slow comets at rest |
+
+Drag a bubble to move it, double-click it to release it; double-click the background to go
+back to the overview.
 
 <a id="how-it-works"></a>
 ## 🧭 How it works
@@ -96,7 +151,7 @@ Want to see it move without an assistant? Start the server with a token, then ru
 ```bash
 export MEMGLOW_TOKEN=$(openssl rand -hex 32)
 MEMORY_DIR=./demo/memory node server.js &
-node demo/simulate.js 60
+node demo/simulate.js 60             # add --counted to fill Memory cost as well
 ```
 
 <a id="works-with"></a>
@@ -255,6 +310,9 @@ With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 | `MEMGLOW_PASSWORD` | — | HTTP Basic auth on the viewer (user `memglow`, 12+ chars) |
 | `MEMGLOW_SHOW_BODIES` | `true` | show note text in the side panel |
 | `MEMGLOW_POLL_MS` | `2000` | how often the folder is checked |
+| `MEMGLOW_DATA_DIR` / `dataDir` | `~/.memglow` | memglow's own data (Memory cost counts); never the notes folder |
+| `MEMGLOW_LARGE_NOTE_TOKENS` / `largeNoteTokens` | `5000` | Memory cost: a note above this is "too large" |
+| `splitChunkTokens` | `2000` | Memory cost: target size of each part of a split suggestion |
 | `themes`, `themeByFolder`, `defaultTheme`, `subthemeLabels`, `title` | — | config file only |
 
 <a id="docker"></a>
@@ -263,14 +321,17 @@ With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 ```bash
 docker run -d --name memglow -p 127.0.0.1:4747:4747 \
   -v /path/to/notes:/memory:ro \
+  -v memglow-data:/data \
   -e MEMGLOW_TOKEN=$(cat ~/.memglow/token) \
-  ghcr.io/r0zumnik/memglow
+  ghcr.io/r0zumnik/memglow:0.3.0
 ```
+
+`/data` keeps the Memory cost counts across restarts (note ids and numbers only).
 
 Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
 then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
 
-Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.2.1`.
+Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.3.0`.
 
 The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
 container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.
@@ -293,6 +354,9 @@ container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same toke
 - What is **never** exposed: note bodies in the graph or the live stream (only in the note panel,
   and only if `MEMGLOW_SHOW_BODIES` is on), files outside `MEMORY_DIR`, hidden folders. Lines that
   look like secrets (API keys, tokens, `password: …`) are masked before a body is sent.
+- Memory cost (`GET /api/cost`) is behind the same password as the rest. It sends note titles,
+  sizes and counts; section titles only when note bodies may be shown, with secret-looking
+  headings masked. Its counts are written to memglow's data folder, never to `MEMORY_DIR`.
 - Strict Content-Security-Policy (`script-src 'self'`), `nosniff`, no framing, no referrer.
   No CDN, no analytics, no network calls from the page.
 

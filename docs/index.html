@@ -21,10 +21,10 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "memglow",
-  "description": "Live 3D view of the Markdown memory of AI assistants (basic-memory, Obsidian vaults, any notes folder). Notes light up as Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Copilot or Cline read, search and write them.",
+  "description": "Live 3D view of the Markdown memory of AI assistants (basic-memory, Obsidian vaults, any notes folder). Notes light up as Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Copilot or Cline read, search and write them. Memory cost shows which notes cost the most tokens to read and which ones to split.",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows (Node.js 18+ or Docker)",
-  "softwareVersion": "0.2.1",
+  "softwareVersion": "0.3.0",
   "license": "https://opensource.org/licenses/MIT",
   "isAccessibleForFree": true,
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
@@ -209,17 +209,17 @@ footer a { color: var(--ink-dim); }
         <div class="tile">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#4FD1C5" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="10" width="16" height="10" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div>
           <h3>Private by design</h3>
-          <p>Runs on localhost, reads your notes read-only, masks secret-looking lines. No CDN, no analytics, no outbound calls.</p>
+          <p>Runs on localhost, reads your notes read-only, masks secret-looking lines. No CDN, no analytics, no outbound calls. Zero dependencies: Node 18+, or one Docker container.</p>
         </div>
         <div class="tile">
-          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#4FD1C5" stroke-width="1.8" stroke-linecap="round"><path d="M13 3 5 14h6l-1 7 8-11h-6z"/></svg></div>
-          <h3>Zero dependencies</h3>
-          <p>One command sets it up, one command runs it. Node 18+, no build step, no database. Or one Docker container.</p>
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#4FD1C5" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></div>
+          <h3>Memory cost</h3>
+          <p>See roughly how many tokens your assistant spends reading its memory, which notes cost the most, which are too large or never read — and copy a ready-made prompt to have your AI split a large note.</p>
         </div>
         <div class="tile">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#4FD1C5" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M4 12h16M4 17h7"/><circle cx="18" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg></div>
           <h3>Tune it live</h3>
-          <p>Glow, names, spread, gravity, spacing, links at rest, auto-rotate. Find a note and fly to it. Everything stays in your browser.</p>
+          <p>Background, glow, bubble size (by links or token cost), names, spread, gravity, spacing, signal speed, links at rest, auto-rotate. Find a note and fly to it. Everything stays in your browser.</p>
         </div>
       </div>
     </section>
