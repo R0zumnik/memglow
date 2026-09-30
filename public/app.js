@@ -386,7 +386,153 @@ function creerCible(opts) {
     }
   };
 }
-if (typeof module !== "undefined" && module.exports) module.exports = { creerSuiviCamera, creerEnveloppe, creerCometes, hauteurPanneau, creerCible, CIBLE_COULEUR };
+/* Bubble radius. "Size by": links (default: grows with the number of links) or token cost (grows
+   with the square root of the note's token estimate, clamped, so one huge note does not crush the
+   rest). "Bubble size" multiplies notes and the index (0.5 to 3); relay bubbles get half the
+   effect. The index is the "sun" of the graph: clearly bigger than any note at every factor. */
+var RAYON_INDEX = 14, RAYON_LIENS_BASE = 1.6, RAYON_LIENS_PAS = 0.9, RAYON_RELAIS = 3.4;
+var RAYON_JETONS_MIN = 1.2, RAYON_JETONS_MAX = 7.5, RAYON_JETONS_K = 0.07;
+var FACTEUR_TAILLE_MIN = 0.5, FACTEUR_TAILLE_MAX = 3;
+function facteurTaille(f) {
+  f = Number(f);
+  return isFinite(f) && f > 0 ? Math.min(FACTEUR_TAILLE_MAX, Math.max(FACTEUR_TAILLE_MIN, f)) : 1;
+}
+function rayonNote(opts) {
+  var o = opts || {};
+  var f = facteurTaille(o.facteur == null ? 1 : o.facteur);
+  if (o.estIndex) return RAYON_INDEX * f;
+  if (o.mode === "jetons") {
+    var r = RAYON_JETONS_K * Math.sqrt(Math.max(0, o.jetons || 0));
+    return Math.min(RAYON_JETONS_MAX, Math.max(RAYON_JETONS_MIN, r)) * f;
+  }
+  return (RAYON_LIENS_BASE + Math.sqrt(Math.max(0, o.degre || 0)) * RAYON_LIENS_PAS) * f;
+}
+function rayonRelais(facteur) {
+  return RAYON_RELAIS * (1 + (facteurTaille(facteur) - 1) * 0.5);
+}
+
+/* Minimum on-screen size: the radius a sphere of radius r, at distance d from the camera, needs to
+   be at least minPx pixels on screen (perspective: px = r · (H/2) / (d · tan(fov/2))). Close up
+   nothing changes. `lointain` (0 → 1) says how much the floor enlarged it (used to brighten it a
+   little from afar). */
+function plancherRayon(r, d, tanDemiFov, hauteurPx, minPx) {
+  if (!(d > 0) || !(hauteurPx > 0) || !(tanDemiFov > 0)) return { rayon: r, lointain: 0 };
+  var mini = minPx * d * tanDemiFov / (hauteurPx / 2);
+  if (mini <= r) return { rayon: r, lointain: 0 };
+  return { rayon: mini, lointain: Math.min(1, (mini / r - 1) / 2) };
+}
+
+/* Signal speed: time a comet takes along one link — 1.8 s at the default (×1), bounds 0.3 to 2.
+   The ambient flow stays 2.4 times slower than a burst. */
+var DUREE_COMETE = 1800, VITESSE_MIN = 0.3, VITESSE_MAX = 2;
+function dureeComete(vitesse, lent) {
+  var v = Number(vitesse);
+  if (!isFinite(v) || v <= 0) v = 1;
+  v = Math.min(VITESSE_MAX, Math.max(VITESSE_MIN, v));
+  return Math.round(DUREE_COMETE * (lent ? 2.4 : 1) / v);
+}
+
+/* Light level of a link (0 → 1): the signal, not the link.
+   - comet in flight on it: the link stays at its resting level — only the comet lights the way;
+   - after arrival: a trace (its own envelope, set at arrival time) fades out, plus a faint echo of
+     its two notes' activity (0.3 between notes, 0.45 for a relay thread);
+   - clicking a note sets its own envelope at 0.9: its links light up clearly. */
+function niveauLien(o) {
+  if (o.enVol) return 0;
+  var bouts = Math.max(o.actA || 0, o.actB || 0) * (o.relais ? 0.45 : 0.3);
+  return Math.min(1, Math.max(o.propre || 0, bouts));
+}
+
+/* 3D collision (the bundle has no forceCollide). Two bubbles closer than radiusA + radiusB +
+   effective margin are pushed apart (anticipated positions x + vx, correction shared equally).
+   The margin is RELATIVE to the spread (margin × spread × 0.75) — it used to be absolute and was
+   swamped by the scale of the graph — and the correction is firmer (0.5, two passes per tick), so
+   "Minimum spacing" wins over "Gravity". */
+var COLLISION_FORCE = 0.5, COLLISION_PASSES = 2;
+function margeEffective(marge, ecart) {
+  return Math.max(0, marge) * Math.max(0.5, ecart) * 0.75;
+}
+function creerCollision(rayonDe, margeCourante) {
+  var noeuds = [], rayons = [];
+  function force() {
+    var nb = noeuds.length, m = margeCourante();
+    for (var r = 0; r < nb; r++) rayons[r] = rayonDe(noeuds[r]);
+    for (var passe = 0; passe < COLLISION_PASSES; passe++) {
+      for (var i = 0; i < nb; i++) {
+        var a = noeuds[i], ra = rayons[i] + m;
+        var ax = a.x + a.vx, ay = a.y + a.vy, az = a.z + a.vz;
+        for (var j = i + 1; j < nb; j++) {
+          var b = noeuds[j];
+          var dx = b.x + b.vx - ax, dy = b.y + b.vy - ay, dz = b.z + b.vz - az;
+          var min = ra + rayons[j];
+          var d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 >= min * min) continue;
+          if (d2 === 0) {
+            dx = Math.random() - 0.5;
+            dy = Math.random() - 0.5;
+            dz = Math.random() - 0.5;
+            d2 = dx * dx + dy * dy + dz * dz;
+          }
+          var d = Math.sqrt(d2), p = (min - d) / d * COLLISION_FORCE * 0.5;
+          dx *= p;
+          dy *= p;
+          dz *= p;
+          a.vx -= dx;
+          a.vy -= dy;
+          a.vz -= dz;
+          b.vx += dx;
+          b.vy += dy;
+          b.vz += dz;
+          ax -= dx;
+          ay -= dy;
+          az -= dz;
+        }
+      }
+    }
+  }
+  force.initialize = function(nodes) {
+    noeuds = nodes || [];
+  };
+  return force;
+}
+
+/* Scene background presets ("Background" setting): deep (default: radial gradient, vignette,
+   faint fixed star dust), plain (#04120F, the former background), night blue. Every tint stays
+   very dark (luminance < 0.03, far below the glow threshold 0.58): the glow never spreads over the
+   background. Data only; the page draws it on a canvas. */
+var FONDS = {
+  profond: { uni: "#04120F", centre: "#0B2B25", milieu: "#05160F", bord: "#010504", etoiles: 1, teinteEtoile: [205, 255, 232] },
+  uni: { uni: "#04120F" },
+  nuit: { uni: "#050B18", centre: "#122447", milieu: "#07102A", bord: "#010208", etoiles: 1.4, teinteEtoile: [210, 225, 255] }
+};
+function fondValide(v) {
+  return Object.prototype.hasOwnProperty.call(FONDS, v) ? v : "profond";
+}
+
+/* "Name distance": opacity of a name from the camera → note distance. Full up to `seuil`, zero at
+   1.35 × seuil, smooth in between; seuil = Infinity: always shown. */
+function opaciteNom(d, seuil) {
+  if (!(seuil < Infinity)) return 1;
+  var u = (d - seuil) / (0.35 * seuil);
+  if (u <= 0) return 1;
+  if (u >= 1) return 0;
+  return 1 - u * u * (3 - 2 * u);
+}
+
+/* Saved hidden themes: keep only the themes that exist in this configuration. */
+function masquesValides(masques, themes) {
+  var out = {};
+  Object.keys(masques || {}).forEach(function(k) {
+    if (masques[k] === true && (themes.indexOf(k) >= 0 || k === "index" || k === "other")) out[k] = true;
+  });
+  return out;
+}
+
+if (typeof module !== "undefined" && module.exports) module.exports = {
+  creerSuiviCamera, creerEnveloppe, creerCometes, hauteurPanneau, creerCible, CIBLE_COULEUR,
+  rayonNote, rayonRelais, facteurTaille, plancherRayon, dureeComete, niveauLien, creerCollision,
+  margeEffective, FONDS, fondValide, opaciteNom, masquesValides, RAYON_INDEX
+};
 (function() {
   "use strict";
   if (typeof document === "undefined") return;
@@ -419,6 +565,16 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
   }
   var modeNoms = lireReglage("noms", "aucun");
   if (["aucun", "actifs", "tous"].indexOf(modeNoms) < 0) modeNoms = "aucun";
+  // Size by (links / token cost), bubble size factor (0.5-3), signal speed (0.3-2, 1 = 1.8 s per
+  // link), background preset, name distance (in link lengths; 20 = always).
+  var modeTaille = lireReglage("taille", "liens");
+  if (["liens", "jetons"].indexOf(modeTaille) < 0) modeTaille = "liens";
+  var facteur = facteurTaille(parseFloat(lireReglage("facteurTaille", "1")));
+  var vitesse = parseFloat(lireReglage("vitesse", "1"));
+  if (!(vitesse >= VITESSE_MIN && vitesse <= VITESSE_MAX)) vitesse = 1;
+  var modeFond = fondValide(lireReglage("fond", "profond"));
+  var distNoms = parseFloat(lireReglage("distNoms", "20"));
+  if (!(distNoms >= 1 && distNoms <= 20)) distNoms = 20;
   var CFG = {};
   try {
     CFG = JSON.parse(document.getElementById("memglow-config").textContent || "{}");
@@ -475,21 +631,44 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
   var geoRelais = new THREE.SphereGeometry(1, 12, 8);
   function objetNoeud(n) {
     if (n.__relais) return objetRelais(n);
+    var estIndex = themeDe(n) === "index";
     var c = new THREE.Color(COULEUR[themeDe(n)] || COULEUR.autre);
-    var e = eclat(n);
-    c.multiplyScalar(0.25 + 0.95 * e);
+    var e = estIndex ? 1 : eclat(n);
+    // The index, "sun" of the graph: warm white above 1 (the glow pass renders in float), so it is
+    // always above the glow threshold, however old its last write.
+    if (estIndex) c.set("#FFF3D6").multiplyScalar(1.15);
+    else c.multiplyScalar(0.25 + 0.95 * e);
     var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: c.clone(), transparent: true, opacity: 0.55 + 0.45 * e }));
-    var r = themeDe(n) === "index" ? 6 : 1.6 + Math.sqrt(degre[n.id] || 0) * 0.9;
+    var r = rayonNote({ estIndex, mode: modeTaille, degre: degre[n.id], jetons: n.tokens, facteur });
     m.scale.setScalar(r);
     m.userData.rayon = r;
     m.userData.base = c;
     m.userData.opacite = 0.55 + 0.45 * e;
+    m.userData.minPx = estIndex ? 7 : 2.4;
     if (n.__phase === void 0) n.__phase = Math.random() * Math.PI * 2;
     n.__mesh = m;
     n.__nom = null;
-    if (modeNoms === "aucun") return m;
+    n.__halo = null;
     var g = new THREE.Group();
     g.add(m);
+    if (estIndex) {
+      // Corona: a soft additive halo that breathes slowly (see vivre()); never hovered or clicked.
+      var halo = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: textureHalo(),
+        color: new THREE.Color("#FFE7B8"),
+        transparent: true,
+        depthWrite: false,
+        blending: ADDITIF,
+        opacity: 0.4
+      }));
+      halo.scale.setScalar(r * 4.5);
+      halo.renderOrder = -1;
+      halo.raycast = function() {
+      };
+      g.add(halo);
+      n.__halo = halo;
+    }
+    if (modeNoms === "aucun") return estIndex ? g : m;
     var s = spriteNom(n.label);
     s.position.y = r + 3.5;
     s.visible = modeNoms === "tous";
@@ -501,11 +680,12 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
     var c = new THREE.Color(COULEUR[n.theme] || COULEUR.autre);
     var base = c.clone().multiplyScalar(0.8);
     var m = new THREE.Mesh(geoRelais, new THREE.MeshBasicMaterial({ color: base.clone(), wireframe: true, transparent: true, opacity: 0.55 }));
-    var r = 3.4;
+    var r = rayonRelais(facteur);
     m.scale.setScalar(r);
     m.userData.rayon = r;
     m.userData.base = base;
     m.userData.opacite = 0.55;
+    m.userData.minPx = 1.6;
     if (n.__phase === void 0) n.__phase = Math.random() * Math.PI * 2;
     n.__mesh = m;
     var g = new THREE.Group();
@@ -513,7 +693,42 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
     var s = spriteTexte(n.label, COULEUR[n.theme] || COULEUR.autre, 30, 700, 4.4);
     s.position.y = r + 3.6;
     g.add(s);
+    n.__nomRelais = s;
     return g;
+  }
+  var ADDITIF = 2; // THREE.AdditiveBlending (the constant is not exported by the bundle)
+  var texHalo = null;
+  function textureHalo() {
+    if (texHalo) return texHalo;
+    var c = document.createElement("canvas");
+    c.width = c.height = 128;
+    var ctx = c.getContext("2d");
+    var gr = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    gr.addColorStop(0, "rgba(255,255,255,0.9)");
+    gr.addColorStop(0.18, "rgba(255,255,255,0.45)");
+    gr.addColorStop(0.45, "rgba(255,255,255,0.12)");
+    gr.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = gr;
+    ctx.fillRect(0, 0, 128, 128);
+    texHalo = new THREE.CanvasTexture(c);
+    texHalo.colorSpace = "srgb";
+    texHalo.minFilter = THREE.LinearFilter;
+    return texHalo;
+  }
+  // Bubble size changed: radii updated in place (no rebuild); the collision reads userData.rayon,
+  // so enlarged bubbles do not overlap.
+  function redimensionnerBulles() {
+    var tous = donnees.nodes.concat(listeRelais);
+    for (var i = 0; i < tous.length; i++) {
+      var n = tous[i], m = n.__mesh;
+      if (!m) continue;
+      var r = n.__relais ? rayonRelais(facteur) : rayonNote({ estIndex: themeDe(n) === "index", mode: modeTaille, degre: degre[n.id], jetons: n.tokens, facteur });
+      m.userData.rayon = r;
+      m.scale.setScalar(r);
+      if (n.__halo) n.__halo.scale.setScalar(r * 4.5);
+      if (n.__nom) n.__nom.position.y = r + 3.5;
+      if (n.__nomRelais) n.__nomRelais.position.y = r + 3.6;
+    }
   }
   function spriteNom(texte) {
     return spriteTexte(texte, "#EAF4F0", 40, 600, 4.2);
@@ -669,6 +884,10 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
     dernierPas = t;
     if (!document.hidden) {
       var tous = sousCats ? donnees.nodes.concat(listeRelais) : donnees.nodes;
+      // Minimum on-screen size and name fading: camera → bubble distance, no allocation.
+      var cp = camera && camera.position, H = el.clientHeight || 600;
+      var tanDemi = camera ? Math.tan((camera.fov || 50) * Math.PI / 360) : 0;
+      var seuilNoms = distNoms >= 20 ? Infinity : distNoms * 18 * ecart;
       for (var i = 0; i < tous.length; i++) {
         var n = tous[i], m = n.__mesh;
         if (!m) continue;
@@ -677,16 +896,26 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
         if (n.__env && enveloppe.finie(n, t)) n.__env = null;
         n.__act = act;
         var souffle = 1 + 0.07 * Math.sin(t * 11e-4 + n.__phase);
-        m.scale.setScalar(m.userData.rayon * (souffle + 1.6 * act));
+        var dist = cp && n.x != null ? Math.hypot(n.x - cp.x, n.y - cp.y, n.z - cp.z) : 0;
+        var pl = plancherRayon(m.userData.rayon, dist, tanDemi, H, m.userData.minPx || 2);
+        m.scale.setScalar(pl.rayon * (souffle + 1.6 * act));
         var mat = m.material;
-        if (act) mat.color.copy(m.userData.base).lerp(BLANC, Math.min(0.85, act * 0.8));
+        // From afar, a bubble enlarged by the floor gets a little lighter to stay readable.
+        var blanc = Math.min(0.85, act * 0.8 + pl.lointain * 0.3);
+        if (blanc > 0) mat.color.copy(m.userData.base).lerp(BLANC, blanc);
         else if (!mat.color.equals(m.userData.base)) mat.color.copy(m.userData.base);
-        mat.opacity = Math.min(1, m.userData.opacite + act * 0.5);
+        mat.opacity = Math.min(1, m.userData.opacite + act * 0.5 + pl.lointain * 0.3);
         if (n.__cible) {
           var stc = cible.etat(n, t, false);
           if (stc) colorerCible(n, stc);
         }
+        if (n.__halo) n.__halo.material.opacity = 0.36 + 0.06 * Math.sin(t * 7e-4) + 0.2 * act;
         if (n.__nom && modeNoms === "actifs") n.__nom.visible = act > 0.06;
+        var nom = n.__nom || n.__nomRelais;
+        if (nom && nom.visible) {
+          var op = opaciteNom(dist, seuilNoms);
+          if (nom.material.opacity !== op) nom.material.opacity = op;
+        }
       }
     }
     if (!document.hidden) {
@@ -714,7 +943,9 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
       return s === id ? c : s;
     });
   }
-  var FOND_RVB = [4 / 255, 18 / 255, 15 / 255];
+  // Additive trail fading to black (= transparent in additive blending): it fades the same way on
+  // every background preset.
+  var FOND_RVB = [0, 0, 0];
   var couleursComete = {};
   function couleurComete(n) {
     var th = themeDe(n);
@@ -730,7 +961,9 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
   function montre(n) {
     return n && n.x != null && n.__mesh && n.__mesh.parent && visible(themeDe(n));
   }
-  var TETE = 1.6;
+  // Bigger, brighter comet head: whitened and pushed above 1 so the glow makes it the brightest
+  // point of the trip.
+  var TETE = 2.4;
   function fabriqueComete(groupe) {
     return function() {
       var geo2 = new THREE.BufferGeometry();
@@ -738,10 +971,12 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
       var colA = new THREE.BufferAttribute(new Float32Array(14 * 3), 3);
       geo2.setAttribute("position", posA);
       geo2.setAttribute("color", colA);
-      var ligne = new THREE.Line(geo2, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false }));
+      var ligne = new THREE.Line(geo2, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: ADDITIF }));
       ligne.frustumCulled = false;
-      var tete = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }));
+      ligne.renderOrder = 5;
+      var tete = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: ADDITIF }));
       tete.frustumCulled = false;
+      tete.renderOrder = 6;
       ligne.visible = tete.visible = false;
       groupe.add(ligne);
       groupe.add(tete);
@@ -756,7 +991,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
           posA.needsUpdate = true;
           colA.needsUpdate = true;
           geo2.setDrawRange(0, n);
-          couleurTete.setRGB(col[3 * (n - 1)], col[3 * (n - 1) + 1], col[3 * (n - 1) + 2]).lerp(BLANC, 0.35);
+          couleurTete.setRGB(col[3 * (n - 1)], col[3 * (n - 1) + 1], col[3 * (n - 1) + 2]).lerp(BLANC, 0.55).multiplyScalar(1.5);
           tete.material.color.copy(couleurTete);
         },
         tete: function(x, y, z, echelle, opacite) {
@@ -775,6 +1010,12 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
       };
     };
   }
+  // Comet in flight on a link: the link stays at its resting level until arrival (niveauLien),
+  // then keeps a trace that fades out (envelope set at arrival time).
+  function voler(l, t, duree, trace) {
+    l.__volFin = Math.max(l.__volFin || 0, t + duree);
+    enveloppe.activer(l, trace, 250, t + duree);
+  }
   function salve(id, eclatSalve) {
     if (!cometes || reduit) return;
     var n = parId[id];
@@ -783,12 +1024,14 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
       var a = noeudDe(l.source), b = noeudDe(l.target);
       var vers = a && a.id === id ? b : a;
       if (!montre(vers)) return;
-      enveloppe.activer(l, eclatSalve || 1, 1200, performance.now());
-      cometes.lancer(n, vers, couleurComete(n), { duree: 950 + Math.random() * 150, eclat: eclatSalve || 1 });
+      var t = performance.now(), duree = dureeComete(vitesse) * (0.95 + Math.random() * 0.1);
+      voler(l, t, duree, 0.35 * (eclatSalve || 1));
+      cometes.lancer(n, vers, couleurComete(n), { duree, eclat: eclatSalve || 1, longueur: 0.38 });
     });
   }
   var REPOS_LIENS = {
-    masques: { intra: 0, inter: 0, relais: 0.12 },
+    // Hidden = really nothing at rest (no stubs around the relay bubbles).
+    masques: { intra: 0, inter: 0, relais: 0 },
     discrets: { intra: 0.07, inter: 0.025, relais: 0.14 },
     visibles: { intra: 0.3, inter: 0.15, relais: 0.2 }
   };
@@ -817,8 +1060,9 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
       var base = l.__relais ? repos2.relais : themeDe(a) === themeDe(b) ? repos2.intra : repos2.inter;
       var propre = l.__env ? enveloppe.niveau(l, t) : 0;
       if (l.__env && enveloppe.finie(l, t)) l.__env = null;
-      var bouts = Math.max(a.__act || 0, b.__act || 0) * (l.__relais ? 0.45 : 0.85);
-      var niv = Math.min(1, Math.max(propre, bouts));
+      var enVol = l.__volFin > t;
+      if (l.__volFin && !enVol) l.__volFin = 0;
+      var niv = niveauLien({ propre, actA: a.__act, actB: b.__act, relais: l.__relais, enVol });
       if (niv < 2e-3 && l.__repos === base) continue;
       l.__repos = niv < 2e-3 ? base : -1;
       var source = (a.__act || 0) >= (b.__act || 0) ? a : b;
@@ -871,12 +1115,13 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
       var cle = a.id + "\n" + b.id;
       if (cometes.enCours(cle)) continue;
       var sens = Math.random() < 0.5;
-      enveloppe.activer(l, 0.35, 2600, t);
+      var duree = dureeComete(vitesse, true);
+      voler(l, t, duree, 0.15);
       cometes.lancer(
         sens ? a : b,
         sens ? b : a,
         couleurComete(sens ? a : b),
-        { duree: 2600, eclat: 0.5, taille: 0.7, lent: true, cle }
+        { duree, eclat: 0.5, taille: 0.7, lent: true, cle, longueur: 0.38 }
       );
     }
   }
@@ -984,16 +1229,14 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
   } catch (e) {
     masques = {};
   }
-  Object.keys(masques).forEach(function(k) {
-    if (["famille", "pro", "maison", "tech", "archives", "index", "autre"].indexOf(k) < 0) delete masques[k];
-  });
+  masques = masquesValides(masques, ORDRE_THEMES);
   function visible(theme) {
-    return !masques[theme || "autre"];
+    return !masques[theme || "other"];
   }
   function garderMasques() {
     garderReglage("masquesThemes", JSON.stringify(masques));
   }
-  var dernierClic = { id: null, t: 0 };
+  var dernierClic = { id: null, t: 0 }, dernierClicFond = 0;
   var tics = 0;
   function liberer(n) {
     n.fx = n.fy = n.fz = void 0;
@@ -1005,7 +1248,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
       if (n.__relais) {
         return '<div class="mem-bulle"><strong>' + esc(n.label) + "</strong><br>" + esc(NOM_THEME[n.theme] || "") + " · " + n.nb + " note" + (n.nb > 1 ? "s" : "") + "</div>";
       }
-      return '<div class="mem-bulle"><strong>' + esc(n.label) + "</strong>" + (n.description ? "<br>" + esc(n.description) : "") + "</div>";
+      var jetons = typeof n.tokens === "number" && isFinite(n.tokens) ? "<br><small>≈ " + esc(Math.round(n.tokens).toLocaleString("en-US")) + " tokens</small>" : "";
+      return '<div class="mem-bulle"><strong>' + esc(n.label) + "</strong>" + (n.description ? "<br>" + esc(n.description) : "") + jetons + "</div>";
     }).linkWidth(0).linkMaterial(materiauLien).linkDirectionalParticles(0).linkDirectionalParticleWidth(1.5).linkDirectionalParticleSpeed(55e-4).linkDirectionalParticleResolution(6).linkDirectionalParticleColor(function() {
       return "#CFFFEA";
     }).nodeVisibility(function(n) {
@@ -1042,8 +1286,21 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
         return;
       }
       dernierClic = { id: n.id, t };
+      dernierClicFond = 0;
       allumerLiens(n.id, 0.9, MAINTIEN_NOTE);
       ouvrir(n.id, true);
+    }).onBackgroundClick(function() {
+      // Double-click on empty background: back to the overview (like "Recenter"). The library
+      // sends no click after a drag; a click on a bubble resets the count.
+      var t = Date.now();
+      if (dernierClicFond && t - dernierClicFond < 380) {
+        dernierClicFond = 0;
+        recentrer();
+        return;
+      }
+      dernierClicFond = t;
+    }).showPointerCursor(function(d) {
+      return !!d;
     });
   } catch (e) {
     dire("Your browser cannot display 3D here (WebGL unavailable).");
@@ -1104,46 +1361,17 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
     noeudsForce = nodes || [];
   };
   graphe.d3Force("themes", forceThemes);
-  var noeudsCollision = [];
+  // Collision (creerCollision, top of file): margin relative to the spread, firm correction, two
+  // passes. It reads the scaled radius (userData.rayon), so enlarged bubbles do not overlap. The
+  // simulation stops by itself at rest: no cost when nothing moves.
   function rayonDe(n) {
     var m = n.__mesh;
     if (m && m.userData && m.userData.rayon) return m.userData.rayon;
-    return n.__relais ? 3.4 : themeDe(n) === "index" ? 6 : 2;
+    return n.__relais ? rayonRelais(facteur) : themeDe(n) === "index" ? RAYON_INDEX * facteur : 2 * facteur;
   }
-  function forceCollision() {
-    var nb = noeudsCollision.length;
-    for (var i = 0; i < nb; i++) {
-      var a = noeudsCollision[i], ra = rayonDe(a);
-      var ax = a.x + a.vx, ay = a.y + a.vy, az = a.z + a.vz;
-      for (var j = i + 1; j < nb; j++) {
-        var b = noeudsCollision[j];
-        var dx = b.x + b.vx - ax, dy = b.y + b.vy - ay, dz = b.z + b.vz - az;
-        var min = ra + rayonDe(b) + marge;
-        var d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 >= min * min) continue;
-        if (d2 === 0) {
-          dx = Math.random() - 0.5;
-          dy = Math.random() - 0.5;
-          dz = Math.random() - 0.5;
-          d2 = dx * dx + dy * dy + dz * dz;
-        }
-        var d = Math.sqrt(d2), p = (min - d) / d * 0.35;
-        dx *= p;
-        dy *= p;
-        dz *= p;
-        a.vx -= dx;
-        a.vy -= dy;
-        a.vz -= dz;
-        b.vx += dx;
-        b.vy += dy;
-        b.vz += dz;
-      }
-    }
-  }
-  forceCollision.initialize = function(nodes) {
-    noeudsCollision = nodes || [];
-  };
-  graphe.d3Force("collision", forceCollision);
+  graphe.d3Force("collision", creerCollision(rayonDe, function() {
+    return margeEffective(marge, ecart);
+  }));
   function brancherCurseur(id, cle, lire2, appliquer2) {
     var c = document.getElementById(id);
     if (!c) return;
@@ -1165,6 +1393,12 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
     return marge;
   }, function(v) {
     marge = Math.min(20, Math.max(0, v));
+  });
+  brancherCurseur("mem-facteur", "facteurTaille", function() {
+    return facteur;
+  }, function(v) {
+    facteur = facteurTaille(v);
+    redimensionnerBulles();
   });
   ecarter(ecart);
   var nomsThemes = {};
@@ -1259,6 +1493,107 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
       garder: 60
     });
   }
+  // ---- Scene background ("Background" setting, FONDS presets at the top of the file) ----
+  // Deep / night blue: a canvas the size of the stage (radial gradient + vignette, light dithering
+  // against gradient banding, fixed star dust drawn from a seed: the same sky every time), redrawn
+  // only when the size or the preset changes. Always a SCENE background — a plain colour, or a
+  // texture declared sRGB — never only the renderer's clear colour (see the note below).
+  var texFond = null, cleFond = "", minuterieFond = null;
+  function dessinerFond() {
+    var sc = graphe.scene(), p = FONDS[modeFond];
+    el.style.backgroundColor = p.uni;
+    graphe.backgroundColor(p.uni);
+    if (!p.centre) {
+      if (texFond) {
+        texFond.dispose();
+        texFond = null;
+      }
+      cleFond = modeFond;
+      sc.background = new THREE.Color(p.uni);
+      return;
+    }
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    var w = Math.max(64, Math.round((el.clientWidth || 800) * dpr)), h = Math.max(64, Math.round((el.clientHeight || 600) * dpr));
+    var k = Math.min(1, 2048 / Math.max(w, h));
+    w = Math.round(w * k);
+    h = Math.round(h * k);
+    var cle = modeFond + ":" + w + "x" + h;
+    if (cle === cleFond && texFond) return;
+    cleFond = cle;
+    var c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    var ctx = c.getContext("2d");
+    var cx = w * 0.5, cy = h * 0.46, R = Math.hypot(w, h) * 0.6;
+    var gr = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+    gr.addColorStop(0, p.centre);
+    gr.addColorStop(0.42, p.milieu);
+    gr.addColorStop(1, p.bord);
+    ctx.fillStyle = gr;
+    ctx.fillRect(0, 0, w, h);
+    var img = ctx.getImageData(0, 0, w, h), d = img.data, graine = 12345;
+    function alea() {
+      graine = graine * 1664525 + 1013904223 >>> 0;
+      return graine / 4294967296;
+    }
+    for (var i = 0; i < d.length; i += 4) {
+      var bruit = alea() < 0.5 ? -1 : 1;
+      if (alea() < 0.5) {
+        d[i] += bruit;
+        d[i + 1] += bruit;
+        d[i + 2] += bruit;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    // Star dust: rare, tiny, pale; denser towards the edges (the vignette keeps the centre clear).
+    var nb = Math.round(w * h / (dpr * dpr) / 5200 * p.etoiles), te = p.teinteEtoile;
+    for (var s = 0; s < nb; s++) {
+      var x = alea() * w, y = alea() * h;
+      var bord = Math.min(1, Math.hypot(x - cx, y - cy) / (R * 0.8));
+      var a = (0.05 + 0.22 * alea() * alea()) * (0.45 + 0.55 * bord);
+      var r = (0.35 + 0.6 * alea() * alea()) * dpr;
+      if (alea() < 0.03) {
+        a = Math.min(0.5, a * 2.2);
+        r *= 1.6;
+      }
+      ctx.fillStyle = "rgba(" + te[0] + "," + te[1] + "," + te[2] + "," + a.toFixed(3) + ")";
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    var tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = "srgb";
+    tex.minFilter = THREE.LinearFilter;
+    sc.background = tex;
+    if (texFond) texFond.dispose();
+    texFond = tex;
+  }
+  function planifierFond() {
+    clearTimeout(minuterieFond);
+    minuterieFond = setTimeout(function() {
+      try {
+        dessinerFond();
+      } catch (e) {
+      }
+    }, 250);
+  }
+  var choixFond = document.getElementById("mem-fond");
+  if (choixFond) {
+    choixFond.value = modeFond;
+    choixFond.addEventListener("change", function() {
+      modeFond = fondValide(choixFond.value);
+      garderReglage("fond", modeFond);
+      try {
+        dessinerFond();
+      } catch (e) {
+      }
+    });
+  }
+  try {
+    dessinerFond();
+  } catch (e) {
+    graphe.scene().background = new THREE.Color("#04120F");
+  }
   var bloom = null;
   try {
     var composer = graphe.postProcessingComposer();
@@ -1274,7 +1609,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
     // stored as sRGB); the output pass then encodes it to sRGB a second time and the background
     // came out washed-out teal (#224B45 instead of #04120F). A scene background is converted for
     // whichever target is current, so it is right both through the composer and without it.
-    graphe.scene().background = new THREE.Color("#04120F");
+    // (dessinerFond, just above, sets it: a colour, or a texture declared sRGB.)
     bloom = new MG.UnrealBloomPass(new THREE.Vector2(el.clientWidth, el.clientHeight), 0.8, 0.28, 0.58);
     composer.addPass(bloom);
   } catch (e) {
@@ -1404,6 +1739,36 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
       graphe.nodeThreeObject(objetNoeud);
     });
   }
+  var choixTaille = document.getElementById("mem-taille");
+  if (choixTaille) {
+    choixTaille.value = modeTaille;
+    choixTaille.addEventListener("change", function() {
+      var v = choixTaille.value;
+      if (["liens", "jetons"].indexOf(v) < 0) return;
+      modeTaille = v;
+      garderReglage("taille", v);
+      redimensionnerBulles();
+      graphe.d3ReheatSimulation();
+    });
+  }
+  // Sliders that do not touch the simulation: signal speed, name distance (applied by vivre()).
+  function brancherSimple(id, cle, valeur, appliquer2) {
+    var c = document.getElementById(id);
+    if (!c) return;
+    c.value = valeur;
+    c.addEventListener("input", function() {
+      var v = parseFloat(c.value);
+      if (!isFinite(v)) return;
+      garderReglage(cle, v);
+      appliquer2(v);
+    });
+  }
+  brancherSimple("mem-vitesse", "vitesse", vitesse, function(v) {
+    vitesse = Math.min(VITESSE_MAX, Math.max(VITESSE_MIN, v));
+  });
+  brancherSimple("mem-dist-noms", "distNoms", distNoms, function(v) {
+    distNoms = Math.min(20, Math.max(1, v));
+  });
   var caseFixer = document.getElementById("mem-fixer");
   function libererTout() {
     donnees.nodes.concat(listeRelais).forEach(function(n) {
@@ -1422,10 +1787,11 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
   var boutonLiberer = document.getElementById("mem-liberer");
   if (boutonLiberer) boutonLiberer.addEventListener("click", libererTout);
   var boutonRecentrer = document.getElementById("mem-recentrer");
-  if (boutonRecentrer) boutonRecentrer.addEventListener("click", function() {
+  function recentrer() {
     if (suivi) suivi.interaction();
     graphe.zoomToFit(reduit ? 0 : 900, 40);
-  });
+  }
+  if (boutonRecentrer) boutonRecentrer.addEventListener("click", recentrer);
   var filtres = document.querySelectorAll(".mem-filtre");
   function majFiltres() {
     Array.prototype.forEach.call(filtres, function(b) {
@@ -1494,6 +1860,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
   }
   function dimensionner() {
     graphe.width(el.clientWidth).height(el.clientHeight);
+    planifierFond();
   }
   dimensionner();
   if (window.ResizeObserver) new ResizeObserver(dimensionner).observe(el);
@@ -1547,7 +1914,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
       voisinsDe(id).forEach(function(v) {
         activer(v, 0.45, MAINTIEN_VOISIN);
       });
-    }, 950);
+    }, dureeComete(vitesse));
   }
   function chercher(ids) {
     ids.forEach(function(id, i) {
@@ -1692,6 +2059,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
         n.description = evt.node.description;
         n.theme = evt.node.theme;
         n.subtheme = evt.node.subtheme;
+        n.tokens = evt.node.tokens;
       } else {
         n = evt.node;
         parId[n.id] = n;
@@ -1803,7 +2171,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { creerSui
     document.getElementById("mem-p-titre").textContent = f.label;
     document.getElementById("mem-p-desc").textContent = f.description || "";
     var jours = Math.floor((Date.now() - f.mtime) / 864e5);
-    document.getElementById("mem-p-meta").textContent = "Written " + (jours < 1 ? "today" : jours === 1 ? "yesterday" : jours + " days ago") + " · " + f.outgoing.length + " outgoing link" + (f.outgoing.length > 1 ? "s" : "") + ", " + f.incoming.length + " incoming";
+    document.getElementById("mem-p-meta").textContent = "Written " + (jours < 1 ? "today" : jours === 1 ? "yesterday" : jours + " days ago") + " · " + (typeof f.tokens === "number" ? "≈ " + Math.round(f.tokens).toLocaleString("en-US") + " tokens · " : "") + f.outgoing.length + " outgoing link" + (f.outgoing.length > 1 ? "s" : "") + ", " + f.incoming.length + " incoming";
     var zone = document.getElementById("mem-p-liens");
     zone.textContent = "";
     var voisins = f.outgoing.concat(f.incoming.filter(function(x) {
