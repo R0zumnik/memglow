@@ -12,6 +12,11 @@ on:
     tags: ["v*.*.*"]
   workflow_dispatch:
 
+# A tag push sometimes fires twice: never run two releases of the same ref at once.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
