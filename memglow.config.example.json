@@ -1,0 +1,24 @@
+{
+  "title": "My assistant's memory",
+  "memoryDir": "./memory",
+  "port": 4747,
+  "indexNote": ["MEMORY", "index"],
+  "themes": [
+    { "id": "people", "label": "People", "color": "#2EE89B" },
+    { "id": "projects", "label": "Projects", "color": "#8FA8FF" },
+    { "id": "knowledge", "label": "Knowledge", "color": "#4FD1E0" },
+    { "id": "habits", "label": "Habits & rules", "color": "#FFB86B" },
+    { "id": "archive", "label": "Archive", "color": "#7E948D" }
+  ],
+  "themeByFolder": [
+    ["user", "people"],
+    ["project", "projects"],
+    ["reference", "knowledge"],
+    ["feedback", "habits"],
+    ["project/archive", "archive"]
+  ],
+  "defaultTheme": "knowledge",
+  "subthemeLabels": { "home-lab": "Home lab", "client-work": "Client work" },
+  "showBodies": true,
+  "pollMs": 2000
+}

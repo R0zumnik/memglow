@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>memglow Pro — coming soon</title>
+<style>
+:root { color-scheme: dark; --bg: #06140F; --tile: #12241F; --ink: #EAF4F0; --dim: #A9C9BF; --line: #22362F; --accent: #2EE89B; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 880px; margin: 0 auto; padding: 32px 16px 48px; }
+h1 { font-size: 34px; margin: 0 0 8px; letter-spacing: -0.02em; }
+h1 span { color: var(--accent); }
+.lead { color: var(--dim); margin: 0 0 28px; max-width: 60ch; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.tile { background: var(--tile); border: 1px solid var(--line); border-radius: 18px; padding: 18px; }
+.tile h2 { font-size: 17px; margin: 0 0 6px; }
+.tile p { margin: 0; color: var(--dim); font-size: 14px; }
+.free { margin-top: 28px; }
+.cta { margin-top: 28px; background: #0F4F46; border-radius: 20px; padding: 22px; }
+.cta h2 { margin: 0 0 6px; }
+.cta p { margin: 0 0 14px; color: #CFEDE3; }
+.btn { display: inline-block; background: var(--accent); color: #04120F; text-decoration: none; font-weight: 700; padding: 10px 18px; border-radius: 999px; }
+small { display: block; margin-top: 10px; color: #A9C9BF; }
+</style>
+</head>
+<body>
+<main>
+  <h1>memglow <span>Pro</span></h1>
+  <p class="lead">The free edition shows your assistant's memory come alive. Pro would add what you need when you work with it every day. Nothing is for sale yet: tell us if you would use it.</p>
+  <div class="grid">
+    <div class="tile"><h2>Dashboard</h2><p>Notes, words, sections and links over time, activity per day, most-read notes, memory health (oversized notes, orphans, broken links).</p></div>
+    <div class="tile"><h2>History &amp; diffs</h2><p>Click a write in the live journal and see exactly which lines were added or removed.</p></div>
+    <div class="tile"><h2>Several memories &amp; users</h2><p>One viewer for all your assistants and machines; share a read-only view with the people you choose.</p></div>
+    <div class="tile"><h2>Two-factor login</h2><p>TOTP on top of the password, for a viewer exposed to the internet.</p></div>
+    <div class="tile"><h2>One-click install</h2><p>A guided setup for Docker, the Claude Code hook and your memory folder.</p></div>
+    <div class="tile"><h2>Priority support</h2><p>Help to wire memglow into your own memory system.</p></div>
+  </div>
+  <div class="tile free"><h2>Free edition (open source, MIT)</h2><p>Live 3D brain, themes and sub-themes, assistant activity with comets and camera follow, settings, note panel. It stays free.</p></div>
+  <div class="cta">
+    <h2>Interested in Pro?</h2>
+    <p>Send a one-line e-mail — which feature matters most to you. No payment, no newsletter.</p>
+    <!-- TODO before publishing: replace with the real contact address chosen by the maintainer. -->
+    <a class="btn" href="mailto:hello@example.com?subject=memglow%20Pro%20interest">I'd use memglow Pro</a>
+    <small>Placeholder address — to be set before publishing.</small>
+  </div>
+</main>
+</body>
+</html>

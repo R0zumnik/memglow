@@ -1,0 +1,5 @@
+node_modules/
+*.log
+.env
+memglow.config.json
+demo/apercu.html

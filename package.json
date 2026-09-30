@@ -1,0 +1,41 @@
+{
+  "name": "memglow",
+  "version": "0.1.0",
+  "description": "A live 3D view of your AI assistant's Markdown memory — watch notes light up as Claude reads, searches and writes them.",
+  "license": "MIT",
+  "main": "server.js",
+  "bin": {
+    "memglow": "server.js"
+  },
+  "files": [
+    "server.js",
+    "lib/",
+    "public/",
+    "hooks/",
+    "memglow.config.example.json",
+    "THIRD_PARTY_LICENSES",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node server.js",
+    "demo": "MEMORY_DIR=./demo/memory node server.js",
+    "simulate": "node demo/simulate.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "memory",
+    "mcp",
+    "basic-memory",
+    "obsidian",
+    "markdown",
+    "knowledge-graph",
+    "visualization",
+    "3d"
+  ]
+}

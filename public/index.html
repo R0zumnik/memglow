@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>{{title}}</title>
+<link rel="stylesheet" href="/app.css?v={{v:app.css}}">
+<style>{{dots}}</style>
+</head>
+<body>
+<div class="mg-wrap">
+  <header class="mg-head">
+    <h1>{{title}} <span>·</span> live memory</h1>
+    <p>Every dot is a note your assistant remembers; every line, a link between two notes. When an assistant reads, searches or writes a note, it lights up — live.</p>
+  </header>
+  <div class="bn-grid">
+    <section class="bn-tile bn-tile--deep mem-stage" aria-label="Memory graph">
+      <div class="mem-canvas" id="mem-graphe" data-graphe="/api/graph" data-flux="/api/stream" data-note="/api/note/"></div>
+      <div class="mem-hud">
+        <p class="mem-hud__stat"><span class="mem-hud__n" id="mem-nb-notes">0</span> notes · <span class="mem-hud__n" id="mem-nb-liens">0</span> links</p>
+        <ul class="mem-legende" aria-label="Show or hide a theme">{{legend}}</ul>
+        <form class="mem-cherche" id="mem-cherche" role="search">
+          <label class="mem-cherche__label" for="mem-cherche-champ">Find a note</label>
+          <input type="search" id="mem-cherche-champ" list="mem-cherche-liste" placeholder="Find a note…" autocomplete="off">
+          <datalist id="mem-cherche-liste"></datalist>
+        </form>
+        <details class="mem-options" id="mem-options">
+          <summary>Settings</summary>
+          <div class="mem-options__corps" id="mem-options-corps">
+            <fieldset class="mem-options__section">
+              <legend>Display</legend>
+              <label class="mem-reglage">Glow
+                <input type="range" id="mem-lueur" min="0" max="2" step="0.1" value="0.9">
+              </label>
+              <label class="mem-reglage">Names
+                <select id="mem-noms">
+                  <option value="aucun">None</option>
+                  <option value="actifs">Active notes</option>
+                  <option value="tous">All</option>
+                </select>
+              </label>
+              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-grouper" checked> Group by theme</label>
+              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-souscats" checked> Sub-themes</label>
+            </fieldset>
+            <fieldset class="mem-options__section">
+              <legend>Motion</legend>
+              <label class="mem-reglage">Spread
+                <input type="range" id="mem-ecart" min="1" max="30" step="0.5" value="7">
+              </label>
+              <label class="mem-reglage">Gravity
+                <input type="range" id="mem-gravite" min="0" max="10" step="0.5" value="6">
+              </label>
+              <label class="mem-reglage">Minimum spacing
+                <input type="range" id="mem-marge" min="0" max="20" step="1" value="8">
+              </label>
+              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-rotation" checked> Auto-rotate</label>
+              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-suivre" checked> Follow activity</label>
+              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-fixer" checked> Dragged bubbles stay put</label>
+            </fieldset>
+            <fieldset class="mem-options__section">
+              <legend>Links</legend>
+              <label class="mem-reglage">Links at rest
+                <select id="mem-liens">
+                  <option value="masques">Hidden</option>
+                  <option value="discrets" selected>Subtle</option>
+                  <option value="visibles">Visible</option>
+                </select>
+              </label>
+              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-influx"> Ambient flow</label>
+            </fieldset>
+            <div class="mem-options__boutons">
+              <button type="button" class="bn-btn" id="mem-liberer">Release all bubbles</button>
+              <button type="button" class="bn-btn" id="mem-recentrer">Recenter</button>
+            </div>
+            <p class="mem-options__aide">Drag a bubble to move it; double-click it to release it.</p>
+          </div>
+        </details>
+      </div>
+      <p class="mem-etat" id="mem-etat" role="status">Loading the graph…</p>
+      <aside class="mem-panneau" id="mem-panneau" hidden aria-live="polite">
+        <button class="bn-btn mem-panneau__fermer" type="button" id="mem-fermer">Close</button>
+        <p class="bn-label" id="mem-p-dossier"></p>
+        <h2 class="bn-title bn-title--sm" id="mem-p-titre"></h2>
+        <p class="mem-panneau__desc" id="mem-p-desc"></p>
+        <p class="mem-panneau__meta" id="mem-p-meta"></p>
+        <div class="mem-panneau__liens" id="mem-p-liens"></div>
+        <pre class="mem-panneau__corps" id="mem-p-corps" hidden></pre>
+      </aside>
+    </section>
+    <section class="bn-tile mem-journal" aria-label="Live activity">
+      <p class="bn-label">Live activity</p>
+      <ol class="mem-journal__liste" id="mem-journal"><li class="mem-journal__vide">Waiting for a read, a search or a write…</li></ol>
+    </section>
+  </div>
+  <p class="mg-foot">memglow · open source (MIT) · <a href="https://github.com/">GitHub</a></p>
+</div>
+<script type="application/json" id="memglow-config">{{config}}</script>
+<script src="/vendor/memglow-graph.js?v={{v:vendor/memglow-graph.js}}"></script>
+<script src="/app.js?v={{v:app.js}}"></script>
+</body>
+</html>
