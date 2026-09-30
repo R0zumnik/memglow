@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="112" height="112" viewBox="0 0 112 112"><defs><filter id="blur" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="6"/></filter></defs>
+  <rect width="112" height="112" rx="26" fill="#0F4F46"/>
+  <g stroke="#2EE89B" stroke-opacity="0.55" stroke-width="2.5" stroke-linecap="round">
+    <line x1="56" y1="58" x2="30" y2="34"/><line x1="56" y1="58" x2="86" y2="38"/><line x1="56" y1="58" x2="40" y2="86"/><line x1="56" y1="58" x2="82" y2="82"/><line x1="30" y1="34" x2="86" y2="38"/>
+  </g>
+  <circle cx="56" cy="58" r="20" fill="#2EE89B" opacity="0.3" filter="url(#blur)"/>
+  <circle cx="56" cy="58" r="11" fill="#2EE89B"/>
+  <circle cx="30" cy="34" r="6" fill="#4DEBFF"/><circle cx="86" cy="38" r="5" fill="#EAF4F0"/><circle cx="40" cy="86" r="5" fill="#EAF4F0" opacity="0.8"/><circle cx="82" cy="82" r="6.5" fill="#FF4D2E"/>
+</svg>

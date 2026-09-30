@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="t d">
+<title id="t">How memglow works</title>
+<desc id="d">Claude Code runs a PostToolUse hook, which posts note ids to POST /api/activity on the memglow server. memglow also polls a folder of Markdown notes read-only (basic-memory, Obsidian or any folder) and streams everything live to the 3D brain in the browser.</desc>
+<style>
+  .bg { fill: #F3FAF7; stroke: #D5E7DF; }
+  .box { fill: #FFFFFF; stroke: #C9DED5; }
+  .acc { fill: #0F4F46; }
+  .t { fill: #0B1A17; font: 600 19px system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
+  .s { fill: #4A675E; font: 14px system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
+  .k { fill: #00696B; font: 600 12px system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; letter-spacing: 1.4px; }
+  .m { fill: #00696B; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .ta { fill: #EAF4F0; font: 600 19px system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
+  .sa { fill: #A9E5D0; font: 14px system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
+  .ka { fill: #2EE89B; font: 600 12px system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; letter-spacing: 1.4px; }
+  .ar { stroke: #009597; stroke-width: 2.2; fill: none; }
+  .ah { fill: #009597; }
+  .lab { fill: #00696B; font: 12.5px system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill: #0B1A17; stroke: #22362F; }
+    .box { fill: #12241F; stroke: #22362F; }
+    .t { fill: #EAF4F0; }
+    .s { fill: #A9C9BF; }
+    .k, .m, .lab { fill: #4FD1C5; }
+    .ar { stroke: #2FB5B0; }
+    .ah { fill: #2FB5B0; }
+  }
+</style>
+<defs>
+  <marker id="h" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 0 L10 5 L0 10 z"/></marker>
+</defs>
+<rect class="bg" x="0.5" y="0.5" width="1199" height="499" rx="20"/>
+
+<!-- Row 1: Claude Code → hook → memglow → browser -->
+<g>
+  <rect class="box" x="32" y="48" width="236" height="132" rx="18"/>
+  <text class="k" x="54" y="80">1 · ASSISTANT</text>
+  <text class="t" x="54" y="112">Claude Code</text>
+  <text class="s" x="54" y="138">reads, searches and</text>
+  <text class="s" x="54" y="158">writes memory notes</text>
+</g>
+<g>
+  <rect class="box" x="322" y="48" width="236" height="132" rx="18"/>
+  <text class="k" x="344" y="80">2 · HOOK</text>
+  <text class="t" x="344" y="112">PostToolUse</text>
+  <text class="m" x="344" y="138">memglow-activity.js</text>
+  <text class="s" x="344" y="160">note ids only, never text</text>
+</g>
+<g>
+  <rect class="box" x="612" y="48" width="236" height="132" rx="18"/>
+  <text class="k" x="634" y="80">3 · SERVER</text>
+  <text class="t" x="634" y="112">memglow</text>
+  <text class="m" x="634" y="138">node server.js</text>
+  <text class="s" x="634" y="160">127.0.0.1:4747</text>
+</g>
+<g>
+  <rect class="acc" x="902" y="48" width="266" height="132" rx="18"/>
+  <text class="ka" x="924" y="80">4 · BROWSER</text>
+  <text class="ta" x="924" y="112">Live 3D brain</text>
+  <text class="sa" x="924" y="138">WebGL · comets on links</text>
+  <text class="sa" x="924" y="160">camera follows the action</text>
+</g>
+
+<path class="ar" d="M270 114 H318" marker-end="url(#h)"/>
+<path class="ar" d="M560 114 H608" marker-end="url(#h)"/>
+<path class="ar" d="M850 114 H898" marker-end="url(#h)"/>
+
+<text class="lab" x="585" y="210" text-anchor="middle">POST /api/activity</text>
+<text class="lab" x="585" y="228" text-anchor="middle">bearer token · 4 KB max</text>
+<path class="ar" d="M584 122 V194" style="stroke-width:1.2px" stroke-dasharray="3 4"/>
+<text class="lab" x="875" y="210" text-anchor="middle">GET /api/stream</text>
+<text class="lab" x="875" y="228" text-anchor="middle">server-sent events</text>
+<path class="ar" d="M874 122 V194" style="stroke-width:1.2px" stroke-dasharray="3 4"/>
+
+<!-- Row 2: notes folder → memglow (read-only) -->
+<g>
+  <rect class="box" x="572" y="318" width="316" height="140" rx="18"/>
+  <text class="k" x="594" y="350">MEMORY FOLDER</text>
+  <text class="t" x="594" y="382">Markdown notes</text>
+  <text class="m" x="594" y="408">*.md · [[wikilinks]] · frontmatter</text>
+  <text class="s" x="594" y="432">basic-memory · Obsidian · any folder</text>
+</g>
+<path class="ar" d="M730 316 V186" marker-end="url(#h)"/>
+<text class="lab" x="744" y="276">read-only, polled every 2 s</text>
+<text class="lab" x="744" y="294">theme · sub-theme · links</text>
+
+<!-- Row 2 left: what never leaves -->
+<g>
+  <rect class="box" x="32" y="318" width="482" height="140" rx="18"/>
+  <text class="k" x="54" y="350">PRIVATE BY DESIGN</text>
+  <text class="s" x="54" y="380">Runs on your machine, localhost by default.</text>
+  <text class="s" x="54" y="404">No CDN, no analytics, no outbound calls.</text>
+  <text class="s" x="54" y="428">Never writes to your notes.</text>
+</g>
+<g>
+  <rect class="box" x="942" y="318" width="226" height="140" rx="18"/>
+  <text class="k" x="964" y="350">COLOURS</text>
+  <circle cx="972" cy="377" r="7" fill="#4DEBFF"/><text class="s" x="988" y="382">read</text>
+  <circle cx="972" cy="403" r="7" fill="#FF4D2E"/><text class="s" x="988" y="408">write</text>
+  <circle cx="972" cy="429" r="7" fill="#C9A6FF"/><text class="s" x="988" y="434">search</text>
+</g>
+</svg>

@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>memglow — see your AI's memory come alive</title>
+<meta name="description" content="memglow turns the Markdown memory of Claude Code, basic-memory or an Obsidian vault into a live 3D brain. Watch notes light up as your assistant reads, searches and writes them.">
+<meta property="og:title" content="memglow — see your AI's memory come alive">
+<meta property="og:description" content="A live 3D view of your AI assistant's Markdown memory. Open source, MIT, zero dependencies.">
+<meta property="og:image" content="assets/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+<style>
+:root {
+  --bg: #04120F; --surface: #0B1A17; --tile: #12241F; --well: #0E1E1A; --line: #22362F;
+  --ink: #EAF4F0; --ink-dim: #A9C9BF; --ink-faint: #6FA394;
+  --teal: #009597; --teal-deep: #00696B; --teal-soft: #4FD1C5; --mint: #2EE89B; --accent: #0F4F46;
+  --read: #4DEBFF; --write: #FF4D2E; --search: #C9A6FF;
+  --r: 20px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 var(--font); }
+body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: -1;
+  background: radial-gradient(900px 500px at 78% -10%, rgba(0,149,151,.22), transparent 70%),
+              radial-gradient(700px 400px at 0% 40%, rgba(15,79,70,.28), transparent 70%); }
+a { color: var(--teal-soft); text-underline-offset: 3px; }
+a:hover { color: var(--mint); }
+img { max-width: 100%; display: block; }
+code { font: 0.92em var(--mono); background: var(--well); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; }
+.wrap { max-width: 1160px; margin: 0 auto; padding: 0 16px; }
+
+/* top bar */
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 0; }
+.brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font-weight: 700; font-size: 20px; letter-spacing: -0.01em; }
+.brand img { width: 34px; height: 34px; }
+.brand b { background: linear-gradient(90deg, #00B3B5, var(--mint)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.bar nav { display: flex; gap: 18px; font-size: 14px; }
+.bar nav a { color: var(--ink-dim); text-decoration: none; }
+.bar nav a:hover { color: var(--ink); }
+
+/* buttons */
+.btn { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 20px; border-radius: 999px; font-weight: 600; font-size: 15px; text-decoration: none; border: 1px solid var(--line); background: var(--tile); color: var(--ink); }
+.btn:hover { border-color: var(--teal); color: var(--ink); }
+.btn--primary { background: var(--mint); border-color: var(--mint); color: #04120F; }
+.btn--primary:hover { background: #5CF0B3; color: #04120F; }
+.btn svg { width: 18px; height: 18px; }
+:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
+
+/* hero */
+.hero { padding: 40px 0 28px; display: grid; gap: 28px; }
+.eyebrow { display: inline-flex; gap: 8px; align-items: center; margin: 0; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--teal-soft); }
+.eyebrow i { width: 8px; height: 8px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 12px var(--mint); }
+h1 { margin: 12px 0 14px; font-size: clamp(38px, 6.4vw, 68px); line-height: 1.04; letter-spacing: -0.03em; }
+h1 em { font-style: normal; background: linear-gradient(90deg, #00B3B5, var(--mint)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lead { margin: 0 0 24px; max-width: 640px; font-size: clamp(17px, 2vw, 19px); color: var(--ink-dim); }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 0; padding: 0; list-style: none; }
+.pills li { font-size: 13px; color: var(--ink-dim); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; background: rgba(18,36,31,.6); }
+.demo { border-radius: var(--r); overflow: hidden; border: 1px solid var(--line); background: #04120F; box-shadow: 0 30px 80px -30px rgba(0,149,151,.45); }
+
+/* sections */
+section { padding: 44px 0; }
+h2 { margin: 0 0 8px; font-size: clamp(26px, 3.4vw, 36px); letter-spacing: -0.02em; line-height: 1.15; }
+.sub { margin: 0 0 26px; color: var(--ink-dim); max-width: 680px; }
+.grid { display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 980px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .grid { grid-template-columns: 1fr; } }
+.tile { background: var(--tile); border: 1px solid var(--line); border-radius: var(--r); padding: 22px; }
+.tile h3 { margin: 12px 0 6px; font-size: 18px; }
+.tile p { margin: 0; color: var(--ink-dim); font-size: 15px; }
+.tile--accent { background: var(--accent); border-color: #1B6B5F; }
+.tile--accent p { color: #CDEBE1; }
+.ico { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--well); border: 1px solid var(--line); }
+.tile--accent .ico { background: rgba(4,18,15,.35); border-color: rgba(46,232,155,.35); }
+.ico svg { width: 22px; height: 22px; }
+.dots { display: flex; gap: 6px; margin-top: 12px; }
+.dots span { font-size: 12px; padding: 2px 10px; border-radius: 999px; background: rgba(4,18,15,.4); }
+
+/* gallery */
+.gallery { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.shot { margin: 0; background: var(--tile); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.shot img { width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; }
+.shot figcaption { padding: 12px 16px 14px; font-size: 14px; color: var(--ink-dim); }
+.shot figcaption b { color: var(--ink); font-weight: 600; }
+
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 8px; }
+
+/* quick start */
+.steps { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); counter-reset: s; }
+.step { position: relative; }
+.step .n { font: 600 12px var(--font); letter-spacing: .12em; color: var(--teal-soft); text-transform: uppercase; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0 0; padding: 14px 16px; background: #04120F; border: 1px solid var(--line); border-radius: 14px; overflow-x: auto; font: 13.5px/1.6 var(--mono); color: #D6EDE5; }
+pre .c { color: var(--ink-faint); }
+
+/* pro */
+.pro { display: grid; gap: 14px; grid-template-columns: 1.3fr 1fr; align-items: stretch; }
+.pro ul { margin: 12px 0 0; padding-left: 20px; color: var(--ink-dim); }
+.pro li { margin: 6px 0; }
+.pro li b { color: var(--ink); }
+
+footer { border-top: 1px solid var(--line); margin-top: 20px; padding: 26px 0 40px; color: var(--ink-faint); font-size: 14px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+footer a { color: var(--ink-dim); }
+
+@media (max-width: 760px) {
+  .bar nav { display: none; }
+  .gallery, .pro { grid-template-columns: 1fr; }
+  .hero { padding-top: 20px; }
+  section { padding: 32px 0; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .eyebrow i { animation: pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .45; box-shadow: 0 0 4px var(--mint); } }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="bar">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="" width="34" height="34"><span>mem<b>glow</b></span></a>
+    <nav aria-label="Sections">
+      <a href="#features">Features</a>
+      <a href="#screenshots">Screenshots</a>
+      <a href="#how">How it works</a>
+      <a href="#start">Quick start</a>
+      <a href="#pro">Pro</a>
+    </nav>
+    <a class="btn" href="https://github.com/R0zumnik/memglow"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+  </header>
+
+  <main>
+    <div class="hero">
+      <div>
+        <p class="eyebrow"><i></i>Open source · MIT · zero dependencies</p>
+        <h1>See your AI's memory <em>come alive.</em></h1>
+        <p class="lead">memglow turns the Markdown memory of Claude Code, a basic-memory knowledge base or an Obsidian vault into a live 3D brain. When your assistant reads, searches or writes a note, the neuron lights up and a comet runs along its links.</p>
+        <div class="cta">
+          <a class="btn btn--primary" href="https://github.com/R0zumnik/memglow">View on GitHub</a>
+          <a class="btn" href="#start">Run it in 30 seconds</a>
+        </div>
+        <ul class="pills"><li>Claude Code hook</li><li>basic-memory</li><li>Obsidian</li><li>Node 18+ · no build step</li><li>Docker</li></ul>
+      </div>
+      <div class="demo"><img src="demo.gif" alt="memglow demo: a 3D brain of notes; a search lights up several notes and the camera follows, then a write flashes one note red-orange" width="800" height="450"></div>
+    </div>
+
+    <section id="features" aria-labelledby="f-t">
+      <h2 id="f-t">Your assistant's memory, at a glance</h2>
+      <p class="sub">Calm at rest, alive when something happens. Built for people who let an AI remember things for them — and want to see what it does with it.</p>
+      <div class="grid">
+        <div class="tile tile--accent">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#2EE89B" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><circle cx="5" cy="6" r="1.8"/><circle cx="19" cy="7" r="1.8"/><circle cx="17" cy="19" r="1.8"/><path d="M9.5 10 6.4 7.2M14.8 10.8l2.6-2.4M13.8 14.6l2.2 3"/></svg></div>
+          <h3>Live assistant activity</h3>
+          <p>A tiny Claude Code hook reports every read, search and write of a note. The note flashes in the colour of the action; comets run to its neighbours.</p>
+          <div class="dots"><span style="color:var(--read)">● read</span><span style="color:var(--write)">● write</span><span style="color:var(--search)">● search</span></div>
+        </div>
+        <div class="tile">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#4FD1C5" stroke-width="1.8" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v4h4"/><circle cx="12" cy="12" r="2.5"/></svg></div>
+          <h3>Camera that follows</h3>
+          <p>The camera glides to what the assistant touches, frames a search's results, then drifts back to the overview after a few quiet seconds.</p>
+        </div>
+        <div class="tile">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#4FD1C5" stroke-width="1.8"><circle cx="8" cy="9" r="4.5"/><circle cx="16.5" cy="8" r="3.5"/><circle cx="14" cy="17" r="4"/></svg></div>
+          <h3>Themes &amp; sub-themes</h3>
+          <p>Notes cluster by theme, with relay bubbles for sub-themes. Straight from frontmatter or folder names.</p>
+        </div>
+        <div class="tile">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#4FD1C5" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="10" width="16" height="10" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div>
+          <h3>Private by design</h3>
+          <p>Runs on localhost, reads your notes read-only, masks secret-looking lines. No CDN, no analytics, no outbound calls.</p>
+        </div>
+        <div class="tile">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#4FD1C5" stroke-width="1.8" stroke-linecap="round"><path d="M13 3 5 14h6l-1 7 8-11h-6z"/></svg></div>
+          <h3>Zero dependencies</h3>
+          <p>One <code>node server.js</code>. No npm install, no build step, no database. Or one Docker container.</p>
+        </div>
+        <div class="tile">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#4FD1C5" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M4 12h16M4 17h7"/><circle cx="18" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg></div>
+          <h3>Tune it live</h3>
+          <p>Glow, names, spread, gravity, spacing, links at rest, auto-rotate. Find a note and fly to it. Everything stays in your browser.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="screenshots" aria-labelledby="s-t">
+      <h2 id="s-t">Screenshots</h2>
+      <p class="sub">Real captures of the fictional demo memory that ships with the repository.</p>
+      <div class="gallery">
+        <figure class="shot"><img src="assets/screenshot-overview.png" alt="Overview of the memory: coloured clusters of notes around a central index" width="1600" height="900" loading="lazy"><figcaption><b>Overview.</b> Five themes, sub-theme bubbles, the index at the centre.</figcaption></figure>
+        <figure class="shot"><img src="assets/screenshot-write.png" alt="A note flashing red-orange with its name, after the assistant wrote to it" width="1600" height="900" loading="lazy"><figcaption><b>A write.</b> The note flashes red-orange and shows its name.</figcaption></figure>
+        <figure class="shot"><img src="assets/screenshot-search.png" alt="A search: several notes light up, comets run along their links and the camera frames them" width="1600" height="900" loading="lazy"><figcaption><b>A search.</b> The camera frames the results; comets run along the links.</figcaption></figure>
+        <figure class="shot"><img src="assets/screenshot-settings.png" alt="The settings panel open next to the 3D brain" width="1600" height="900" loading="lazy"><figcaption><b>Settings.</b> Display, motion and links, saved in your browser.</figcaption></figure>
+      </div>
+    </section>
+
+    <section id="how" aria-labelledby="h-t">
+      <h2 id="h-t">How it works</h2>
+      <p class="sub">memglow watches a folder of Markdown notes and listens to a hook. Nothing else.</p>
+      <div class="diagram"><img src="assets/how-it-works.svg" alt="Claude Code runs a PostToolUse hook, which posts note ids to POST /api/activity on memglow. memglow reads the Markdown notes folder read-only and streams everything to the live 3D brain in the browser." width="1200" height="500"></div>
+    </section>
+
+    <section id="start" aria-labelledby="q-t">
+      <h2 id="q-t">Quick start</h2>
+      <p class="sub">Node 18 or newer. Nothing to install.</p>
+      <div class="steps">
+        <div class="tile step"><span class="n">1 · Get it</span>
+<pre>git clone https://github.com/R0zumnik/memglow
+cd memglow</pre></div>
+        <div class="tile step"><span class="n">2 · Run the demo</span>
+<pre>MEMORY_DIR=./demo/memory node server.js</pre></div>
+        <div class="tile step"><span class="n">3 · Open it</span>
+<pre><span class="c"># then point it at your own notes</span>
+open http://127.0.0.1:4747</pre></div>
+      </div>
+      <p class="sub" style="margin-top:18px">Then add the Claude Code hook to see your assistant at work — see the <a href="https://github.com/R0zumnik/memglow#live-activity-from-claude-code">README</a>.</p>
+    </section>
+
+    <section id="pro" aria-labelledby="p-t">
+      <div class="pro">
+        <div class="tile">
+          <p class="eyebrow">Coming soon</p>
+          <h2 id="p-t" style="margin-top:8px">memglow Pro</h2>
+          <p class="sub" style="margin:0">For people who live in their assistant's memory every day. The open-source edition stays free.</p>
+          <ul>
+            <li><b>Dashboard</b> — words, notes, links and activity over time, memory health.</li>
+            <li><b>History &amp; diffs</b> — click a write to see exactly which lines changed.</li>
+            <li><b>Several memories and users</b> — per-person, theme-level access.</li>
+            <li><b>Two-factor login</b> and one-click install.</li>
+          </ul>
+        </div>
+        <div class="tile tile--accent" style="display:flex;flex-direction:column;justify-content:center;gap:14px">
+          <h3 style="margin:0;font-size:22px">Would you use it?</h3>
+          <p>Tell us which feature matters most to you in GitHub Discussions. No payment, no newsletter, no e-mail.</p>
+          <div class="cta"><a class="btn btn--primary" href="https://github.com/R0zumnik/memglow/discussions">I'd use memglow Pro</a><a class="btn" href="pro.html">Details</a></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>memglow · MIT License · not affiliated with Anthropic, basic-memory or Obsidian</span>
+    <span>Built with <a href="https://threejs.org/">three.js</a> and <a href="https://github.com/vasturiano/3d-force-graph">3d-force-graph</a> · <a href="https://github.com/R0zumnik/memglow">GitHub</a></span>
+  </footer>
+</div>
+</body>
+</html>
