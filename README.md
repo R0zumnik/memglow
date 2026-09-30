@@ -3,6 +3,7 @@
 </p>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/memglow"><img alt="npm" src="https://img.shields.io/npm/v/memglow?style=flat-square&labelColor=04120F&color=2EE89B"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-0F4F46?style=flat-square&labelColor=04120F"></a>
   <img alt="Node 18+" src="https://img.shields.io/badge/node-18%2B-009597?style=flat-square&labelColor=04120F&logo=nodedotjs&logoColor=white">
   <img alt="No build step" src="https://img.shields.io/badge/no%20build%20step-zero%20deps-00696B?style=flat-square&labelColor=04120F">
@@ -78,11 +79,9 @@ activity** — from a hook in your AI tool, from the MCP proxy, or from any scri
 One command sets everything up — notes folder, token, and the hooks of the AI tools it finds:
 
 ```bash
-npx github:R0zumnik/memglow init     # interactive; add --yes to accept everything
-npx github:R0zumnik/memglow          # start the viewer, then open http://127.0.0.1:4747
+npx memglow init   # interactive; add --yes to accept everything
+npx memglow        # start the viewer, then open http://127.0.0.1:4747
 ```
-
-(`npx memglow init` once the npm package is published — coming soon.)
 
 Just want to look at the demo?
 
@@ -130,8 +129,8 @@ searches**, and *which* tool did it.
 ## 🛠️ Install: `memglow init`
 
 ```bash
-npx github:R0zumnik/memglow init             # asks before each change
-npx github:R0zumnik/memglow init --yes       # non-interactive
+npx memglow init         # asks before each change
+npx memglow init --yes   # non-interactive
 ```
 
 It:
@@ -157,7 +156,7 @@ It:
 wrappings — and nothing else, even if you edited those files since. `--restore-backups` puts the
 original files back instead; `--purge` also deletes `~/.memglow`.
 
-Then start the viewer (`npx github:R0zumnik/memglow`) and restart your AI tools.
+Then start the viewer (`npx memglow`) and restart your AI tools.
 
 <a id="claude-code-hook"></a>
 <a id="live-activity-from-claude-code"></a>
@@ -271,8 +270,7 @@ docker run -d --name memglow -p 127.0.0.1:4747:4747 \
 Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
 then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
 
-> The `ghcr.io/r0zumnik/memglow` image is **not published yet**. Until it is, build it locally —
-> `docker build -t memglow .` — and use `memglow` as the image name in the commands above.
+Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.2.1`.
 
 The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
 container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.

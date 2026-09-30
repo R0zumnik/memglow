@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.2.0 — unreleased
+## 0.2.1 — 2026-09-30
+
+Published on npm (`npx memglow`) and as a Docker image (`ghcr.io/r0zumnik/memglow`, amd64 + arm64).
+
+## 0.2.0 — 2026-09-30
 
 Not only Claude Code any more.
 

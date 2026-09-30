@@ -1,6 +1,6 @@
 {
   "name": "memglow",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A live 3D view of your AI assistant's Markdown memory — watch notes light up as Claude, Codex, Gemini, Cursor, Copilot and others read, search and write them.",
   "license": "MIT",
   "main": "server.js",
@@ -50,5 +50,13 @@
     "cline",
     "hooks",
     "mcp-proxy"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/R0zumnik/memglow.git"
+  },
+  "homepage": "https://r0zumnik.github.io/memglow/",
+  "bugs": {
+    "url": "https://github.com/R0zumnik/memglow/issues"
+  }
 }

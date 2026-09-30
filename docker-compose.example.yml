@@ -4,8 +4,8 @@
 #   echo "MEMGLOW_TOKEN=$(openssl rand -hex 32)" > .env  # activity token for hooks
 #   docker compose up -d                                 # then open http://127.0.0.1:4747
 #
-# The image is not published yet: until then, build it locally (`docker build -t memglow .`)
-# and replace the `image:` line with `image: memglow`.
+# The image is published on every release (amd64 + arm64). To build it yourself instead:
+# `docker build -t memglow .` and replace the `image:` line with `image: memglow`.
 services:
   memglow:
     image: ghcr.io/r0zumnik/memglow:latest
