@@ -157,14 +157,26 @@ test("page: an invalid theme colour never reaches a style attribute", () => {
 
 test("page: the copy prompt carries the note, the numbers, the split and the rules", () => {
   const c = sample();
-  const p = page.costSplitPrompt(c.tooLarge[0], c);
-  assert.match(p, /id: big, folder: knowledge\/ops, theme: knowledge, subtheme: ops/);
+  const names = { people: "People", knowledge: "Knowledge base", index: "Index" };
+  const p = page.costSplitPrompt(c.tooLarge[0], c, names);
+  assert.match(p, /id: big, folder: knowledge\/ops, group: Knowledge base, subtheme: ops/, "group spelled out, not its id");
   assert.match(p, /≈ 7,500 tokens/);
-  assert.match(p, /Read 3 times in the last 7 days/);
-  assert.match(p, /above ≈ 5,000 tokens/);
+  assert.match(p, /Read 3 times in the last 7 days \(counted since Oct 1\)/, "partial week said");
+  assert.match(p, /above the ≈ 5,000-token threshold/);
+  assert.match(p, /Suggested split into 4 notes/);
   assert.match(p, /1\. Q1 <img src=x onerror=alert\(1\)> — ≈ 1,50\d tokens/, "plain text, not HTML");
-  for (const rule of [/same theme and the same folder/, /top-level themes/, /\[\[link\]\] valid/, /`theme` and `subtheme`/, /short summary .* or is removed/, /only your memory tool/, /plan .* BEFORE writing|show me the plan/i]) assert.match(p, rule);
+  assert.match(p, /4\. Q4 — ≈ 1,50\d tokens/, "K numbered blocks");
+  for (const rule of [/same group \(Knowledge base\) and the same folder/, /top-level groups \(People, Knowledge base\)/, /\[\[link\]\] valid/, /`theme` and `subtheme`/, /short summary .* or is removed/, /only your memory tool/, /plan .* BEFORE writing|show me the plan/i]) assert.match(p, rule);
   const without = page.costSplitPrompt({ id: "x", label: "X", tokens: 6000, reads7: 1, readTokens7: 6000 }, { largeNoteTokens: 5000, chunkTokens: 2000 });
   assert.match(without, /group consecutive ## sections/);
-  assert.match(without, /Read 1 time in/);
+  assert.match(without, /Read 1 time in the last 7 days,/, "no 'counted since' without a partial week");
+  assert.match(without, /group: Other/);
+});
+
+test("page: a costly note under the threshold is described honestly", () => {
+  const p = page.costSplitPrompt({ id: "mid", label: "Mid", theme: "people", tokens: 3000, reads7: 12, readTokens7: 36000 },
+    { largeNoteTokens: 5000, chunkTokens: 2000, read: { complete7: true } }, { people: "People" });
+  assert.match(p, /under the ≈ 5,000-token threshold for large notes, but it is one of the notes that cost the most to read/);
+  assert.ok(!/above the/.test(p));
+  assert.match(p, /≈ 36,000 tokens read in total/);
 });

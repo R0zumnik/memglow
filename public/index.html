@@ -16,7 +16,7 @@
   </header>
   <div class="bn-grid">
     <section class="bn-tile bn-tile--deep mem-stage" aria-label="Memory graph">
-      <div class="mem-canvas" id="mem-graphe" data-graphe="/api/graph" data-flux="/api/stream" data-note="/api/note/"></div>
+      <div class="mem-canvas" id="mem-graphe" data-graphe="/api/graph" data-flux="/api/stream" data-note="/api/note/" data-vue="/api/view"></div>
       <div class="mem-hud">
         <p class="mem-hud__stat"><span class="mem-hud__n" id="mem-nb-notes">0</span> notes · <span class="mem-hud__n" id="mem-nb-liens">0</span> links</p>
         <ul class="mem-legende" aria-label="Show or hide a theme">{{legend}}</ul>
@@ -94,8 +94,9 @@
             <div class="mem-options__boutons">
               <button type="button" class="bn-btn" id="mem-liberer">Release all bubbles</button>
               <button type="button" class="bn-btn" id="mem-recentrer">Recenter</button>
+              <button type="button" class="bn-btn" id="mem-reorganiser">Rearrange</button>
             </div>
-            <p class="mem-options__aide">Drag a bubble to move it; double-click it to release it, double-click the background to recenter.</p>
+            <p class="mem-options__aide">Drag a bubble to move it; double-click it to release it, double-click the background to recenter. The view (settings, layout, camera) is saved on this memglow instance: every browser and device that opens it gets the same view. “Rearrange” starts again from a fresh layout and keeps the settings.</p>
           </div>
         </details>
       </div>

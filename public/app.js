@@ -528,10 +528,163 @@ function masquesValides(masques, themes) {
   return out;
 }
 
+/* Activity journal line: ACTION · GROUP · NOTE · SOURCE ("Write · Projects · Release notes ·
+   Claude Code"), for an activity as for "Note changed / New note / Note removed" (source "File":
+   seen on disk). The group is the top-level theme, spelled out (`names`: { themeId: label }).
+   The colour of the dot (the action's colour for an activity on a single note) is decided
+   elsewhere and does not change. o: { type, theme, label, more, source }. Pure. */
+var JOURNAL_ACTIONS = {
+  read: "Read", search: "Search", write: "Write",
+  added: "New note", changed: "Note changed", removed: "Note removed"
+};
+var SOURCE_LABELS = {
+  claude: "Claude Code", "claude-code": "Claude Code", codex: "Codex", gemini: "Gemini CLI", cursor: "Cursor",
+  copilot: "Copilot", windsurf: "Windsurf", cline: "Cline", mcp: "MCP", agent: "Agent", demo: "Demo", file: "File"
+};
+function formatJournalLine(o, names) {
+  o = o || {};
+  names = names || {};
+  var theme = typeof o.theme === "string" && o.theme ? o.theme : "other";
+  var group = Object.prototype.hasOwnProperty.call(names, theme) && names[theme] ? String(names[theme])
+    : theme === "index" ? "Index" : "Other";
+  var more = Math.max(0, Math.floor(Number(o.more) || 0));
+  var src = typeof o.source === "string" ? o.source : "";
+  var p = {
+    action: JOURNAL_ACTIONS[o.type] || "Activity",
+    theme: theme,
+    group: group,
+    note: String(o.label == null ? "" : o.label) + (more ? " +" + more : ""),
+    source: Object.prototype.hasOwnProperty.call(SOURCE_LABELS, src) ? SOURCE_LABELS[src] : src
+  };
+  p.text = [p.action, p.group, p.note, p.source].filter(function(x) { return x; }).join(" · ");
+  return p;
+}
+
+/* Saved view (GET/PUT /api/view, lib/view.js): one per memglow instance, the same on every device.
+   The page keeps its settings as strings under French keys (the localStorage form, which stays a
+   cache: "1"/"0", numbers as text, hidden themes as JSON); the server keeps them TYPED under English
+   keys. VIEW_SETTINGS maps one to the other: local key → [api key, type, bounds or values
+   (local value → api value)]. Must match SETTINGS in lib/view.js (checked by a test). */
+var VIEW_SETTINGS = {
+  ecart: ["spread", "number", 1, 30],
+  gravite: ["gravity", "number", 0, 10],
+  marge: ["spacing", "number", 0, 20],
+  facteurTaille: ["bubbleSize", "number", 0.5, 3],
+  vitesse: ["signalSpeed", "number", 0.3, 2],
+  distNoms: ["nameDistance", "number", 1, 20],
+  lueur: ["glow", "number", 0, 2],
+  taille: ["sizeBy", "choice", { liens: "links", jetons: "tokens" }],
+  fond: ["background", "choice", { profond: "deep", uni: "plain", nuit: "night" }],
+  liens: ["linksAtRest", "choice", { masques: "hidden", discrets: "subtle", visibles: "visible" }],
+  noms: ["names", "choice", { aucun: "none", actifs: "active", tous: "all" }],
+  rotation: ["autoRotate", "bool"],
+  influx: ["ambientFlow", "bool"],
+  grouper: ["groupByTheme", "bool"],
+  sousCats: ["subThemes", "bool"],
+  fixer: ["keepDragged", "bool"],
+  suivre: ["followActivity", "bool"],
+  masquesThemes: ["hiddenThemes", "themes"]
+};
+/** Typed settings (server) → { localKey: string } (localStorage form). Unknown keys ignored. */
+function settingsToLocal(s) {
+  var out = {};
+  if (!s || typeof s !== "object") return out;
+  Object.keys(VIEW_SETTINGS).forEach(function(k) {
+    var d = VIEW_SETTINGS[k], api = d[0];
+    if (!Object.prototype.hasOwnProperty.call(s, api)) return;
+    var v = s[api];
+    if (d[1] === "number" && typeof v === "number" && isFinite(v)) out[k] = String(v);
+    else if (d[1] === "choice" && typeof v === "string") {
+      Object.keys(d[2]).forEach(function(local) { if (d[2][local] === v) out[k] = local; });
+    } else if (d[1] === "bool" && typeof v === "boolean") out[k] = v ? "1" : "0";
+    else if (d[1] === "themes" && Array.isArray(v)) {
+      var m = {};
+      v.forEach(function(x) { if (typeof x === "string") m[x] = true; });
+      out[k] = JSON.stringify(m);
+    }
+  });
+  return out;
+}
+/** read(localKey) → string or null; returns the typed settings to send (unset keys left out). */
+function settingsFromLocal(read) {
+  var out = {};
+  Object.keys(VIEW_SETTINGS).forEach(function(k) {
+    var s = read(k);
+    if (s === null || s === undefined) return;
+    var d = VIEW_SETTINGS[k], api = d[0];
+    if (d[1] === "number") {
+      var n = parseFloat(s);
+      if (isFinite(n) && n >= d[2] && n <= d[3]) out[api] = n;
+    } else if (d[1] === "choice") {
+      if (Object.prototype.hasOwnProperty.call(d[2], s)) out[api] = d[2][s];
+    } else if (d[1] === "bool") out[api] = s === "1";
+    else if (d[1] === "themes") {
+      try {
+        var m = JSON.parse(s) || {};
+        out[api] = Object.keys(m).filter(function(x) { return m[x] === true; });
+      } catch (e) { /* unreadable: left out */ }
+    }
+  });
+  return out;
+}
+
+/* Saved layout → graph nodes, BEFORE they go to the simulation.
+   - a node with a saved position takes it back (zero speed); if it was pinned, fx/fy/fz too;
+   - a node without one (a note added since) is put near near(n) — its sub-theme bubble, or the
+     centre of its group — shifted by a small offset derived from its id (deterministic, never two
+     new notes on the same point). near(n) may use nodes already restored: saved positions are set
+     first, in one pass, then the others.
+   Returns { restored, placed }. Pure (no three.js), testable. */
+function offsetFor(id, radius) {
+  var h = 2166136261;
+  for (var i = 0; i < id.length; i++) { h ^= id.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  var u = (h % 1000) / 1000, w = ((h >>> 10) % 1000) / 1000;
+  var th = u * Math.PI * 2, ph = Math.acos(2 * w - 1);
+  return { x: radius * Math.sin(ph) * Math.cos(th), y: radius * Math.sin(ph) * Math.sin(th), z: radius * Math.cos(ph) };
+}
+function seedPositions(nodes, layout, near, radius) {
+  var pos = (layout && layout.positions) || {}, pinned = {}, restored = 0, placed = 0;
+  ((layout && layout.pinned) || []).forEach(function(id) { pinned[id] = true; });
+  var without = [];
+  (nodes || []).forEach(function(n) {
+    var p = Object.prototype.hasOwnProperty.call(pos, n.id) ? pos[n.id] : null;
+    if (p && p.length === 3 && isFinite(p[0]) && isFinite(p[1]) && isFinite(p[2])) {
+      n.x = p[0]; n.y = p[1]; n.z = p[2]; n.vx = n.vy = n.vz = 0;
+      if (pinned[n.id]) { n.fx = p[0]; n.fy = p[1]; n.fz = p[2]; }
+      restored++;
+    } else if (typeof n.x !== "number" || !isFinite(n.x)) without.push(n);
+  });
+  if (!restored) return { restored: 0, placed: 0 }; // nothing saved: the simulation starts from scratch
+  without.forEach(function(n) {
+    var c = near ? near(n) : null;
+    if (!c || !isFinite(c.x) || !isFinite(c.y) || !isFinite(c.z)) return;
+    var e = offsetFor(String(n.id), radius || 12);
+    n.x = c.x + e.x; n.y = c.y + e.y; n.z = c.z + e.z; n.vx = n.vy = n.vz = 0;
+    placed++;
+  });
+  return { restored: restored, placed: placed };
+}
+/* Current layout to save: rounded positions (0.01) of placed nodes, pinned ones (fx set), at most
+   `max` (the server keeps 2000). Pure. */
+function layoutOf(nodes, max) {
+  var positions = {}, pinned = [], n = 0, lim = max || 2000;
+  function r(x) { return Math.round(x * 100) / 100; }
+  for (var i = 0; i < (nodes || []).length && n < lim; i++) {
+    var o = nodes[i];
+    if (!o || typeof o.id !== "string" || !isFinite(o.x) || !isFinite(o.y) || !isFinite(o.z)) continue;
+    positions[o.id] = [r(o.x), r(o.y), r(o.z)];
+    if (o.fx != null && isFinite(o.fx)) pinned.push(o.id);
+    n++;
+  }
+  return { positions: positions, pinned: pinned };
+}
+
 if (typeof module !== "undefined" && module.exports) module.exports = {
   creerSuiviCamera, creerEnveloppe, creerCometes, hauteurPanneau, creerCible, CIBLE_COULEUR,
   rayonNote, rayonRelais, facteurTaille, plancherRayon, dureeComete, niveauLien, creerCollision,
-  margeEffective, FONDS, fondValide, opaciteNom, masquesValides, RAYON_INDEX
+  margeEffective, FONDS, fondValide, opaciteNom, masquesValides, RAYON_INDEX,
+  JOURNAL_ACTIONS, SOURCE_LABELS, formatJournalLine, VIEW_SETTINGS, settingsToLocal, settingsFromLocal,
+  offsetFor, seedPositions, layoutOf
 };
 (function() {
   "use strict";
@@ -549,19 +702,108 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     dire("The graph library could not load.");
     return;
   }
-  function lireReglage(cle, defaut) {
+  // ---- Saved view of this instance, server side (GET/PUT /api/view) ----
+  // Read BEFORE settings and graph are set up: every browser and device that opens this instance
+  // gets the same view (settings, bubble layout, pinned bubbles, camera). localStorage stays a
+  // cache: fallback when the server does not answer within 2.5 s, and a local copy of each setting.
+  var URL_VUE = el.getAttribute("data-vue");
+  var CLE_DISPO = "memglow.view"; // local cache of the layout (positions, pinned, camera)
+  function lireLocal(k) {
+    try { return localStorage.getItem(k); } catch (e) { return null; }
+  }
+  function ecrireLocal(k, v) {
     try {
-      var v = localStorage.getItem("memglow." + cle);
-      return v === null ? defaut : v;
+      if (v === null) localStorage.removeItem(k);
+      else localStorage.setItem(k, v);
     } catch (e) {
-      return defaut;
     }
   }
-  function garderReglage(cle, v) {
+  function dispoLocale() {
     try {
-      localStorage.setItem("memglow." + cle, String(v));
+      var d = JSON.parse(lireLocal(CLE_DISPO) || "null");
+      return d && typeof d === "object" ? d : null;
     } catch (e) {
+      return null;
     }
+  }
+  function chargerVue(suite) {
+    var fini = false;
+    function finir(v) {
+      if (fini) return;
+      fini = true;
+      suite(v);
+    }
+    if (!URL_VUE || !window.fetch) return finir(null);
+    var ctrl = window.AbortController ? new AbortController() : null;
+    setTimeout(function() {
+      if (ctrl) ctrl.abort();
+      finir(null);
+    }, 2500);
+    fetch(URL_VUE, { credentials: "same-origin", signal: ctrl ? ctrl.signal : void 0 }).then(function(r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    }).then(finir).catch(function() {
+      finir(null);
+    });
+  }
+  chargerVue(demarrer);
+
+  // The rest of the page, once the saved view is known (not re-indented, to keep history readable).
+  function demarrer(vueServeur) {
+  var serveurOk = !!(vueServeur && typeof vueServeur === "object");
+  // Settings: the instance's (server) win and fill the local cache; without an answer from the
+  // server, the local cache alone (offline, slow server: the page works anyway).
+  var reglagesVue = serveurOk ? settingsToLocal(vueServeur.settings) : null;
+  if (reglagesVue) Object.keys(reglagesVue).forEach(function(k) { ecrireLocal("memglow." + k, reglagesVue[k]); });
+  // First visit of an instance with nothing saved yet: this browser's local settings go up.
+  var migrerReglages = serveurOk && !Object.keys(reglagesVue || {}).length;
+  // Layout: the instance's if it has one, otherwise the local cache (server unreachable only).
+  var dispoDepart = null;
+  if (serveurOk && vueServeur.positions && Object.keys(vueServeur.positions).length) {
+    dispoDepart = { positions: vueServeur.positions, pinned: vueServeur.pinned || [], camera: vueServeur.camera || null };
+    ecrireLocal(CLE_DISPO, JSON.stringify(dispoDepart));
+  } else if (!serveurOk) dispoDepart = dispoLocale();
+  else if (vueServeur.camera) dispoDepart = { positions: {}, pinned: [], camera: vueServeur.camera };
+
+  function lireReglage(cle, defaut) {
+    if (reglagesVue && Object.prototype.hasOwnProperty.call(reglagesVue, cle)) return reglagesVue[cle];
+    var v = lireLocal("memglow." + cle);
+    return v === null ? defaut : v;
+  }
+  function lireReglageBrut(cle) {
+    return lireReglage(cle, null);
+  }
+  var minuterieReglages = null, reglagesSales = false;
+  function garderReglage(cle, v) {
+    ecrireLocal("memglow." + cle, String(v));
+    if (reglagesVue) reglagesVue[cle] = String(v);
+    reglagesSales = true;
+    clearTimeout(minuterieReglages);
+    minuterieReglages = setTimeout(envoyerReglages, 500); // a slider being dragged = one request
+  }
+  // PUT with memglow's own header (the server refuses a write without it: CSRF guard).
+  function envoyerVue(corps, garder) {
+    if (!URL_VUE || !window.fetch) return;
+    try {
+      fetch(URL_VUE, {
+        method: "PUT", credentials: "same-origin", keepalive: !!garder,
+        headers: { "Content-Type": "application/json", "X-Memglow": "1" },
+        body: JSON.stringify(corps)
+      }).catch(function() {
+      });
+    } catch (e) {
+      // offline: the local cache keeps the view
+    }
+  }
+  function envoyerReglages(garder) {
+    clearTimeout(minuterieReglages);
+    if (!reglagesSales) return;
+    reglagesSales = false;
+    envoyerVue({ settings: settingsFromLocal(lireReglageBrut) }, garder);
+  }
+  if (migrerReglages && Object.keys(settingsFromLocal(lireReglageBrut)).length) {
+    reglagesSales = true;
+    setTimeout(envoyerReglages, 1500);
   }
   var modeNoms = lireReglage("noms", "aucun");
   if (["aucun", "actifs", "tous"].indexOf(modeNoms) < 0) modeNoms = "aucun";
@@ -1209,6 +1451,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       var d = 120, ray = Math.hypot(r.x, r.y, r.z) || 1, k = 1 + d / ray;
       graphe.cameraPosition({ x: r.x * k, y: r.y * k, z: r.z * k }, r, 1200);
       if (controles) controles.autoRotate = false;
+      planifierCamera();
     }
     enveloppe.activer(r, 0.7, MAINTIEN_NOTE, performance.now());
     notesDuRelais(r).forEach(function(n, i) {
@@ -1219,7 +1462,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   }
   function notesDuRelais(r) {
     return donnees.nodes.filter(function(n) {
-      return cleRelais(n) === r.theme + "/" + r.subtheme;
+      return cleRelais(n) === r.theme + "/" + r.sousTheme;
     });
   }
   var fixer = lireReglage("fixer", "1") === "1";
@@ -1268,11 +1511,13 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
         n.fx = n.fy = n.fz = void 0;
       }
       placerNomsThemes();
+      planifierDisposition(); // saved view: the bubble stays where it was put, on every device
     }).onEngineTick(function() {
       if (++tics % 8 === 0) placerNomsThemes();
     }).onEngineStop(function() {
       placerNomsThemes();
       if (reduit) majLiens(performance.now());
+      finSimulation();
     }).onNodeHover(function() {
     }).onNodeClick(function(n) {
       if (n.__relais) {
@@ -1790,8 +2035,129 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   function recentrer() {
     if (suivi) suivi.interaction();
     graphe.zoomToFit(reduit ? 0 : 900, 40);
+    planifierCamera();
   }
   if (boutonRecentrer) boutonRecentrer.addEventListener("click", recentrer);
+
+  // ---- Saved layout and camera (the instance's view, see chargerVue) ----
+  // Restore: positions set on the nodes BEFORE the simulation (seedPositions, top of file), pinned
+  // bubbles pinned again, new notes put near their sub-theme bubble or their group's centre; the
+  // simulation restarts "warm" (fast decay) so the view holds. Reduced motion: computed without
+  // animation (no intermediate frames), camera set at once.
+  // Save: end of the simulation, a bubble dragged, the end of a camera gesture (grouped, 2 s); and
+  // when the page is closed or hidden (keepalive request).
+  var DECROISSANCE_ALPHA = 0.0228; // d3 default: ≈ 300 steps
+  var restaurationEnCours = false, apresReorganiser = false;
+  var minuterieDispo = null, minuterieCamera = null, dispoSale = false, derniereCamera = "";
+  function tripletOk(t) {
+    return Array.isArray(t) && t.length === 3 && t.every(function(x) { return typeof x === "number" && isFinite(x); });
+  }
+  function repliPosition(n) {
+    var r = !n.__relais && relaisDe(n);
+    if (r && typeof r.x === "number" && isFinite(r.x)) return r;
+    return grouper ? centreDe(themeDe(n)) : null;
+  }
+  function restaurerDisposition(noeuds) {
+    if (!dispoDepart || !dispoDepart.positions || typeof dispoDepart.positions !== "object") return;
+    var r = seedPositions(noeuds, dispoDepart, repliPosition, 3 * ecart);
+    if (!r.restored) return;
+    restaurationEnCours = true;
+    if (reduit) graphe.warmupTicks(60).cooldownTicks(0); // computed at once, nothing animated
+    else graphe.d3AlphaDecay(0.1); // ≈ 65 steps instead of 300: the view holds
+  }
+  function cleCamera() {
+    if (!camera || !controles || !controles.target) return "";
+    var p = camera.position, t = controles.target;
+    return [p.x, p.y, p.z, t.x, t.y, t.z].map(function(x) { return Math.round(x * 10) / 10; }).join(",");
+  }
+  function restaurerCamera() {
+    var c = dispoDepart && dispoDepart.camera;
+    if (!c || !tripletOk(c.position) || !tripletOk(c.target) || !camera || !controles || !controles.target) return;
+    // After the library's first update (which moves the camera back according to the number of
+    // notes if it has not moved); no transition: the view is found again as it was.
+    setTimeout(function() {
+      camera.position.set(c.position[0], c.position[1], c.position[2]);
+      controles.target.set(c.target[0], c.target[1], c.target[2]);
+      camera.lookAt(c.target[0], c.target[1], c.target[2]);
+      if (controles.update) controles.update();
+      derniereCamera = cleCamera();
+    }, 60);
+  }
+  function corpsDisposition() {
+    var d = layoutOf(listeRelais.concat(donnees.nodes), 2000), cam = null;
+    if (camera && controles && controles.target) {
+      var p = camera.position, t = controles.target, r = function(x) { return Math.round(x * 100) / 100; };
+      cam = { position: [r(p.x), r(p.y), r(p.z)], target: [r(t.x), r(t.y), r(t.z)] };
+    }
+    return { positions: d.positions, pinned: d.pinned, camera: cam };
+  }
+  function envoyerDisposition(garder) {
+    clearTimeout(minuterieDispo);
+    clearTimeout(minuterieCamera);
+    if (!donnees.nodes.length || restaurationEnCours) return;
+    if (!dispoSale && cleCamera() === derniereCamera) return;
+    var corps = corpsDisposition();
+    if (!Object.keys(corps.positions).length) return;
+    dispoSale = false;
+    derniereCamera = cleCamera();
+    var texte = JSON.stringify(corps);
+    ecrireLocal(CLE_DISPO, texte);
+    // keepalive caps the body at 64 KB: above that (a huge memory), a normal request.
+    envoyerVue(corps, garder === true && texte.length < 60000);
+  }
+  function planifierDisposition() {
+    dispoSale = true;
+    clearTimeout(minuterieDispo);
+    minuterieDispo = setTimeout(envoyerDisposition, 2000);
+  }
+  function planifierCamera() {
+    clearTimeout(minuterieCamera);
+    minuterieCamera = setTimeout(envoyerDisposition, 2000);
+  }
+  // Called by onEngineStop (see where the graph is created).
+  function finSimulation() {
+    if (restaurationEnCours) {
+      restaurationEnCours = false;
+      graphe.d3AlphaDecay(DECROISSANCE_ALPHA).warmupTicks(0).cooldownTicks(Infinity);
+    }
+    if (apresReorganiser) {
+      apresReorganiser = false;
+      graphe.zoomToFit(reduit ? 0 : 900, 40);
+    }
+    planifierDisposition();
+  }
+  // "Rearrange": layout and pinned bubbles cleared (instance + local cache), simulation restarted
+  // from scratch; settings stay. The new layout is saved when the simulation ends.
+  function reorganiser() {
+    donnees.nodes.concat(listeRelais).forEach(function(n) {
+      n.x = n.y = n.z = NaN; // d3 places nodes without a position (NaN) as on the first day
+      n.vx = n.vy = n.vz = 0;
+      n.fx = n.fy = n.fz = void 0;
+    });
+    ecrireLocal(CLE_DISPO, null);
+    clearTimeout(minuterieDispo);
+    clearTimeout(minuterieCamera);
+    dispoSale = false;
+    envoyerVue({ reset: true });
+    restaurationEnCours = false;
+    graphe.d3AlphaDecay(DECROISSANCE_ALPHA).warmupTicks(0).cooldownTicks(Infinity);
+    apresReorganiser = true;
+    if (suivi) suivi.interaction();
+    graphe.graphData(vue());
+  }
+  var boutonReorganiser = document.getElementById("mem-reorganiser");
+  if (boutonReorganiser) boutonReorganiser.addEventListener("click", reorganiser);
+  // End of a camera gesture (drag, wheel, pinch): saved 2 s later.
+  if (controles && controles.addEventListener) controles.addEventListener("end", planifierCamera);
+  // Page closed or sent to the background (phone): a last request, which outlives the page.
+  function toutEnvoyer() {
+    envoyerReglages(true);
+    envoyerDisposition(true);
+  }
+  if (window.addEventListener) window.addEventListener("pagehide", toutEnvoyer);
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) toutEnvoyer();
+  });
   var filtres = document.querySelectorAll(".mem-filtre");
   function majFiltres() {
     Array.prototype.forEach.call(filtres, function(b) {
@@ -1875,7 +2241,10 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       parId[n.id] = n;
     });
     recompterDegres(donnees);
-    graphe.graphData(vue());
+    var d = vue();
+    restaurerDisposition(d.nodes);
+    graphe.graphData(d);
+    restaurerCamera();
     compter();
     remplirListe();
     historique(g.activities);
@@ -1924,8 +2293,9 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       }, i * 70);
     });
   }
-  var LIBELLE_ACTIVITE = { read: "Read", search: "Search", write: "Write" };
-  var LIBELLE_SOURCE = {};
+  // Journal labels: formatJournalLine (top of file). Removed notes: their theme and title are kept,
+  // so the "Note removed" line still shows its group.
+  var retirees = {};
   var journalListe = document.getElementById("mem-journal");
   var lignesParDiff = {};
   var ecrituresRecentes = [];
@@ -1937,8 +2307,25 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     heure.textContent = new Date(ligne.t || Date.now()).toLocaleTimeString(void 0, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     var dot = document.createElement("span");
     dot.className = ligne.cible ? "mem-dot mem-dot--cible-" + ligne.cible : "mem-dot mem-dot--" + (ligne.theme || "autre");
+    // ACTION · GROUP · NOTE · SOURCE (formatJournalLine); the group is a small tag tinted with its
+    // colour (.mem-grp--<theme>, generated with the theme colours). Everything in textContent.
+    var f = ligne.format || formatJournalLine({}, NOM_THEME);
     var txt = document.createElement("span");
-    txt.textContent = ligne.texte;
+    txt.className = "mem-journal__txt";
+    [f.action, f.group, f.note, f.source].forEach(function(m, i) {
+      if (!m) return;
+      if (i > 0) {
+        var sep = document.createElement("span");
+        sep.className = "mem-journal__sep";
+        sep.textContent = " · ";
+        txt.appendChild(sep);
+      }
+      var s = document.createElement("span");
+      if (i === 1) s.className = "mem-journal__groupe mem-grp--" + f.theme;
+      s.textContent = m;
+      txt.appendChild(s);
+    });
+    txt.setAttribute("title", f.text);
     li.appendChild(heure);
     li.appendChild(dot);
     li.appendChild(txt);
@@ -1994,12 +2381,17 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
         }
       }
     }
-    var quoi = evt.type === "added" ? "New note" : evt.type === "removed" ? "Note removed" : "Note changed";
+    // A removed note has no node in the event: its theme is the one we knew.
+    var connu = evt.node || parId[evt.id] || retirees[evt.id];
+    var theme = connu ? themeDe(connu) : "other";
     journal({
       id: evt.type === "removed" ? null : evt.id,
-      theme: evt.node && themeDe(evt.node),
+      theme: theme,
       diff: evt.diff,
-      texte: quoi + " · " + (evt.node && evt.node.label || evt.id)
+      format: formatJournalLine({
+        type: evt.type === "added" || evt.type === "removed" ? evt.type : "changed",
+        theme: theme, label: connu && connu.label || evt.id, source: "file"
+      }, NOM_THEME)
     });
   }
   function historique(liste) {
@@ -2021,14 +2413,15 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     var seule = ids.length === 1 && themeDe(parId[ids[0]]) !== "index" && CIBLE_COULEUR[evt.type];
     if (seule && !sansAnimation) cibler(ids[0], evt.type);
     var premier = parId[ids[0]];
-    var qui = premier.label + (ids.length > 1 ? " +" + (ids.length - 1) : "");
     var ligne = {
       id: ids[0],
       t: evt.t,
       theme: themeDe(premier),
       cible: seule ? evt.type : null,
       diff: evt.type === "write" ? evt.diff : null,
-      texte: (LIBELLE_ACTIVITE[evt.type] || "Activity") + " · " + qui + " · " + (LIBELLE_SOURCE[evt.source] || evt.source || "")
+      format: formatJournalLine({
+        type: evt.type, theme: themeDe(premier), label: premier.label, more: ids.length - 1, source: evt.source
+      }, NOM_THEME)
     };
     var deja = ligne.diff && lignesParDiff[ligne.diff];
     if (deja && deja.isConnected) {
@@ -2051,6 +2444,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
         var t = typeof l.target === "object" ? l.target.id : l.target;
         return s !== evt.id && t !== evt.id;
       });
+      if (parId[evt.id]) retirees[evt.id] = { label: parId[evt.id].label, theme: parId[evt.id].theme };
       delete parId[evt.id];
     } else if (evt.node) {
       var n = parId[evt.id];
@@ -2064,6 +2458,13 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
         n = evt.node;
         parId[n.id] = n;
         donnees.nodes.push(n);
+        // A new note is put near its sub-theme bubble (or its group's centre) rather than at the
+        // centre of the scene, so the saved view is not shaken.
+        var c = repliPosition(n);
+        if (c && isFinite(c.x)) {
+          var e = offsetFor(String(n.id), 3 * ecart);
+          n.x = c.x + e.x; n.y = c.y + e.y; n.z = c.z + e.z;
+        }
       }
       donnees.links = donnees.links.filter(function(l) {
         var s = typeof l.source === "object" ? l.source.id : l.source;
@@ -2091,6 +2492,11 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     src.addEventListener("change", function(m) {
       try {
         appliquer(JSON.parse(m.data));
+      } catch (e) {
+      }
+      // A note changed on disk counts as a write (server counters): Memory cost refreshes too.
+      try {
+        document.dispatchEvent(new CustomEvent("memglow:changement"));
       } catch (e) {
       }
     });
@@ -2128,6 +2534,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       if (suivi) suivi.interaction();
       var d = 90, r = Math.hypot(n.x, n.y, n.z) || 1, k = 1 + d / r;
       graphe.cameraPosition({ x: n.x * k, y: n.y * k, z: n.z * k }, n, 1200);
+      planifierCamera();
       if (controles) controles.autoRotate = false;
     }
     fetch(URL_NOTE + encodeURIComponent(id), { credentials: "same-origin" }).then(function(r2) {
@@ -2198,4 +2605,5 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     panneau.hidden = false;
     panneau.scrollTop = 0;
   }
+  } // end of demarrer()
 })();

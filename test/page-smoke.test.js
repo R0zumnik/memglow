@@ -172,3 +172,93 @@ test("page scripts run: graph loads, settings apply, animation ticks, Memory cos
   body.fire("click", { target: { closest: (sel) => (sel === "[data-note]" ? { getAttribute: () => "b" } : null) } });
   assert.strictEqual(opened, "b");
 });
+
+function viewContext({ storage, fetch, config }) {
+  const els = {};
+  const docListeners = {};
+  const state = { forces: {} };
+  const timers = [];
+  const document = {
+    getElementById: (id) => (id === "memglow-config" ? { textContent: JSON.stringify(config || {}) } : els[id] || (els[id] = fakeElement(id))),
+    querySelectorAll: () => [], querySelector: () => null,
+    createElement: () => fakeElement("x"),
+    hidden: false,
+    body: fakeElement("body"),
+    addEventListener(t, f) { (docListeners[t] = docListeners[t] || []).push(f); },
+    dispatchEvent(e) { (docListeners[e.type] || []).forEach((f) => f(e)); },
+  };
+  els["mem-graphe"] = fakeElement("mem-graphe");
+  els["mem-graphe"].attrs["data-vue"] = "/api/view";
+  const window = {
+    MemglowGraph: { ForceGraph3D: () => () => fakeGraph(state), UnrealBloomPass: class { constructor() { this.strength = 0; } }, THREE: fakeThree() },
+    matchMedia: () => ({ matches: false }), devicePixelRatio: 1, addEventListener() {}, isSecureContext: true, fetch: true,
+  };
+  const ctx = {
+    window, document, console, Math, JSON, Date, Promise, Array, Object, String, Number, isFinite, parseFloat, Uint8ClampedArray, Float32Array,
+    localStorage: { getItem: (k) => (k in storage ? storage[k] : null), setItem: (k, v) => { storage[k] = v; }, removeItem: (k) => { delete storage[k]; } },
+    performance: { now: () => Date.now() },
+    requestAnimationFrame: () => 0,
+    setTimeout: (f, ms) => { timers.push({ f, ms }); return timers.length; }, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+    CustomEvent: class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } },
+    navigator: {},
+    fetch,
+  };
+  ctx.window.document = document;
+  vm.createContext(ctx);
+  vm.runInContext(APP, ctx, { filename: "app.js" });
+  return { els, timers, state };
+}
+const ticks = async (n) => { for (let i = 0; i < n; i++) await new Promise((ok) => setImmediate(ok)); };
+const THEMES_CFG = { themes: [{ id: "people", label: "People", color: "#2EE89B" }, { id: "projects", label: "Projects", color: "#8FA8FF" }], showBodies: true };
+
+test("page scripts: the saved view is read first, applied, and saved back with memglow's header", async () => {
+  const storage = { "memglow.fond": "profond" };
+  const SAVED = {
+    settings: { background: "night", names: "all", spread: 9 },
+    positions: { a: [10, 20, 30], "~people/general": [1, 2, 3] }, pinned: ["a"],
+    camera: { position: [0, 0, 300], target: [0, 0, 0] }, updated: 1,
+  };
+  const calls = [];
+  const fetch = (url, o) => {
+    calls.push({ url, o: o || {} });
+    const body = url === "/api/graph" ? GRAPH : url === "/api/view" && !(o && o.method) ? SAVED : null;
+    return Promise.resolve({ ok: !!body, status: body ? 200 : 204, json: () => Promise.resolve(body) });
+  };
+  const { els, timers } = viewContext({ storage, fetch, config: THEMES_CFG });
+  await ticks(6);
+
+  assert.strictEqual(calls[0].url, "/api/view", "the view is read before the graph");
+  assert.ok(calls.some((c) => c.url === "/api/graph"));
+  assert.strictEqual(els["mem-fond"].value, "nuit", "server settings win over the local cache");
+  assert.strictEqual(storage["memglow.fond"], "nuit", "and fill the local cache");
+  assert.strictEqual(els["mem-noms"].value, "tous");
+  assert.ok(JSON.parse(storage["memglow.view"]).positions.a, "layout cached locally");
+
+  // A setting changes: one PUT, 500 ms later, with memglow's header and typed English keys.
+  els["mem-fond"].value = "uni"; els["mem-fond"].fire("change");
+  timers.filter((x) => x.ms === 500).pop().f();
+  const putCall = calls.find((c) => c.o.method === "PUT");
+  assert.ok(putCall, "PUT sent");
+  assert.strictEqual(putCall.o.headers["X-Memglow"], "1");
+  const sent = JSON.parse(putCall.o.body);
+  assert.strictEqual(sent.settings.background, "plain");
+  assert.strictEqual(sent.settings.names, "all");
+
+  // "Rearrange": reset sent, local layout cache cleared, settings untouched.
+  els["mem-reorganiser"].fire("click");
+  const reset = calls.filter((c) => c.o.method === "PUT").map((c) => JSON.parse(c.o.body)).find((b) => b.reset === true);
+  assert.ok(reset && !reset.settings, "reset sent, settings kept");
+  assert.strictEqual(storage["memglow.view"], undefined);
+});
+
+test("page scripts: no answer from the server in 2.5 s, the local cache is used", async () => {
+  const storage = { "memglow.fond": "nuit" };
+  const fetch = (url) => (url === "/api/view" ? new Promise(() => {}) : Promise.resolve({ ok: true, json: () => Promise.resolve(GRAPH) }));
+  const { els, timers } = viewContext({ storage, fetch, config: THEMES_CFG });
+  await ticks(2);
+  assert.strictEqual(els["mem-fond"], undefined, "waiting for the view");
+  timers.find((x) => x.ms === 2500).f();
+  await ticks(4);
+  assert.strictEqual(els["mem-fond"].value, "nuit", "local settings used");
+  assert.strictEqual(els["mem-nb-notes"].textContent, 3, "graph loaded");
+});

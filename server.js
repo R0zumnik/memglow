@@ -14,8 +14,9 @@ const os = require("os");
 const path = require("path");
 const { loadConfig } = require("./lib/config");
 const { createMemory } = require("./lib/memory");
-const { createCounters } = require("./lib/counters");
-const { computeCost } = require("./lib/cost");
+const { createCounters, createWriteDedup } = require("./lib/counters");
+const { computeCost, dayOf } = require("./lib/cost");
+const view = require("./lib/view");
 
 const PUBLIC = path.join(__dirname, "public");
 const STATIC = {
@@ -37,9 +38,33 @@ function sameSecret(given, expected) {
   return crypto.timingSafeEqual(a, b);
 }
 
-function createServer(config, memory, { counters } = {}) {
-  // Memory cost counters, in memglow's data folder (never in the notes folder).
-  counters = counters || createCounters({ dir: config.dataDir });
+/** True if `child` is `parent` or inside it (resolved paths). */
+function isInside(child, parent) {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function createServer(config, memory, { counters, views } = {}) {
+  // memglow's own files (counters, saved view) live in its data folder, NEVER in the notes folder:
+  // if the data folder is inside the notes folder, nothing is written (kept in memory only).
+  let dataDir = config.dataDir || null;
+  if (dataDir && config.memoryDir && isInside(dataDir, config.memoryDir)) {
+    console.warn(`memglow: MEMGLOW_DATA_DIR (${dataDir}) is inside the memory folder; memglow never writes there — counters and the saved view are kept in memory only`);
+    dataDir = null;
+  }
+  // Memory cost counters.
+  counters = counters || createCounters({ dir: dataDir });
+  // A write seen on disk (body changed, new note) counts as a write, unless a reported write on the
+  // same note within ±15 s was already counted (and the other way round). See createWriteDedup.
+  const dedup = createWriteDedup(15000);
+  if (memory.onWrite) {
+    memory.onWrite((id, t) => { if (dedup.changed(id, t)) counters.add({ type: "write", ids: [id], t }); });
+  }
+  // The saved view of this instance (settings, layout, camera): one per instance, lib/view.js.
+  views = views || view.createViewStore({
+    dir: dataDir,
+    rules: view.createRules({ themeIds: config.themes.map((t) => t.id), noteExists: (id) => memory.has(id) }),
+  });
   const template = fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8");
   const fingerprints = {};
   for (const [url, [file]] of Object.entries(STATIC)) {
@@ -69,13 +94,32 @@ function createServer(config, memory, { counters } = {}) {
     return !!m && sameSecret(m[1], config.token);
   }
 
+  /**
+   * CSRF guard for PUT /api/view: memglow's custom header (a cross-site page cannot send it without
+   * a CORS preflight, which memglow never answers), an Origin of the same host (Host, or the
+   * X-Forwarded-Host set by a reverse proxy), and Sec-Fetch-Site "same-origin" when the browser
+   * sends it. Anything else is refused.
+   */
+  function sameOriginWrite(req) {
+    if (req.headers["x-memglow"] !== "1") return false;
+    const site = req.headers["sec-fetch-site"];
+    if (site && site !== "same-origin") return false;
+    let o;
+    try { o = new URL(String(req.headers.origin || "")); } catch { return false; }
+    if (o.protocol !== "http:" && o.protocol !== "https:") return false;
+    const hosts = [req.headers.host, String(req.headers["x-forwarded-host"] || "").split(",")[0].trim()]
+      .filter(Boolean).map((h) => String(h).toLowerCase());
+    return hosts.includes(o.host.toLowerCase());
+  }
+
   function page() {
     const cfg = {
       themes: config.themes,
       subthemeLabels: config.subthemeLabels,
       showBodies: config.showBodies,
     };
-    const dots = config.themes.map((t) => `.mem-dot--${t.id}{background:${t.color};box-shadow:0 0 6px ${t.color}}`).join("");
+    // Theme colours: legend dots, and the group tag of the activity journal (tinted by --c).
+    const dots = config.themes.map((t) => `.mem-dot--${t.id}{background:${t.color};box-shadow:0 0 6px ${t.color}}.mem-grp--${t.id}{--c:${t.color}}`).join("");
     const legend = config.themes.concat([{ id: "index", label: "Index" }])
       .map((t) => `<li><button type="button" class="mem-filtre" data-theme="${esc(t.id)}" aria-pressed="true"><span class="mem-dot mem-dot--${esc(t.id)}"></span>${esc(t.label)}</button></li>`)
       .join("");
@@ -94,8 +138,18 @@ function createServer(config, memory, { counters } = {}) {
    * content, so they are only included when note bodies may be shown (MEMGLOW_SHOW_BODIES), read
    * from the notes with secret-looking lines masked.
    */
+  // Cached until the counters, the notes or the day change (an activity or a file change makes the
+  // next request recompute; a page refreshes ≈ 1.5 s after either).
+  let costCache = null, costKey = "";
   function cost() {
-    const notes = memory.costNotes();
+    const notes = memory.costNotes(); // rescans when due: the key below sees the result
+    const key = [counters.version(), memory.version(), dayOf(Date.now()), config.showBodies].join(":");
+    if (costCache && key === costKey) return costCache;
+    costCache = computeCostNow(notes);
+    costKey = key;
+    return costCache;
+  }
+  function computeCostNow(notes) {
     const opts = { since: counters.since(), largeNoteTokens: config.largeNoteTokens, chunkTokens: config.splitChunkTokens };
     const first = computeCost(counters.days(), notes, Date.now(), opts);
     if (!config.showBodies) return first;
@@ -127,8 +181,13 @@ function createServer(config, memory, { counters } = {}) {
         let body;
         try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return json(res, 400, { error: "bad json" }); }
         const r = memory.activity(body);
-        // Counted for Memory cost, except demo activity (animated, never counted).
-        if (r.ok && body.demo !== true) counters.add({ type: body.type, ids: r.ids, t: Date.now() });
+        // Counted for Memory cost, except demo activity (animated, never counted). A write already
+        // counted from the file change (same note, ±15 s) is not counted twice.
+        if (r.ok && body.demo !== true) {
+          const t = Date.now();
+          const ids = body.type === "write" ? dedup.reported(r.ids, t) : r.ids;
+          if (ids.length) counters.add({ type: body.type, ids, t });
+        }
         headers(res);
         res.statusCode = r.ok ? 204 : r.reason === "rate" ? 429 : 202;
         res.end();
@@ -136,12 +195,44 @@ function createServer(config, memory, { counters } = {}) {
       return;
     }
 
-    if (req.method !== "GET" && req.method !== "HEAD") return notFound(res);
-    if (!viewerAllowed(req)) {
+    const unauthorized = () => {
       headers(res, { "WWW-Authenticate": 'Basic realm="memglow", charset="UTF-8"', "Content-Type": "text/plain" });
       res.statusCode = 401;
       return res.end("401");
+    };
+
+    // Saving the view (settings, layout, camera): same access rule as the page (password when
+    // MEMGLOW_PASSWORD is set), same-origin browser request with memglow's own header (CSRF),
+    // rate limited, body capped, then strictly validated (lib/view.js).
+    if (p === "/api/view" && req.method === "PUT") {
+      if (!viewerAllowed(req)) { req.resume(); return unauthorized(); }
+      if (!sameOriginWrite(req)) { req.resume(); return json(res, 403, { error: "forbidden" }); }
+      if (!views.rateOk()) { req.resume(); headers(res, { "Retry-After": "5" }); return json(res, 429, { error: "too many requests" }); }
+      const declared = Number(req.headers["content-length"]);
+      if (Number.isFinite(declared) && declared > view.BODY_MAX) { req.resume(); return json(res, 413, { error: "too large" }); }
+      let size = 0; const chunks = [];
+      req.on("data", (c) => {
+        if (res.writableEnded) return;
+        size += c.length;
+        if (size > view.BODY_MAX) { json(res, 413, { error: "too large" }); req.resume(); return; }
+        chunks.push(c);
+      });
+      req.on("end", () => {
+        if (res.writableEnded) return;
+        let body;
+        try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return json(res, 400, { error: "bad json" }); }
+        let v;
+        try { v = views.write(body); } catch (e) { console.error("[memglow] view not saved:", e.message); return json(res, 500, { error: "not saved" }); }
+        if (!v) return json(res, 400, { error: "bad view" });
+        headers(res, { "Cache-Control": "no-store" });
+        res.statusCode = 204;
+        res.end();
+      });
+      return;
     }
+
+    if (req.method !== "GET" && req.method !== "HEAD") return notFound(res);
+    if (!viewerAllowed(req)) return unauthorized();
 
     if (p === "/") {
       headers(res, {
@@ -158,6 +249,7 @@ function createServer(config, memory, { counters } = {}) {
     }
     if (p === "/api/graph") return json(res, 200, memory.graph());
     if (p === "/api/cost") return json(res, 200, cost());
+    if (p === "/api/view") return json(res, 200, view.publicView(views.read()));
     if (p.startsWith("/api/note/")) {
       const n = memory.note(decodeURIComponent(p.slice("/api/note/".length)), { withBody: config.showBodies });
       return n ? json(res, 200, n) : json(res, 404, { error: "not found" });

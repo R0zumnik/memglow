@@ -43,24 +43,41 @@ function costPartName(part) {
   return t.join(", ");
 }
 
+/** Full name of a group (top-level theme): its label from the configuration, never a bare id. */
+function costGroupName(theme, names) {
+  if (names && Object.prototype.hasOwnProperty.call(names, theme) && names[theme]) return String(names[theme]);
+  if (theme === "index") return "Index";
+  return "Other";
+}
+
 /**
  * Ready-to-paste English prompt asking an AI assistant to split one note, with the rules that
- * keep the memory consistent. `n` is an item of /api/cost (tooLarge or top), `c` the whole answer.
+ * keep the memory consistent. `n` is an item of /api/cost (tooLarge or top), `c` the whole answer,
+ * `names` the group labels ({ themeId: label }). Built at click time, never put in the page.
  */
-function costSplitPrompt(n, c) {
+function costSplitPrompt(n, c, names) {
   var large = c.largeNoteTokens || 5000, chunk = c.chunkTokens || 2000;
+  var group = costGroupName(n.theme, names);
+  var groups = Object.keys(names || {}).filter(function (k) { return k !== "index" && k !== "other"; })
+    .map(function (k) { return costGroupName(k, names); });
+  var partial = c.read && c.read.complete7 === false && c.since ? " (counted since " + costDay(c.since) + ")" : "";
   var lines = [];
   lines.push("Please split one note of my AI memory into several smaller notes. Show me the plan BEFORE writing anything.");
   lines.push("");
-  lines.push("Note: \"" + n.label + "\" (id: " + n.id + ", folder: " + (n.folder || "(root)") + ", theme: " + (n.theme || "none") +
+  lines.push("Note: \"" + n.label + "\" (id: " + n.id + ", folder: " + (n.folder || "(root)") + ", group: " + group +
     (n.subtheme ? ", subtheme: " + n.subtheme : "") + ")");
   lines.push("Size: ≈ " + costNumber(n.tokens) + " tokens (estimate: bytes ÷ 4). Read " + costPlural(n.reads7 || 0, "time") +
-    " in the last 7 days, ≈ " + costNumber(n.readTokens7 || 0) + " tokens in total.");
-  lines.push("Threshold: notes above ≈ " + costNumber(large) + " tokens are flagged as too large. Aim for new notes of ≈ " +
-    costNumber(chunk) + " tokens or less.");
+    " in the last 7 days" + partial + ", ≈ " + costNumber(n.readTokens7 || 0) + " tokens read in total.");
+  // Honest about why this note is here: above the threshold, or under it but costly to read.
+  if (n.tokens > large) {
+    lines.push("It is above the ≈ " + costNumber(large) + "-token threshold for large notes.");
+  } else {
+    lines.push("It is under the ≈ " + costNumber(large) + "-token threshold for large notes, but it is one of the notes that cost the most to read over the last 7 days.");
+  }
+  lines.push("Aim for new notes of ≈ " + costNumber(chunk) + " tokens or less.");
   lines.push("");
   if (n.split && n.split.length > 1) {
-    lines.push("Suggested split (consecutive ## sections, in order):");
+    lines.push("Suggested split into " + n.split.length + " notes (consecutive ## sections, in order):");
     n.split.forEach(function (p, i) {
       lines.push((i + 1) + ". " + costPartName(p) + " — ≈ " + costNumber(p.tokens) + " tokens");
     });
@@ -69,8 +86,8 @@ function costSplitPrompt(n, c) {
   }
   lines.push("");
   lines.push("Rules:");
-  lines.push("- Keep every new note in the same theme and the same folder as the original note.");
-  lines.push("- Do not create, rename or remove top-level themes.");
+  lines.push("- Keep every new note in the same group (" + group + ") and the same folder as the original note.");
+  lines.push("- Do not create, rename or remove top-level groups" + (groups.length ? " (" + groups.join(", ") + ")" : "") + ".");
   lines.push("- Keep the `theme` and `subtheme` (or `sous_theme`) frontmatter keys on every new note, with the original values.");
   lines.push("- Keep every [[link]] valid: update the links that pointed to the moved content, and link the new notes to each other where it helps.");
   lines.push("- The original note becomes a short summary that links to the new notes, or is removed once nothing links to it any more.");
@@ -174,7 +191,7 @@ function costRender(c, colors) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName };
+  module.exports = { costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName };
 }
 
 (function () {
@@ -184,15 +201,16 @@ if (typeof module !== "undefined" && module.exports) {
   var body = document.getElementById("mg-cost-body");
   if (!root || !body) return;
   var url = root.getAttribute("data-cost");
-  var colors = {};
+  var colors = {}, names = { index: "Index" };
   try {
     var cfg = JSON.parse(document.getElementById("memglow-config").textContent || "{}");
-    (cfg.themes || []).forEach(function (t) { colors[t.id] = t.color; });
+    (cfg.themes || []).forEach(function (t) { colors[t.id] = t.color; names[t.id] = t.label; });
   } catch (e) { /* default colours */ }
-  var last = null, pending = null, loading = false;
+  var last = null, pending = null, loading = false, again = false;
 
   function load() {
-    if (loading) return;
+    if (loading) { again = true; return; } // asked during a load: load again right after
+    again = false;
     loading = true;
     fetch(url, { credentials: "same-origin" }).then(function (r) {
       if (!r.ok) throw new Error(r.status);
@@ -205,18 +223,27 @@ if (typeof module !== "undefined" && module.exports) {
         var row = d.parentNode && d.parentNode.querySelector("[data-note]");
         if (row) open[row.getAttribute("data-note")] = true;
       });
+      // The panel is redrawn after activity: keyboard focus comes back to the same copy button.
+      var active = document.activeElement;
+      var focused = active && body.contains && body.contains(active) && active.getAttribute ? active.getAttribute("data-copy") : null;
       body.innerHTML = costRender(c, colors);
       Array.prototype.forEach.call(body.querySelectorAll(".mg-cost__item"), function (li) {
         var row = li.querySelector("[data-note]"), d = li.querySelector("details");
         if (row && d && open[row.getAttribute("data-note")]) d.open = true;
       });
+      if (focused) {
+        var again2 = body.querySelector('[data-copy="' + focused.replace(/["\\]/g, "") + '"]');
+        if (again2 && again2.focus) again2.focus();
+      }
     }).catch(function () {
       if (!last) body.innerHTML = '<p class="mg-cost__empty">Could not load Memory cost.</p>';
-    }).then(function () { loading = false; });
+    }).then(function () { loading = false; if (again) soon(); });
   }
+  // Refresh ≈ 1.5 s after an activity or a note change, grouped: the timer is NOT restarted by each
+  // event, so a burst makes one request, and a continuous flow still refreshes every 1.5 s at most.
   function soon() {
-    clearTimeout(pending);
-    pending = setTimeout(load, 1500);
+    if (pending) return;
+    pending = setTimeout(function () { pending = null; load(); }, 1500);
   }
 
   function itemOf(id) {
@@ -243,7 +270,7 @@ if (typeof module !== "undefined" && module.exports) {
   function copyPrompt(btn) {
     var n = itemOf(btn.getAttribute("data-copy"));
     if (!n) return;
-    var text = costSplitPrompt(n, last);
+    var text = costSplitPrompt(n, last, names);
     copyText(text).then(function () {
       btn.textContent = "Copied ✓";
       btn.classList.add("mg-cost__copy--done");
@@ -284,7 +311,9 @@ if (typeof module !== "undefined" && module.exports) {
     e.preventDefault();
     openNote(row.getAttribute("data-note"));
   });
+  // An activity, or a note changed on disk (counted as a write by the server).
   document.addEventListener("memglow:activite", soon);
+  document.addEventListener("memglow:changement", soon);
   document.addEventListener("memglow:pret", load);
   setInterval(function () { if (!document.hidden) load(); }, 60000);
   load();

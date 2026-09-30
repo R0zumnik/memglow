@@ -315,6 +315,24 @@ a { color: var(--bn-accent-teal); }
 .mem-journal__cliquable:focus-visible { outline: 2px solid var(--bn-focus, #00696B); outline-offset: 1px; }
 .mem-journal__h { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--bn-ink-dim); flex: none; }
 .mem-journal__vide { color: var(--bn-ink-dim); }
+/* ACTION · GROUP · NOTE · SOURCE: the group (top-level theme) is a small tag tinted with its colour
+   (--c, set per theme by .mem-grp--<id>, generated from the configured colours); the text stays in
+   the page ink, so it reads on any theme colour. The dot keeps the action's colour. */
+.mem-journal__txt { min-width: 0; }
+.mem-journal__sep { color: var(--bn-ink-dim); }
+.mem-journal__groupe {
+  --c: #A9C9BF;
+  display: inline-block;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--bn-ink);
+  background: color-mix(in srgb, var(--c) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c) 55%, transparent);
+}
+.mem-journal__groupe.mem-grp--index { --c: #C9B98F; }
 
 @media (max-width: 640px) {
   .mem-canvas { height: 62vh; min-height: 360px; }
