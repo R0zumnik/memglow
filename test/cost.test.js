@@ -58,7 +58,8 @@ test("cost: tokens read and written, top notes, share, too large, index apart", 
   assert.deepStrictEqual(c.top.map((n) => n.id), ["big", "mid", "small"], "index kept apart, sorted by tokens read");
   assert.strictEqual(c.top[0].reads7, 2);
   assert.strictEqual(c.top[0].readTokens7, 15000);
-  assert.deepStrictEqual(c.share, { notes: 3, tokens: 21100, total: 24100, percent: 88 });
+  // smallest number of top notes covering ≥ 80 % of the reading: big (62 %) + mid → 87 %
+  assert.deepStrictEqual(c.share, { notes: 2, tokens: 21000, total: 24100, percent: 87 });
   assert.deepStrictEqual(c.tooLarge.map((n) => n.id), ["big", "mid"]);
   assert.deepStrictEqual(c.index, { id: "MEMORY", label: "MEMORY", tokens: 1000 });
   assert.deepStrictEqual(c.totals, { notes: 4, tokens: 7500 + 6000 + 100 + 300 });
@@ -179,4 +180,12 @@ test("page: a costly note under the threshold is described honestly", () => {
   assert.match(p, /under the ≈ 5,000-token threshold for large notes, but it is one of the notes that cost the most to read/);
   assert.ok(!/above the/.test(p));
   assert.match(p, /≈ 36,000 tokens read in total/);
+});
+
+test("cost share: one dominant note reads as \"1 note = 98 %\", not \"all notes = 100 %\"", () => {
+  const notes = [note("log", 24800), note("a", 2000), note("b", 2000)]; // 55,800 of 56,800 tokens read
+  const days = { [TODAY]: { notes: { log: { read: 9, search: 0, write: 0 }, a: { read: 1, search: 0, write: 0 }, b: { read: 1, search: 0, write: 0 } } } };
+  const c = computeCost(days, notes, NOW, { since: TODAY });
+  assert.strictEqual(c.share.notes, 1);
+  assert.strictEqual(c.share.percent, 98);
 });
