@@ -60,11 +60,12 @@
     <td width="50%"><img src="docs/assets/screenshot-search.png" alt="A search: several notes light up, comets run along their links"><br><sub><b>A search</b> — the camera frames the results, comets run along the links.</sub></td>
     <td width="50%"><img src="docs/assets/screenshot-settings.png" alt="The settings panel open next to the 3D brain"><br><sub><b>Settings</b> — display, motion and links, tuned live.</sub></td>
   </tr>
+  <tr>
+    <td colspan="2"><img src="docs/assets/screenshot-cost.png" alt="The Memory cost panel: tokens read, the most expensive notes, a large note with its sections and a split suggestion"><br><sub><b>Memory cost</b> — which notes cost the most tokens, which to split, a ready prompt for your AI.</sub></td>
+  </tr>
 </table>
 
 <sub>Captured from the fictional demo memory in <code>demo/memory</code>.</sub>
-
-<!-- TODO(screenshots): add captures of the Memory cost panel and of the new Deep background (0.3.0). -->
 
 <a id="memory-cost"></a>
 ## 🪙 Memory cost
@@ -336,7 +337,7 @@ docker run -d --name memglow -p 127.0.0.1:4747:4747 \
   -v /path/to/notes:/memory:ro \
   -v memglow-data:/data \
   -e MEMGLOW_TOKEN=$(cat ~/.memglow/token) \
-  ghcr.io/r0zumnik/memglow:0.3.0
+  ghcr.io/r0zumnik/memglow:0.3.1
 ```
 
 `/data` keeps the Memory cost counts (note ids and numbers only) and the saved view (settings,
@@ -345,7 +346,7 @@ layout, camera) across restarts.
 Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
 then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
 
-Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.3.0`.
+Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.3.1`.
 
 The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
 container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.
@@ -417,8 +418,8 @@ If it writes notes, memglow already sees the writes. If it uses a memory MCP ser
 <details>
 <summary><b>Does it need a GPU?</b></summary>
 
-No. Any browser with WebGL works; a few hundred notes run smoothly on a laptop. The demo GIF and
-the screenshots were rendered in software, in a headless browser without a GPU.
+No. Any browser with WebGL works; a few hundred notes run smoothly on a laptop. The demo GIF was
+rendered in software, in a headless browser without a GPU.
 </details>
 
 <details>

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.1 — 2026-10-01
+
+### Fixed
+
+- Double-click on the background (recenter / overview) now works with Mac trackpads: the native
+  `dblclick` event is used, small pointer moves between the two clicks no longer cancel it.
+
+### Changed
+
+- New README screenshots, including the Memory cost panel and the Deep background.
+  `demo/record/screenshots.js` also captures Memory cost (counts in a throw-away data folder) and
+  can render on a GPU (`GPU=1`).
+- Release workflow on the Node 24 majors of its actions (checkout, setup-node, Docker actions).
+
 ## 0.3.0 — 2026-10-01
 
 Memory cost: see which notes cost your assistant the most tokens, and which ones to split.

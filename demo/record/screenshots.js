@@ -9,8 +9,11 @@
  *     node /work/demo/record/screenshots.js /out
  *
  * Several candidates are written per scene (suffix = virtual ms after the event); pick the best.
+ * On a machine with a GPU, GPU=1 renders with the native WebGL backend instead of SwiftShader.
+ * Memory cost counts go to a throw-away data folder, never to ~/.memglow.
  */
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const puppeteer = require("puppeteer");
@@ -25,6 +28,8 @@ const W = Number(process.env.WIDTH) || 1600;
 const H = Number(process.env.HEIGHT) || 900;
 const TOKEN = crypto.randomBytes(24).toString("hex");
 const DT = 1000 / 60;
+const GPU = process.env.GPU === "1";
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-shots-"));
 
 // Same virtual clock as record.js (performance.now, Date, timers, rAF move only on __vstep).
 const CLOCK = fs.readFileSync(path.join(__dirname, "record.js"), "utf8").match(/const CLOCK = `([\s\S]*?)`;/)[1];
@@ -41,7 +46,7 @@ const CSS = `
 `;
 
 function startServer() {
-  const config = loadConfig({ MEMORY_DIR: path.join(ROOT, "demo", "memory"), MEMGLOW_TOKEN: TOKEN }, ROOT);
+  const config = loadConfig({ MEMORY_DIR: path.join(ROOT, "demo", "memory"), MEMGLOW_TOKEN: TOKEN, MEMGLOW_DATA_DIR: DATA_DIR }, ROOT);
   const memory = createMemory({ dir: config.memoryDir, config, pollMs: config.pollMs });
   const server = createServer(config, memory);
   return new Promise((ok) => server.listen(0, "127.0.0.1", () => ok(server)));
@@ -51,18 +56,19 @@ function startServer() {
   fs.mkdirSync(OUT, { recursive: true });
   const server = await startServer();
   const base = `http://127.0.0.1:${server.address().port}`;
-  const post = async (type, ids) => {
+  // counted = sent like real activity, so it fills Memory cost (in DATA_DIR only)
+  const post = async (type, ids, counted = false) => {
     const r = await fetch(base + "/api/activity", {
       method: "POST",
       headers: { Authorization: "Bearer " + TOKEN, "Content-Type": "application/json" },
-      body: JSON.stringify({ type, ids, source: "demo", demo: true }),
+      body: JSON.stringify(counted ? { type, ids, source: "demo" } : { type, ids, source: "demo", demo: true }),
     });
     if (r.status !== 204) throw new Error(`activity ${type} → HTTP ${r.status}`);
     await new Promise((ok) => setTimeout(ok, 300)); // let the SSE event reach the page
   };
   const browser = await puppeteer.launch({
     headless: true,
-    args: ["--no-sandbox", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
+    args: ["--no-sandbox", "--use-gl=angle", ...(GPU ? [] : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]),
       "--ignore-gpu-blocklist", "--hide-scrollbars", "--force-color-profile=srgb", `--window-size=${W},${H}`],
     defaultViewport: { width: W, height: H, deviceScaleFactor: 1 },
   });
@@ -133,9 +139,39 @@ function startServer() {
     await page.evaluate(() => { document.getElementById("mem-options").open = true; });
     await step(400);
     await shot("settings");
+    await page.evaluate(() => { document.getElementById("mem-options").open = false; });
+
+    // Memory cost: a few days' worth of counted reads, the large note read most often.
+    const notes = ["reference-incident-log", "reference-docker-pitfalls", "project-smart-home", "knowledge-mqtt",
+      "project-home-lab", "reference-backups", "knowledge-reverse-proxy", "reference-git-workflow"];
+    for (let i = 0; i < 6; i++) await post("read", ["reference-incident-log"], true);
+    for (let i = 0; i < notes.length; i++) for (let k = 0; k < notes.length - i; k += 3) await post("read", [notes[i]], true);
+    await post("search", notes.slice(0, 5), true);
+    await post("write", ["project-smart-home"], true);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await wait(4000);
+    for (let i = 0; i < 100; i++) {
+      await wait(200);
+      if (await page.evaluate(() => !!document.querySelector("#mg-cost details.mg-cost__sections"))) break;
+    }
+    await page.evaluate(() => {
+      const d = document.querySelector("#mg-cost details.mg-cost__sections");
+      d.open = true;
+      document.getElementById("mg-cost").scrollIntoView({ block: "start" });
+    });
+    await step(300);
+    const box = await page.evaluate(() => {
+      const r = document.getElementById("mg-cost").getBoundingClientRect();
+      return { x: r.left + scrollX, y: r.top + scrollY, width: r.width, height: r.height };
+    });
+    const { data } = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true,
+      clip: { x: Math.max(0, box.x - 12), y: Math.max(0, box.y - 12), width: box.width + 24, height: box.height + 24, scale: 1 } });
+    fs.writeFileSync(path.join(OUT, "cost.png"), Buffer.from(data, "base64"));
+    console.log("shot cost");
   } finally {
     await browser.close();
     server.close();
+    fs.rmSync(DATA_DIR, { recursive: true, force: true });
     process.exit(0);
   }
 })().catch((e) => { console.error("screenshots:", e); process.exit(1); });
