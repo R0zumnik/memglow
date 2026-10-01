@@ -573,6 +573,57 @@ function masquesValides(masques, themes) {
   return out;
 }
 
+/* ---- i18n (public/i18n.js, public/i18n/<code>.json) ----
+   app.js never blocks on the language file: window.MemglowI18n.t is used once loaded (and kept
+   live — see "memglow:language" below); until then, and in the Node tests (no window/document at
+   all), T() falls back to this small English copy of the few keys app.js itself renders. Static
+   Settings labels live in index.html (data-i18n) and are translated by i18n.js directly: app.js
+   does not need them. Kept in sync with public/i18n/en.json by a test. */
+var EN_APP = {
+  "theme.index": "Index", "theme.other": "Other", "theme.note": "Note",
+  "journal.actionRead": "Read", "journal.actionSearch": "Search", "journal.actionWrite": "Write",
+  "journal.actionAdded": "New note", "journal.actionChanged": "Note changed", "journal.actionRemoved": "Note removed",
+  "journal.actionGeneric": "Activity",
+  "journal.sourceAgent": "Agent", "journal.sourceDemo": "Demo", "journal.sourceFile": "File",
+  "journal.diffBadge": "± view",
+  "diff.notFound": "Change not found.", "diff.lineWord": { one: "line", other: "lines" },
+  "panel.written": "Written {when}",
+  "panel.tokens": { one: "≈ {show} token", other: "≈ {show} tokens" },
+  "panel.outgoingLinks": { one: "{n} outgoing link", other: "{n} outgoing links" },
+  "panel.incoming": "{n} incoming",
+  "common.today": "today", "common.yesterday": "yesterday",
+  "common.daysAgo": { one: "{n} day ago", other: "{n} days ago" },
+  "search.noMatch": "No matching note.",
+  "status.loading": "Loading the graph…", "status.noNotes": "No notes yet.",
+  "error.libraryFailed": "The graph library could not load.",
+  "error.loadFailed": "Could not load the memory. Reload the page.",
+  "error.webgl": "Your browser cannot display 3D here (WebGL unavailable).",
+  "stats.notesWord": { one: "note", other: "notes" }, "stats.linksWord": { one: "link", other: "links" }
+};
+/** Same interpolation/plural rule as public/i18n.js (resolveText), duplicated on purpose: every
+    page script here is self-contained (see esc()/costEsc()/aiEsc(), each its own copy too). */
+function resolveTextApp(dict, key, params) {
+  var entry = dict ? dict[key] : undefined;
+  if (entry === undefined || entry === null) return key;
+  var str = entry;
+  if (typeof entry === "object") {
+    var n = params && typeof params.n === "number" ? params.n : null;
+    var hasOne = Object.prototype.hasOwnProperty.call(entry, "one");
+    var hasOther = Object.prototype.hasOwnProperty.call(entry, "other");
+    str = n === 1 && hasOne ? entry.one : hasOther ? entry.other : hasOne ? entry.one : key;
+  }
+  if (typeof str !== "string") return key;
+  if (!params) return str;
+  return str.replace(/\{(\w+)\}/g, function(m, name) {
+    return Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : m;
+  });
+}
+function defaultT(key, params) {
+  var M = typeof window !== "undefined" && window.MemglowI18n;
+  if (M && M.dict && Object.prototype.hasOwnProperty.call(M.dict, key)) return M.t(key, params);
+  return resolveTextApp(EN_APP, key, params);
+}
+
 /* Activity journal line: ACTION · GROUP · NOTE · MACHINE · CHANNEL · TOOL ("Write · Projects ·
    Smart home · laptop · hook · Claude Code"), for an activity as for "Note changed / New note /
    Note removed" (channel "file": seen on disk, no machine or tool). The group is the top-level
@@ -580,37 +631,43 @@ function masquesValides(masques, themes) {
    for an activity on a single note) is decided elsewhere and does not change.
    Backward compatible: `machine` and `channel` are optional — an activity sent before v0.4 (or by
    a sender that does not know about them) has neither, and the line reads exactly as it used to:
-   ACTION · GROUP · NOTE · TOOL. o: { type, theme, label, more, source, machine, channel }. Pure. */
-var JOURNAL_ACTIONS = {
-  read: "Read", search: "Search", write: "Write",
-  added: "New note", changed: "Note changed", removed: "Note removed"
+   ACTION · GROUP · NOTE · TOOL. o: { type, theme, label, more, source, machine, channel }.
+   T defaults to the page language (defaultT); tests pass the 2-argument form and get English.
+   Pure otherwise. */
+var JOURNAL_ACTION_KEYS = {
+  read: "journal.actionRead", search: "journal.actionSearch", write: "journal.actionWrite",
+  added: "journal.actionAdded", changed: "journal.actionChanged", removed: "journal.actionRemoved"
 };
+var SOURCE_TRANSLATED_KEYS = { agent: "journal.sourceAgent", demo: "journal.sourceDemo", file: "journal.sourceFile" };
+// Product names: never translated (CLAUDE.md: "garde les noms de produits... tels quels").
 var SOURCE_LABELS = {
   claude: "Claude Code", "claude-code": "Claude Code", codex: "Codex", gemini: "Gemini CLI", cursor: "Cursor",
-  copilot: "Copilot", windsurf: "Windsurf", cline: "Cline", mcp: "MCP", agent: "Agent", demo: "Demo", file: "File"
+  copilot: "Copilot", windsurf: "Windsurf", cline: "Cline", mcp: "MCP"
 };
 // "channel": how the event reached memglow (see docs/api.md). Unknown values are shown as sent.
 var CHANNEL_LABELS = {
   hook: "hook", "mcp-proxy": "MCP proxy", file: "file", api: "API", demo: "demo"
 };
-function formatJournalLine(o, names) {
+function formatJournalLine(o, names, T) {
+  T = T || defaultT;
   o = o || {};
   names = names || {};
   var theme = typeof o.theme === "string" && o.theme ? o.theme : "other";
   var group = Object.prototype.hasOwnProperty.call(names, theme) && names[theme] ? String(names[theme])
-    : theme === "index" ? "Index" : "Other";
+    : theme === "index" ? T("theme.index") : T("theme.other");
   var more = Math.max(0, Math.floor(Number(o.more) || 0));
   var src = typeof o.source === "string" ? o.source : "";
   var mach = typeof o.machine === "string" ? o.machine : "";
   var chan = typeof o.channel === "string" ? o.channel : "";
   var p = {
-    action: JOURNAL_ACTIONS[o.type] || "Activity",
+    action: Object.prototype.hasOwnProperty.call(JOURNAL_ACTION_KEYS, o.type) ? T(JOURNAL_ACTION_KEYS[o.type]) : T("journal.actionGeneric"),
     theme: theme,
     group: group,
     note: String(o.label == null ? "" : o.label) + (more ? " +" + more : ""),
     machine: mach,
     channel: Object.prototype.hasOwnProperty.call(CHANNEL_LABELS, chan) ? CHANNEL_LABELS[chan] : chan,
-    source: Object.prototype.hasOwnProperty.call(SOURCE_LABELS, src) ? SOURCE_LABELS[src] : src
+    source: Object.prototype.hasOwnProperty.call(SOURCE_LABELS, src) ? SOURCE_LABELS[src]
+      : Object.prototype.hasOwnProperty.call(SOURCE_TRANSLATED_KEYS, src) ? T(SOURCE_TRANSLATED_KEYS[src]) : src
   };
   p.text = [p.action, p.group, p.note, p.machine, p.channel, p.source].filter(function(x) { return x; }).join(" · ");
   return p;
@@ -639,7 +696,8 @@ var VIEW_SETTINGS = {
   sousCats: ["subThemes", "bool"],
   fixer: ["keepDragged", "bool"],
   suivre: ["followActivity", "bool"],
-  masquesThemes: ["hiddenThemes", "themes"]
+  masquesThemes: ["hiddenThemes", "themes"],
+  langue: ["language", "choice", { en: "en", fr: "fr", de: "de", es: "es", "pt-BR": "pt-BR", ja: "ja", ko: "ko", "zh-CN": "zh-CN" }]
 };
 /** Typed settings (server) → { localKey: string } (localStorage form). Unknown keys ignored. */
 function settingsToLocal(s) {
@@ -740,12 +798,13 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   CIBLE_COULEUR_CLAIR, COULEUR_CLAIR_INDEX,
   rayonNote, rayonRelais, facteurTaille, plancherRayon, dureeComete, niveauLien, creerCollision,
   margeEffective, FONDS, fondValide, luminanceRelative, teinteLisible, opaciteNom, masquesValides, RAYON_INDEX,
-  JOURNAL_ACTIONS, SOURCE_LABELS, CHANNEL_LABELS, formatJournalLine, VIEW_SETTINGS, settingsToLocal, settingsFromLocal,
-  offsetFor, seedPositions, layoutOf
+  JOURNAL_ACTION_KEYS, SOURCE_LABELS, SOURCE_TRANSLATED_KEYS, CHANNEL_LABELS, formatJournalLine, VIEW_SETTINGS, settingsToLocal, settingsFromLocal,
+  offsetFor, seedPositions, layoutOf, EN_APP, resolveTextApp, defaultT
 };
 (function() {
   "use strict";
   if (typeof document === "undefined") return;
+  var T = defaultT; // live page language: reads window.MemglowI18n at call time, English otherwise
   var el = document.getElementById("mem-graphe");
   if (!el) return;
   var etat = document.getElementById("mem-etat");
@@ -756,7 +815,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     }
   }
   if (!window.MemglowGraph) {
-    dire("The graph library could not load.");
+    dire(T("error.libraryFailed"));
     return;
   }
   // ---- Saved view of this instance, server side (GET/PUT /api/view) ----
@@ -812,6 +871,12 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   // server, the local cache alone (offline, slow server: the page works anyway).
   var reglagesVue = serveurOk ? settingsToLocal(vueServeur.settings) : null;
   if (reglagesVue) Object.keys(reglagesVue).forEach(function(k) { ecrireLocal("memglow." + k, reglagesVue[k]); });
+  // The saved language, if any, wins over whatever i18n.js already started loading (its own
+  // detect() only had the local cache and navigator.languages to go on, synchronously, before this
+  // fetch resolved).
+  if (reglagesVue && reglagesVue.langue && window.MemglowI18n && window.MemglowI18n.lang() !== reglagesVue.langue) {
+    window.MemglowI18n.setLanguage(reglagesVue.langue);
+  }
   // First visit of an instance with nothing saved yet: this browser's local settings go up.
   var migrerReglages = serveurOk && !Object.keys(reglagesVue || {}).length;
   // Layout: the instance's if it has one, otherwise the local cache (server unreachable only).
@@ -892,7 +957,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   var estClair = !!FONDS[modeFond].clair;
   var CIBLE_COULEUR_ACTIVE = estClair ? CIBLE_COULEUR_CLAIR : CIBLE_COULEUR;
   var COULEUR = { index: "#FFFFFF", autre: "#A9C9BF", other: "#A9C9BF" };
-  var NOM_THEME = { index: "Index", autre: "Note", other: "Other" };
+  var NOM_THEME = { index: T("theme.index"), autre: T("theme.note"), other: T("theme.other") };
   var ORDRE_THEMES = [];
   (CFG.themes || []).forEach(function(t) {
     COULEUR[t.id] = t.color;
@@ -1640,7 +1705,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       return !!d;
     });
   } catch (e) {
-    dire("Your browser cannot display 3D here (WebGL unavailable).");
+    dire(T("error.webgl"));
     return;
   }
   var curseur = document.getElementById("mem-ecart");
@@ -2110,6 +2175,22 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       graphe.d3ReheatSimulation();
     });
   }
+  // Language: i18n.js owns detection/loading; here it is just another saved setting (VIEW_SETTINGS
+  // "langue"), kept in sync with the page's actual language (i18n.js may have picked a different
+  // one than the saved value if the browser's language changed, or on first visit).
+  var choixLangue = document.getElementById("mem-langue");
+  if (choixLangue) {
+    var I18N = window.MemglowI18n;
+    choixLangue.value = I18N ? I18N.lang() : lireReglage("langue", "en");
+    choixLangue.addEventListener("change", function() {
+      garderReglage("langue", choixLangue.value);
+      if (I18N) I18N.setLanguage(choixLangue.value);
+    });
+    document.addEventListener("memglow:language", function(e) {
+      var lang = e.detail && e.detail.lang;
+      if (lang && choixLangue.value !== lang) choixLangue.value = lang;
+    });
+  }
   // Sliders that do not touch the simulation: signal speed, name distance (applied by vivre()).
   function brancherSimple(id, cle, valeur, appliquer2) {
     var c = document.getElementById(id);
@@ -2320,7 +2401,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       e.preventDefault();
       var n = trouver(champCherche.value);
       if (!n) {
-        champCherche.setCustomValidity("No matching note.");
+        champCherche.setCustomValidity(T("search.noMatch"));
         champCherche.reportValidity();
         return;
       }
@@ -2362,7 +2443,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     compter();
     remplirListe();
     historique(g.activities);
-    dire(g.nodes.length ? "" : "No notes yet.");
+    dire(g.nodes.length ? "" : T("status.noNotes"));
     if (!reduit) requestAnimationFrame(vivre);
     ecouter();
     try {
@@ -2370,12 +2451,15 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     } catch (e) {
     }
   }).catch(function() {
-    dire("Could not load the memory. Reload the page.");
+    dire(T("error.loadFailed"));
   });
   function compter() {
     var a = document.getElementById("mem-nb-notes"), b = document.getElementById("mem-nb-liens");
+    var wa = document.getElementById("mem-mot-notes"), wb = document.getElementById("mem-mot-liens");
     if (a) a.textContent = donnees.nodes.length;
     if (b) b.textContent = donnees.links.length;
+    if (wa) wa.textContent = T("stats.notesWord", { n: donnees.nodes.length });
+    if (wb) wb.textContent = T("stats.linksWord", { n: donnees.links.length });
   }
   function eclore(id) {
     var n = parId[id];
@@ -2459,7 +2543,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     if (!li.querySelector(".mem-journal__badge")) {
       var b = document.createElement("span");
       b.className = "mem-journal__badge";
-      b.textContent = "± voir";
+      b.textContent = T("journal.diffBadge");
       li.appendChild(b);
     }
     lignesParDiff[diffId] = li;
@@ -2631,6 +2715,17 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   document.addEventListener("memglow:ouvrir", function(e) {
     if (e.detail && parId[e.detail]) ouvrir(e.detail, true);
   });
+  // Language switched in Settings (or the saved one arrived from another device, see chargerVue
+  // above): refresh what app.js itself renders from JS, not data-i18n (i18n.js already re-applies
+  // every data-i18n element, incl. the legend). Already-written journal lines and the open panel
+  // keep the words they were written with, like a log — only what is redrawn after this point uses
+  // the new language.
+  document.addEventListener("memglow:language", function() {
+    NOM_THEME.index = T("theme.index");
+    NOM_THEME.autre = T("theme.note");
+    NOM_THEME.other = T("theme.other");
+    compter();
+  });
   window.__memglowDemo = {
     activite: recevoirActivite,
     noeuds: function() {
@@ -2673,7 +2768,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       return r.json();
     }).then(function(d) {
       if (diffDemande !== diffId) return;
-      document.getElementById("mem-p-diff-meta").textContent = "+" + d.plus + " / −" + d.moins + " line" + (d.plus + d.moins > 1 ? "s" : "") + " · " + new Date(d.t).toLocaleString(void 0, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      document.getElementById("mem-p-diff-meta").textContent = "+" + d.plus + " / −" + d.moins + " " + T("diff.lineWord", { n: d.plus + d.moins }) + " · " + new Date(d.t).toLocaleString(void 0, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" });
       var ol = document.getElementById("mem-p-diff-lignes");
       ol.textContent = "";
       d.lignes.forEach(function(l) {
@@ -2685,17 +2780,21 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       zone.hidden = false;
     }).catch(function() {
       if (diffDemande !== diffId) return;
-      document.getElementById("mem-p-diff-meta").textContent = "Change not found.";
+      document.getElementById("mem-p-diff-meta").textContent = T("diff.notFound");
       document.getElementById("mem-p-diff-lignes").textContent = "";
       zone.hidden = false;
     });
   }
   function remplir(f) {
-    document.getElementById("mem-p-dossier").textContent = NOM_THEME[themeDe(f)] || "Note";
+    document.getElementById("mem-p-dossier").textContent = NOM_THEME[themeDe(f)] || T("theme.note");
     document.getElementById("mem-p-titre").textContent = f.label;
     document.getElementById("mem-p-desc").textContent = f.description || "";
     var jours = Math.floor((Date.now() - f.mtime) / 864e5);
-    document.getElementById("mem-p-meta").textContent = "Written " + (jours < 1 ? "today" : jours === 1 ? "yesterday" : jours + " days ago") + " · " + (typeof f.tokens === "number" ? "≈ " + Math.round(f.tokens).toLocaleString("en-US") + " tokens · " : "") + f.outgoing.length + " outgoing link" + (f.outgoing.length > 1 ? "s" : "") + ", " + f.incoming.length + " incoming";
+    var quand = jours < 1 ? T("common.today") : jours === 1 ? T("common.yesterday") : T("common.daysAgo", { n: jours });
+    var nJetons = Math.round(f.tokens);
+    var jetons = typeof f.tokens === "number" ? T("panel.tokens", { n: nJetons, show: nJetons.toLocaleString("en-US") }) + " · " : "";
+    document.getElementById("mem-p-meta").textContent = T("panel.written", { when: quand }) + " · " + jetons +
+      T("panel.outgoingLinks", { n: f.outgoing.length }) + ", " + T("panel.incoming", { n: f.incoming.length });
     var zone = document.getElementById("mem-p-liens");
     zone.textContent = "";
     var voisins = f.outgoing.concat(f.incoming.filter(function(x) {

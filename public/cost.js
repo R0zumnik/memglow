@@ -14,6 +14,51 @@ function costEsc(s) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
   });
 }
+
+/* ---- i18n (public/i18n.js, public/i18n/<code>.json) ----
+   Same approach as app.js (see its EN_APP for why this small English copy lives here too, self-
+   contained, kept in sync with public/i18n/en.json by a test). costSplitPrompt builds a prompt for
+   the AI and stays English on purpose: it never takes a T, and costPartName's own fallback stays
+   English unless a T is explicitly given (only the UI renderers below pass one). */
+var EN_COST = {
+  "cost.tokensToday": "Tokens read today", "cost.tokensRead7": "Tokens read · 7 days",
+  "cost.tokensWritten7": "Tokens written · 7 days", "cost.wholeMemory": "Whole memory", "cost.indexNote": "Index note",
+  "cost.eachRead": "each time it is read", "cost.noIndexNote": "no index note",
+  "cost.notesCount": { one: "{n} note", other: "{n} notes" }, "cost.readsCount": { one: "{n} read", other: "{n} reads" },
+  "cost.noReadYet": "No read counted in the last 7 days yet.", "cost.ofTokensRead7": "of tokens read (7 days)",
+  "cost.percentAria": "{n} percent", "cost.copyPrompt": "Copy prompt for your AI", "cost.doWithClaude": "Do it with Claude",
+  "cost.introduction": "(introduction)", "cost.splitInto": { one: "Split into {n} note:", other: "Split into {n} notes:" },
+  "cost.singleSection": "A single section: no split to suggest from headings.", "cost.sectionsCount": "Sections ({n})",
+  "cost.noLargeNotes": "No note above {tokens} tokens.",
+  "cost.dataSince": "Data since {date} — less than 30 days of counting so far.", "cost.noDataYet": "No data yet.",
+  "cost.allRead30": "Every note was read at least once in 30 days.", "cost.moreCount": "+ {n} more.",
+  "cost.notAvailable": "Memory cost is not available.", "cost.mostExpensive": "Most expensive to read · 7 days",
+  "cost.tooLarge": "Too large (&gt; {tokens} tokens)", "cost.neverRead30": "Never read in 30 days",
+  "cost.loadFailed": "Could not load Memory cost.", "cost.copied": "Copied ✓",
+  "cost.selectManually": "Select and copy the text below", "cost.promptToCopy": "Prompt to copy"
+};
+function resolveTextCost(dict, key, params) {
+  var entry = dict ? dict[key] : undefined;
+  if (entry === undefined || entry === null) return key;
+  var str = entry;
+  if (typeof entry === "object") {
+    var n = params && typeof params.n === "number" ? params.n : null;
+    var hasOne = Object.prototype.hasOwnProperty.call(entry, "one");
+    var hasOther = Object.prototype.hasOwnProperty.call(entry, "other");
+    str = n === 1 && hasOne ? entry.one : hasOther ? entry.other : hasOne ? entry.one : key;
+  }
+  if (typeof str !== "string") return key;
+  if (!params) return str;
+  return str.replace(/\{(\w+)\}/g, function (m, name) {
+    return Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : m;
+  });
+}
+function defaultCostT(key, params) {
+  var M = typeof window !== "undefined" && window.MemglowI18n;
+  if (M && M.dict && Object.prototype.hasOwnProperty.call(M.dict, key)) return M.t(key, params);
+  return resolveTextCost(EN_COST, key, params);
+}
+
 function costNumber(n) {
   n = Math.round(Number(n) || 0);
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
@@ -38,8 +83,9 @@ function costPlural(n, word) {
 }
 
 /** Text of a part in a split suggestion: its section titles. */
-function costPartName(part) {
-  var t = (part.titles || []).map(function (x) { return x || "(introduction)"; });
+function costPartName(part, T) {
+  var intro = T ? T("cost.introduction") : "(introduction)";
+  var t = (part.titles || []).map(function (x) { return x || intro; });
   return t.join(", ");
 }
 
@@ -97,13 +143,13 @@ function costSplitPrompt(n, c, names) {
   return lines.join("\n");
 }
 
-function costFigures(c) {
+function costFigures(c, T) {
   var items = [
-    ["Tokens read today", costTokens(c.read.today), ""],
-    ["Tokens read · 7 days", costTokens(c.read.days7), ""],
-    ["Tokens written · 7 days", costTokens(c.written.days7), ""],
-    ["Whole memory", costTokens(c.totals.tokens), costPlural(c.totals.notes, "note")],
-    ["Index note", c.index ? costTokens(c.index.tokens) : "≈ —", c.index ? "each time it is read" : "no index note"],
+    [T("cost.tokensToday"), costTokens(c.read.today), ""],
+    [T("cost.tokensRead7"), costTokens(c.read.days7), ""],
+    [T("cost.tokensWritten7"), costTokens(c.written.days7), ""],
+    [T("cost.wholeMemory"), costTokens(c.totals.tokens), T("cost.notesCount", { n: c.totals.notes })],
+    [T("cost.indexNote"), c.index ? costTokens(c.index.tokens) : "≈ —", c.index ? T("cost.eachRead") : T("cost.noIndexNote")],
   ];
   return items.map(function (d) {
     return '<div class="mg-cost__fig"><p class="mg-cost__fig-name">' + costEsc(d[0]) + '</p>' +
@@ -113,11 +159,11 @@ function costFigures(c) {
 }
 
 /** "3 notes = 59 % of tokens read (7 days)", with a two-part bar. */
-function costShare(share) {
-  if (!share) return '<p class="mg-cost__empty">No read counted in the last 7 days yet.</p>';
+function costShare(share, T) {
+  if (!share) return '<p class="mg-cost__empty">' + costEsc(T("cost.noReadYet")) + '</p>';
   var p = Math.max(0, Math.min(100, share.percent));
-  return '<div class="mg-cost__share"><p class="mg-cost__share-text"><strong>' + costPlural(share.notes, "note") + '</strong> = <strong>' + p +
-    ' %</strong> of tokens read (7 days)</p><div class="mg-cost__share-bar" role="img" aria-label="' + p + ' percent"><span style="width:' + p + '%"></span></div></div>';
+  return '<div class="mg-cost__share"><p class="mg-cost__share-text"><strong>' + costEsc(T("cost.notesCount", { n: share.notes })) + '</strong> = <strong>' + p +
+    ' %</strong> ' + costEsc(T("cost.ofTokensRead7")) + '</p><div class="mg-cost__share-bar" role="img" aria-label="' + costEsc(T("cost.percentAria", { n: p })) + '"><span style="width:' + p + '%"></span></div></div>';
 }
 
 function costName(n, colors) {
@@ -129,8 +175,8 @@ function costName(n, colors) {
 // the name of its default provider.
 var costAssistant = false;
 var costAssistantLabel = "Claude";
-function costCopyButton(n) {
-  return '<button type="button" class="bn-btn mg-cost__copy" data-copy="' + costEsc(n.id) + '">Copy prompt for your AI</button>' +
+function costCopyButton(n, T) {
+  return '<button type="button" class="bn-btn mg-cost__copy" data-copy="' + costEsc(n.id) + '">' + costEsc(T("cost.copyPrompt")) + '</button>' +
     (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-assist="' + costEsc(n.id) + '">Do it with ' + costEsc(costAssistantLabel) + '</button>' : "");
 }
 
@@ -138,7 +184,8 @@ function costCopyButton(n) {
  * "Organisation": notes about one subject scattered across sub-themes of a group (lib/organise.js).
  * Each suggestion: its sentence, the notes (clickable), why, and the two buttons.
  */
-function costOrganisation(list, colors) {
+function costOrganisation(list, colors, T) {
+  T = T || defaultCostT;
   if (!list || !list.length) return '<p class="mg-cost__empty">No scattered notes found: every subject sits in one sub-theme.</p>';
   return '<ul class="mg-cost__list mg-cost__org">' + list.map(function (s) {
     var notes = (s.notes || []).map(function (n) {
@@ -149,7 +196,7 @@ function costOrganisation(list, colors) {
     return '<li class="mg-cost__item mg-cost__org-item"><p class="mg-cost__org-msg">' + costEsc(s.message) + '</p>' +
       '<ul class="mg-cost__list mg-cost__list--compact">' + notes + '</ul>' +
       '<details class="mg-cost__sections"><summary>Why</summary><ul>' + (s.reasons || []).map(function (r) { return '<li>' + costEsc(r) + '</li>'; }).join("") + '</ul></details>' +
-      '<button type="button" class="bn-btn mg-cost__copy" data-copy-org="' + costEsc(s.id) + '">Copy prompt for your AI</button>' +
+      '<button type="button" class="bn-btn mg-cost__copy" data-copy-org="' + costEsc(s.id) + '">' + costEsc(T("cost.copyPrompt")) + '</button>' +
       (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-assist-org="' + costEsc(s.id) + '">Do it with ' + costEsc(costAssistantLabel) + '</button>' : "") +
       '</li>';
   }).join("") + '</ul>';
@@ -172,53 +219,52 @@ function costAlwaysLoaded(a) {
   return html;
 }
 
-function costTop(top, colors, c) {
-  if (!top || !top.length) return '<p class="mg-cost__empty">No read counted in the last 7 days yet.</p>';
+function costTop(top, colors, c, T) {
+  if (!top || !top.length) return '<p class="mg-cost__empty">' + costEsc(T("cost.noReadYet")) + '</p>';
   var max = top[0].readTokens7 || 1;
   return '<ol class="mg-cost__list">' + top.map(function (n) {
     var w = Math.max(2, Math.round((n.readTokens7 / max) * 100));
     return '<li class="mg-cost__item"><div class="mg-cost__row" data-note="' + costEsc(n.id) + '" tabindex="0" role="button">' + costName(n, colors) +
       '<strong class="mg-cost__num">' + costTokens(n.readTokens7) + '</strong>' +
       '<span class="mg-cost__bar"><span style="width:' + w + '%;background:' + costColor(colors, n.theme) + '"></span></span>' +
-      '<span class="mg-cost__det">' + costPlural(n.reads7, "read") + ' × ' + costTokens(n.tokens) + '</span></div>' +
-      (n.tokens > c.chunkTokens ? costCopyButton(n) : '') + '</li>';
+      '<span class="mg-cost__det">' + costEsc(T("cost.readsCount", { n: n.reads7 })) + ' × ' + costTokens(n.tokens) + '</span></div>' +
+      (n.tokens > c.chunkTokens ? costCopyButton(n, T) : '') + '</li>';
   }).join("") + '</ol>';
 }
 
-function costSplit(n) {
+function costSplit(n, T) {
   if (!n.sections || !n.sections.length) return "";
+  var intro = T("cost.introduction");
   var list = n.sections.map(function (s) {
-    return '<li>' + costEsc(s.title || "(introduction)") + ' — ' + costTokens(s.tokens) + '</li>';
+    return '<li>' + costEsc(s.title || intro) + ' — ' + costTokens(s.tokens) + '</li>';
   }).join("");
   var plan = n.split
-    ? '<p class="mg-cost__plan">Split into ' + n.split.length + ' notes: ' + n.split.map(function (p) {
-        return '<span class="mg-cost__part">' + costEsc(costPartName(p)) + ' <em>' + costTokens(p.tokens) + '</em></span>';
+    ? '<p class="mg-cost__plan">' + costEsc(T("cost.splitInto", { n: n.split.length })) + ' ' + n.split.map(function (p) {
+        return '<span class="mg-cost__part">' + costEsc(costPartName(p, T)) + ' <em>' + costTokens(p.tokens) + '</em></span>';
       }).join(" · ") + '</p>'
-    : '<p class="mg-cost__plan">A single section: no split to suggest from headings.</p>';
-  return '<details class="mg-cost__sections"><summary>Sections (' + n.sections.length + ')</summary><ol>' + list + '</ol>' + plan + '</details>';
+    : '<p class="mg-cost__plan">' + costEsc(T("cost.singleSection")) + '</p>';
+  return '<details class="mg-cost__sections"><summary>' + costEsc(T("cost.sectionsCount", { n: n.sections.length })) + '</summary><ol>' + list + '</ol>' + plan + '</details>';
 }
 
-function costLarge(list, colors, c) {
-  if (!list.length) return '<p class="mg-cost__empty">No note above ' + costTokens(c.largeNoteTokens) + ' tokens.</p>';
+function costLarge(list, colors, c, T) {
+  if (!list.length) return '<p class="mg-cost__empty">' + costEsc(T("cost.noLargeNotes", { tokens: costTokens(c.largeNoteTokens) })) + '</p>';
   return '<ul class="mg-cost__list">' + list.map(function (n) {
     return '<li class="mg-cost__item"><div class="mg-cost__row mg-cost__row--simple" data-note="' + costEsc(n.id) + '" tabindex="0" role="button">' +
       costName(n, colors) + '<strong class="mg-cost__num">' + costTokens(n.tokens) + '</strong></div>' +
-      costSplit(n) + costCopyButton(n) + '</li>';
+      costSplit(n, T) + costCopyButton(n, T) + '</li>';
   }).join("") + '</ul>';
 }
 
-function costNeverRead(nr, colors) {
+function costNeverRead(nr, colors, T) {
   if (!nr.available) {
-    return '<p class="mg-cost__empty">' + (nr.since
-      ? 'Data since ' + costEsc(costDay(nr.since)) + ' — less than 30 days of counting so far.'
-      : 'No data yet.') + '</p>';
+    return '<p class="mg-cost__empty">' + costEsc(nr.since ? T("cost.dataSince", { date: costDay(nr.since) }) : T("cost.noDataYet")) + '</p>';
   }
-  if (!nr.notes.length) return '<p class="mg-cost__empty">Every note was read at least once in 30 days.</p>';
+  if (!nr.notes.length) return '<p class="mg-cost__empty">' + costEsc(T("cost.allRead30")) + '</p>';
   var more = nr.total - nr.notes.length;
   return '<ul class="mg-cost__list mg-cost__list--compact">' + nr.notes.map(function (n) {
     return '<li><div class="mg-cost__row mg-cost__row--simple" data-note="' + costEsc(n.id) + '" tabindex="0" role="button">' + costName(n, colors) +
       '<span class="mg-cost__det">' + costTokens(n.tokens) + '</span></div></li>';
-  }).join("") + '</ul>' + (more > 0 ? '<p class="mg-cost__empty">+ ' + costNumber(more) + ' more.</p>' : '');
+  }).join("") + '</ul>' + (more > 0 ? '<p class="mg-cost__empty">' + costEsc(T("cost.moreCount", { n: more })) + '</p>' : '');
 }
 
 // ---- Archive tier (lib/archive.js): dormant sections ----
@@ -279,7 +325,7 @@ function costArchive(a, colors) {
       '<strong class="mg-cost__num">' + costTokens(s.tokens) + '</strong>' +
       '<span class="mg-cost__det">' + (s.lastRead ? 'last read ' + costEsc(costDay(s.lastRead)) : 'not read since counting began') + '</span></label></li>';
   }).join("") + '</ul>' + (more > 0 ? '<p class="mg-cost__empty">+ ' + costPlural(more, "more section") + ' (the biggest are listed).</p>' : '');
-  var btns = '<div class="mg-arch__btns"><button type="button" class="bn-btn mg-cost__copy" data-archive-copy="1">Copy prompt for your AI</button>' +
+  var btns = '<div class="mg-arch__btns"><button type="button" class="bn-btn mg-cost__copy" data-archive-copy="1">' + costEsc(defaultCostT("cost.copyPrompt")) + '</button>' +
     (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-archive-ai="1">Do it with ' + costEsc(costProvider || "your AI") + '</button>' +
       '<button type="button" class="bn-btn mg-cost__copy" data-archive-plain="1">Prepare without AI</button>' : '') + '</div>';
   return hint + list + '<p class="mg-arch__gain" id="mg-arch-gain">' + costArchiveGain(a.sections) + '</p>' + btns;
@@ -293,18 +339,20 @@ function costArchiveGain(chosen) {
   return '<strong>' + costPlural(chosen.length, "section") + '</strong> · live memory <strong>' + costTokens(saved) + '</strong> tokens smaller (each section leaves a one-line link) · archive summary + ' + costTokens(line) + ' tokens';
 }
 
-/** The whole panel body, or a short message when there is nothing to show. */
-function costRender(c, colors) {
-  if (!c || !c.read) return '<p class="mg-cost__empty">Memory cost is not available.</p>';
-  var html = '<div class="mg-cost__figs">' + costFigures(c) + '</div>';
-  html += costShare(c.share);
+/** The whole panel body, or a short message when there is nothing to show. `T` defaults to the
+    page's current language (or this file's English copy outside a browser — see defaultCostT). */
+function costRender(c, colors, T) {
+  T = T || defaultCostT;
+  if (!c || !c.read) return '<p class="mg-cost__empty">' + costEsc(T("cost.notAvailable")) + '</p>';
+  var html = '<div class="mg-cost__figs">' + costFigures(c, T) + '</div>';
+  html += costShare(c.share, T);
   html += '<div class="mg-cost__grid">';
-  html += '<figure class="mg-cost__block"><figcaption>Most expensive to read · 7 days</figcaption>' + costTop(c.top, colors, c) + '</figure>';
-  html += '<figure class="mg-cost__block"><figcaption>Too large (&gt; ' + costEsc(costTokens(c.largeNoteTokens)) + ' tokens)</figcaption>' + costLarge(c.tooLarge, colors, c) + '</figure>';
-  html += '<figure class="mg-cost__block"><figcaption>Never read in 30 days</figcaption>' + costNeverRead(c.neverRead, colors) + '</figure>';
+  html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.mostExpensive")) + '</figcaption>' + costTop(c.top, colors, c, T) + '</figure>';
+  html += '<figure class="mg-cost__block"><figcaption>' + T("cost.tooLarge", { tokens: costEsc(costTokens(c.largeNoteTokens)) }) + '</figcaption>' + costLarge(c.tooLarge, colors, c, T) + '</figure>';
+  html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.neverRead30")) + '</figcaption>' + costNeverRead(c.neverRead, colors, T) + '</figure>';
   html += '</div>';
   html += '<div class="mg-cost__grid mg-cost__grid--two">';
-  html += '<figure class="mg-cost__block"><figcaption>Organisation</figcaption>' + costOrganisation(c.organisation, colors) + '</figure>';
+  html += '<figure class="mg-cost__block"><figcaption>Organisation</figcaption>' + costOrganisation(c.organisation, colors, T) + '</figure>';
   html += '<figure class="mg-cost__block"><figcaption>Always loaded · every session</figcaption>' + costAlwaysLoaded(c.alwaysLoaded) + '</figure>';
   html += '</div>';
   if (c.archive) html += '<figure class="mg-cost__block mg-arch" id="mg-arch"><figcaption>Archive · sections unused for ' + costNumber(c.archive.afterDays) + ' days</figcaption>' + costArchive(c.archive, colors) + '</figure>';
@@ -312,7 +360,7 @@ function costRender(c, colors) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName };
+  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT };
 }
 
 (function () {
@@ -322,7 +370,8 @@ if (typeof module !== "undefined" && module.exports) {
   var body = document.getElementById("mg-cost-body");
   if (!root || !body) return;
   var url = root.getAttribute("data-cost");
-  var colors = {}, names = { index: "Index" };
+  var T = defaultCostT;
+  var colors = {}, names = { index: "Index" }; // "Index" here: the AI prompt (costSplitPrompt) stays English
   try {
     var cfg = JSON.parse(document.getElementById("memglow-config").textContent || "{}");
     (cfg.themes || []).forEach(function (t) { colors[t.id] = t.color; names[t.id] = t.label; });
@@ -361,7 +410,7 @@ if (typeof module !== "undefined" && module.exports) {
       // The panel is redrawn after activity: keyboard focus comes back to the same copy button.
       var active = document.activeElement;
       var focused = active && body.contains && body.contains(active) && active.getAttribute ? active.getAttribute("data-copy") : null;
-      body.innerHTML = costRender(c, colors);
+      body.innerHTML = costRender(c, colors, T);
       archSync();
       Array.prototype.forEach.call(body.querySelectorAll(".mg-cost__item"), function (li) {
         var row = li.querySelector("[data-note]"), d = li.querySelector("details");
@@ -372,7 +421,7 @@ if (typeof module !== "undefined" && module.exports) {
         if (again2 && again2.focus) again2.focus();
       }
     }).catch(function () {
-      if (!last) body.innerHTML = '<p class="mg-cost__empty">Could not load Memory cost.</p>';
+      if (!last) body.innerHTML = '<p class="mg-cost__empty">' + costEsc(T("cost.loadFailed")) + '</p>';
     }).then(function () { loading = false; if (again) soon(); });
   }
   // Refresh ≈ 1.5 s after an activity or a note change, grouped: the timer is NOT restarted by each
@@ -410,9 +459,9 @@ if (typeof module !== "undefined" && module.exports) {
   }
   function copyInto(btn, text) {
     copyText(text).then(function () {
-      btn.textContent = "Copied ✓";
+      btn.textContent = T("cost.copied");
       btn.classList.add("mg-cost__copy--done");
-      setTimeout(function () { btn.textContent = "Copy prompt for your AI"; btn.classList.remove("mg-cost__copy--done"); }, 2000);
+      setTimeout(function () { btn.textContent = T("cost.copyPrompt"); btn.classList.remove("mg-cost__copy--done"); }, 2000);
     }).catch(function () {
       // Last resort: show the text, selected, for a manual copy.
       var ta = btn.parentNode.querySelector("textarea.mg-cost__manual");
@@ -420,13 +469,13 @@ if (typeof module !== "undefined" && module.exports) {
         ta = document.createElement("textarea");
         ta.className = "mg-cost__manual";
         ta.setAttribute("readonly", "");
-        ta.setAttribute("aria-label", "Prompt to copy");
+        ta.setAttribute("aria-label", T("cost.promptToCopy"));
         btn.parentNode.appendChild(ta);
       }
       ta.value = text;
       ta.focus();
       ta.select();
-      btn.textContent = "Select and copy the text below";
+      btn.textContent = T("cost.selectManually");
     });
   }
   function openNote(id) {
@@ -441,7 +490,7 @@ if (typeof module !== "undefined" && module.exports) {
     return null;
   }
   function copied(btn, label) {
-    btn.textContent = "Copied ✓";
+    btn.textContent = T("cost.copied");
     btn.classList.add("mg-cost__copy--done");
     setTimeout(function () { btn.textContent = label; btn.classList.remove("mg-cost__copy--done"); }, 2000);
   }
@@ -473,7 +522,7 @@ if (typeof module !== "undefined" && module.exports) {
       if (!chosen.length) return;
       if (arch.hasAttribute("data-archive-copy")) {
         var text = costArchivePrompt(last.archive, chosen, names, undefined, last.protectedGroups);
-        copyText(text).then(function () { copied(arch, "Copy prompt for your AI"); }).catch(function () { arch.textContent = "Copy failed: select the sections again"; });
+        copyText(text).then(function () { copied(arch, T("cost.copyPrompt")); }).catch(function () { arch.textContent = "Copy failed: select the sections again"; });
         return;
       }
       var keys = chosen.map(function (s) { return s.key; });
@@ -501,6 +550,7 @@ if (typeof module !== "undefined" && module.exports) {
   document.addEventListener("memglow:activite", soon);
   document.addEventListener("memglow:changement", soon);
   document.addEventListener("memglow:pret", load);
+  document.addEventListener("memglow:language", load); // redraw the panel in the new language now
   setInterval(function () { if (!document.hidden) load(); }, 60000);
   load();
 })();

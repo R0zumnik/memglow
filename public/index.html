@@ -11,111 +11,123 @@
 <body>
 <div class="mg-wrap">
   <header class="mg-head">
-    <h1>{{title}} <span>·</span> live memory</h1>
-    <p>Every dot is a note your assistant remembers; every line, a link between two notes. When an assistant reads, searches or writes a note, it lights up — live.</p>
+    <h1>{{title}} <span>·</span> <span data-i18n="header.liveMemory">live memory</span></h1>
+    <p data-i18n="header.subtitle">Every dot is a note your assistant remembers; every line, a link between two notes. When an assistant reads, searches or writes a note, it lights up — live.</p>
   </header>
   <div class="bn-grid">
     <section class="bn-tile mg-zones" id="mg-zones" data-api="/api/zones" hidden aria-labelledby="mg-zones-title">
       <div class="mg-cost__head">
-        <h2 class="bn-label" id="mg-zones-title">What are your big themes?</h2>
-        <p class="mg-cost__sub">These are the big groups of your memory, found in your folders and <code>theme:</code> keys. Tick the ones to protect: memglow's assistant will never move a note into or out of a protected group, never create a note in another group and never change their <code>theme</code>. You can also rename how a group is shown — your notes are not changed. Change this later in Settings → Protected groups.</p>
+        <h2 class="bn-label" id="mg-zones-title" data-i18n="zones.title">What are your big themes?</h2>
+        <p class="mg-cost__sub" data-i18n="zones.intro">These are the big groups of your memory, found in your folders and in the “theme:” key of your notes. Tick the ones to protect: memglow's assistant will never move a note into or out of a protected group, never create a note in another group and never change their “theme” line. You can also rename how a group is shown — your notes are not changed. Change this later in Settings → Protected groups.</p>
       </div>
       <form id="mg-zones-form">
-        <div id="mg-zones-body"><p class="mg-cost__empty">Loading…</p></div>
-        <div class="mg-zones__btns"><button type="submit" class="bn-btn mg-zones__save">Save</button><button type="button" class="bn-btn" id="mg-zones-later">Not now</button></div>
+        <div id="mg-zones-body"><p class="mg-cost__empty" data-i18n="common.loading">Loading…</p></div>
+        <div class="mg-zones__btns"><button type="submit" class="bn-btn mg-zones__save" data-i18n="zones.save">Save</button><button type="button" class="bn-btn" id="mg-zones-later" data-i18n="zones.later">Not now</button></div>
         <p class="mg-zones__status" id="mg-zones-status" role="status"></p>
       </form>
     </section>
-    <section class="bn-tile bn-tile--deep mem-stage" aria-label="Memory graph">
+    <section class="bn-tile bn-tile--deep mem-stage" data-i18n-attr="aria-label:graph.ariaLabel" aria-label="Memory graph">
       <div class="mem-canvas" id="mem-graphe" data-graphe="/api/graph" data-flux="/api/stream" data-note="/api/note/" data-vue="/api/view"></div>
       <div class="mem-hud">
-        <p class="mem-hud__stat"><span class="mem-hud__n" id="mem-nb-notes">0</span> notes · <span class="mem-hud__n" id="mem-nb-liens">0</span> links</p>
-        <ul class="mem-legende" aria-label="Show or hide a theme">{{legend}}</ul>
+        <p class="mem-hud__stat"><span class="mem-hud__n" id="mem-nb-notes">0</span> <span id="mem-mot-notes" data-i18n="stats.notesWord">notes</span> · <span class="mem-hud__n" id="mem-nb-liens">0</span> <span id="mem-mot-liens" data-i18n="stats.linksWord">links</span></p>
+        <ul class="mem-legende" data-i18n-attr="aria-label:legend.ariaLabel" aria-label="Show or hide a theme">{{legend}}</ul>
         <form class="mem-cherche" id="mem-cherche" role="search">
-          <label class="mem-cherche__label" for="mem-cherche-champ">Find a note</label>
-          <input type="search" id="mem-cherche-champ" list="mem-cherche-liste" placeholder="Find a note…" autocomplete="off">
+          <label class="mem-cherche__label" for="mem-cherche-champ" data-i18n="search.label">Find a note</label>
+          <input type="search" id="mem-cherche-champ" list="mem-cherche-liste" placeholder="Find a note…" data-i18n-attr="placeholder:search.placeholder" autocomplete="off">
           <datalist id="mem-cherche-liste"></datalist>
         </form>
         <details class="mem-options" id="mem-options">
-          <summary>Settings</summary>
+          <summary data-i18n="settings.summary">Settings</summary>
           <div class="mem-options__corps" id="mem-options-corps">
             <fieldset class="mem-options__section">
-              <legend>Display</legend>
-              <label class="mem-reglage">Glow
+              <legend data-i18n="settings.display">Display</legend>
+              <label class="mem-reglage"><span data-i18n="settings.glow">Glow</span>
                 <input type="range" id="mem-lueur" min="0" max="2" step="0.1" value="0.9">
               </label>
-              <label class="mem-reglage">Names
+              <label class="mem-reglage"><span data-i18n="settings.names">Names</span>
                 <select id="mem-noms">
-                  <option value="aucun">None</option>
-                  <option value="actifs">Active notes</option>
-                  <option value="tous">All</option>
+                  <option value="aucun" data-i18n="settings.namesNone">None</option>
+                  <option value="actifs" data-i18n="settings.namesActive">Active notes</option>
+                  <option value="tous" data-i18n="settings.namesAll">All</option>
                 </select>
               </label>
-              <label class="mem-reglage">Name distance
+              <label class="mem-reglage"><span data-i18n="settings.nameDistance">Name distance</span>
                 <input type="range" id="mem-dist-noms" min="1" max="20" step="1" value="20">
               </label>
-              <label class="mem-reglage">Background
+              <label class="mem-reglage"><span data-i18n="settings.background">Background</span>
                 <select id="mem-fond">
-                  <option value="profond" selected>Deep</option>
-                  <option value="uni">Plain</option>
-                  <option value="nuit">Night blue</option>
-                  <option value="clair">Light</option>
+                  <option value="profond" selected data-i18n="settings.bgDeep">Deep</option>
+                  <option value="uni" data-i18n="settings.bgPlain">Plain</option>
+                  <option value="nuit" data-i18n="settings.bgNight">Night blue</option>
+                  <option value="clair" data-i18n="settings.bgLight">Light</option>
                 </select>
               </label>
-              <label class="mem-reglage">Bubble size
+              <label class="mem-reglage"><span data-i18n="settings.bubbleSize">Bubble size</span>
                 <input type="range" id="mem-facteur" min="0.5" max="3" step="0.1" value="1">
               </label>
-              <label class="mem-reglage">Size by
+              <label class="mem-reglage"><span data-i18n="settings.sizeBy">Size by</span>
                 <select id="mem-taille">
-                  <option value="liens" selected>Links</option>
-                  <option value="jetons">Token cost</option>
+                  <option value="liens" selected data-i18n="settings.sizeByLinks">Links</option>
+                  <option value="jetons" data-i18n="settings.sizeByTokens">Token cost</option>
                 </select>
               </label>
-              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-grouper" checked> Group by theme</label>
-              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-souscats" checked> Sub-themes</label>
+              <label class="mem-reglage"><span data-i18n="settings.language">Language</span>
+                <select id="mem-langue">
+                  <option value="en">English</option>
+                  <option value="fr">Français</option>
+                  <option value="de">Deutsch</option>
+                  <option value="es">Español</option>
+                  <option value="pt-BR">Português (Brasil)</option>
+                  <option value="ja">日本語</option>
+                  <option value="ko">한국어</option>
+                  <option value="zh-CN">中文（简体）</option>
+                </select>
+              </label>
+              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-grouper" checked> <span data-i18n="settings.groupByTheme">Group by theme</span></label>
+              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-souscats" checked> <span data-i18n="settings.subThemes">Sub-themes</span></label>
             </fieldset>
             <fieldset class="mem-options__section">
-              <legend>Motion</legend>
-              <label class="mem-reglage">Spread
+              <legend data-i18n="settings.motion">Motion</legend>
+              <label class="mem-reglage"><span data-i18n="settings.spread">Spread</span>
                 <input type="range" id="mem-ecart" min="1" max="30" step="0.5" value="7">
               </label>
-              <label class="mem-reglage">Gravity
+              <label class="mem-reglage"><span data-i18n="settings.gravity">Gravity</span>
                 <input type="range" id="mem-gravite" min="0" max="10" step="0.5" value="6">
               </label>
-              <label class="mem-reglage">Minimum spacing
+              <label class="mem-reglage"><span data-i18n="settings.spacing">Minimum spacing</span>
                 <input type="range" id="mem-marge" min="0" max="20" step="1" value="8">
               </label>
-              <label class="mem-reglage">Signal speed
+              <label class="mem-reglage"><span data-i18n="settings.signalSpeed">Signal speed</span>
                 <input type="range" id="mem-vitesse" min="0.3" max="2" step="0.1" value="1">
               </label>
-              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-rotation" checked> Auto-rotate</label>
-              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-suivre" checked> Follow activity</label>
-              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-fixer" checked> Dragged bubbles stay put</label>
+              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-rotation" checked> <span data-i18n="settings.autoRotate">Auto-rotate</span></label>
+              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-suivre" checked> <span data-i18n="settings.followActivity">Follow activity</span></label>
+              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-fixer" checked> <span data-i18n="settings.keepDragged">Dragged bubbles stay put</span></label>
             </fieldset>
             <fieldset class="mem-options__section">
-              <legend>Links</legend>
-              <label class="mem-reglage">Links at rest
+              <legend data-i18n="settings.linksLegend">Links</legend>
+              <label class="mem-reglage"><span data-i18n="settings.linksAtRest">Links at rest</span>
                 <select id="mem-liens">
-                  <option value="masques">Hidden</option>
-                  <option value="discrets" selected>Subtle</option>
-                  <option value="visibles">Visible</option>
+                  <option value="masques" data-i18n="settings.linksHidden">Hidden</option>
+                  <option value="discrets" selected data-i18n="settings.linksSubtle">Subtle</option>
+                  <option value="visibles" data-i18n="settings.linksVisible">Visible</option>
                 </select>
               </label>
-              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-influx"> Ambient flow</label>
+              <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-influx"> <span data-i18n="settings.ambientFlow">Ambient flow</span></label>
             </fieldset>
             <div class="mem-options__boutons">
-              <button type="button" class="bn-btn" id="mem-liberer">Release all bubbles</button>
-              <button type="button" class="bn-btn" id="mem-recentrer">Recenter</button>
-              <button type="button" class="bn-btn" id="mem-reorganiser">Rearrange</button>
-              <button type="button" class="bn-btn" id="mem-zones">Protected groups</button>
+              <button type="button" class="bn-btn" id="mem-liberer" data-i18n="settings.releaseAll">Release all bubbles</button>
+              <button type="button" class="bn-btn" id="mem-recentrer" data-i18n="settings.recenter">Recenter</button>
+              <button type="button" class="bn-btn" id="mem-reorganiser" data-i18n="settings.rearrange">Rearrange</button>
+              <button type="button" class="bn-btn" id="mem-zones" data-i18n="settings.protectedGroups">Protected groups</button>
             </div>
-            <p class="mem-options__aide">Drag a bubble to move it; double-click it to release it, double-click the background to recenter. The view (settings, layout, camera) is saved on this memglow instance: every browser and device that opens it gets the same view. “Rearrange” starts again from a fresh layout and keeps the settings.</p>
+            <p class="mem-options__aide" data-i18n="settings.help">Drag a bubble to move it; double-click it to release it, double-click the background to recenter. The view (settings, layout, camera) is saved on this memglow instance: every browser and device that opens it gets the same view. “Rearrange” starts again from a fresh layout and keeps the settings.</p>
           </div>
         </details>
       </div>
-      <p class="mem-etat" id="mem-etat" role="status">Loading the graph…</p>
+      <p class="mem-etat" id="mem-etat" role="status" data-i18n="status.loading">Loading the graph…</p>
       <aside class="mem-panneau" id="mem-panneau" hidden aria-live="polite">
-        <button class="bn-btn mem-panneau__fermer" type="button" id="mem-fermer">Close</button>
+        <button class="bn-btn mem-panneau__fermer" type="button" id="mem-fermer" data-i18n="panel.close">Close</button>
         <p class="bn-label" id="mem-p-dossier"></p>
         <h2 class="bn-title bn-title--sm" id="mem-p-titre"></h2>
         <p class="mem-panneau__desc" id="mem-p-desc"></p>
@@ -124,22 +136,23 @@
         <pre class="mem-panneau__corps" id="mem-p-corps" hidden></pre>
       </aside>
     </section>
-    <section class="bn-tile mem-journal" aria-label="Live activity">
-      <p class="bn-label">Live activity</p>
-      <ol class="mem-journal__liste" id="mem-journal"><li class="mem-journal__vide">Waiting for a read, a search or a write…</li></ol>
+    <section class="bn-tile mem-journal" aria-label="Live activity" data-i18n-attr="aria-label:journal.title">
+      <p class="bn-label" data-i18n="journal.title">Live activity</p>
+      <ol class="mem-journal__liste" id="mem-journal"><li class="mem-journal__vide" data-i18n="journal.empty">Waiting for a read, a search or a write…</li></ol>
     </section>
     <section class="bn-tile mg-cost" id="mg-cost" data-cost="/api/cost" aria-labelledby="mg-cost-title">
       <div class="mg-cost__head">
-        <h2 class="bn-label" id="mg-cost-title">Memory cost</h2>
-        <p class="mg-cost__sub">Estimate: ≈ bytes ÷ 4, roughly what an assistant receives when it reads a note. Not a promise of savings — a map of where the reading goes, and which notes to split.</p>
+        <h2 class="bn-label" id="mg-cost-title" data-i18n="cost.title">Memory cost</h2>
+        <p class="mg-cost__sub" data-i18n="cost.subtitle">Estimate: ≈ bytes ÷ 4, roughly what an assistant receives when it reads a note. Not a promise of savings — a map of where the reading goes, and which notes to split.</p>
       </div>
-      <div id="mg-cost-body" aria-live="polite"><p class="mg-cost__empty">Loading…</p></div>
+      <div id="mg-cost-body" aria-live="polite"><p class="mg-cost__empty" data-i18n="common.loading">Loading…</p></div>
     </section>
 {{assistant}}
   </div>
-  <p class="mg-foot">memglow · open source (MIT) · <a href="https://github.com/R0zumnik/memglow" rel="noopener noreferrer">GitHub</a></p>
+  <p class="mg-foot">memglow · <span data-i18n="footer.openSource">open source (MIT)</span> · <a href="https://github.com/R0zumnik/memglow" rel="noopener noreferrer">GitHub</a></p>
 </div>
 <script type="application/json" id="memglow-config">{{config}}</script>
+<script src="/i18n.js?v={{v:i18n.js}}"></script>
 <script src="/vendor/memglow-graph.js?v={{v:vendor/memglow-graph.js}}"></script>
 <script src="/app.js?v={{v:app.js}}"></script>
 <script src="/cost.js?v={{v:cost.js}}"></script>

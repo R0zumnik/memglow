@@ -78,6 +78,19 @@
 - Activity counters keep `started` (first day of counting) and `last` (last read / search / write
   day per note) beyond the 90-day purge; older counter files are migrated on load.
 
+- **Interface in 8 languages**: English (reference), French, German, Spanish, Brazilian
+  Portuguese, Japanese, Korean and Simplified Chinese. Picks `navigator.languages` on first visit,
+  falls back to English; switchable any time from **Settings → Language**, saved with the rest of
+  the view (`lib/view.js` `SETTINGS.language`, `public/app.js` `VIEW_SETTINGS.langue`) like every
+  other setting — one browser's choice follows to any device that opens the same instance. Zero
+  dependency: one JSON file per language in `public/i18n/<code>.json`, served statically with the
+  page's usual security headers, loaded by a small new `public/i18n.js` (`t(key, params)`, simple
+  `{placeholder}` interpolation, `one`/`other` plurals, a plain string for a plural-less language).
+  Product names (Claude Code, Codex, Cursor, Ollama…) and the word "token" are never translated;
+  prompts memglow builds for the AI (the *Copy prompt for your AI* text, and what the optional
+  assistant sends) always stay in English regardless of the interface language. See
+  [Languages](README.md#languages) for how to add one.
+
 - **Assistant (optional, off by default)**: a *Do it with Claude* button next to *Copy prompt for
   your AI* on each large or costly note, and an *Assistant* panel below Memory cost. **The AI only
   proposes; memglow only writes what you approved in a diff, with a backup and Undo.** The user's

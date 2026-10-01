@@ -24,12 +24,17 @@ const { measureFiles, alwaysLoadedCost } = require("./lib/always-loaded");
 const archive = require("./lib/archive");
 
 const PUBLIC = path.join(__dirname, "public");
+// Interface languages shipped (public/i18n/<code>.json); must match lib/view.js SETTINGS.language
+// and public/i18n.js SUPPORTED_LANGS (checked by a test).
+const I18N_LANGS = ["en", "fr", "de", "es", "pt-BR", "ja", "ko", "zh-CN"];
 const STATIC = {
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/app.css": ["app.css", "text/css; charset=utf-8"],
   "/cost.js": ["cost.js", "text/javascript; charset=utf-8"],
   "/zones.js": ["zones.js", "text/javascript; charset=utf-8"],
+  "/i18n.js": ["i18n.js", "text/javascript; charset=utf-8"],
   "/vendor/memglow-graph.js": ["vendor/memglow-graph.js", "text/javascript; charset=utf-8"],
+  ...Object.fromEntries(I18N_LANGS.map((code) => [`/i18n/${code}.json`, [`i18n/${code}.json`, "application/json; charset=utf-8"]])),
 };
 const STREAM_MAX = 20;
 const ACTIVITY_MAX_BYTES = 4096;
@@ -186,8 +191,11 @@ function createServer(config, memory, { counters, views, zones, assistantEnv } =
     };
     // Theme colours: legend dots, and the group tag of the activity journal (tinted by --c).
     const dots = themes.map((t) => `.mem-dot--${t.id}{background:${t.color};box-shadow:0 0 6px ${t.color}}.mem-grp--${t.id}{--c:${t.color}}`).join("");
-    const legend = themes.concat([{ id: "index", label: "Index" }])
-      .map((t) => `<li><button type="button" class="mem-filtre" data-theme="${esc(t.id)}" aria-pressed="true"><span class="mem-dot mem-dot--${esc(t.id)}"></span>${esc(t.label)}</button></li>`)
+    // The index entry's label is translated client-side (data-i18n="theme.index"); every other
+    // label is the instance owner's own theme name (config.themes, or its display name from
+    // Protected groups), never translated.
+    const legend = themes.concat([{ id: "index", label: "Index", i18n: "theme.index" }])
+      .map((t) => `<li><button type="button" class="mem-filtre" data-theme="${esc(t.id)}" aria-pressed="true"><span class="mem-dot mem-dot--${esc(t.id)}"></span><span${t.i18n ? ` data-i18n="${esc(t.i18n)}"` : ""}>${esc(t.label)}</span></button></li>`)
       .join("");
     return template
       .replace(/{{title}}/g, esc(config.title))

@@ -49,6 +49,7 @@
 | 🛡️ **Protected groups** | At first run, pick the big groups no assistant may ever move notes across (rename how they are shown if you like). [More](#protected-groups) |
 | 🗄️ **Archive tier** | Sections unused for months (≈ 3.5 by default) move, word for word, to an archive note of the same theme, with a one-line summary each; the live memory stays small, nothing is lost. [More](#archive) |
 | 🎛️ **Tune it live** | Background, glow, bubble size, size by links or token cost, names and name distance, spread, gravity, spacing, signal speed, links at rest, auto-rotate, find-a-note. Saved in your browser. [Settings](#settings) |
+| 🌐 **8 languages** | English, French, German, Spanish, Brazilian Portuguese, Japanese, Korean, Simplified Chinese — picks your browser's language, switch it any time. [Languages](#languages) |
 | 🔒 **Private by design** | Localhost by default, read-only access to your notes (the optional assistant writes only what you approve), secret-looking lines masked. Hooks send note names only, never content. No CDN, no analytics. |
 | 📦 **Zero dependencies** | One command, Node 18+. No build step, no database. Or one Docker container. |
 
@@ -362,6 +363,7 @@ not answer within a few seconds.
 | | Bubble size | 0.5× to 3× |
 | | Size by | number of links, or token cost |
 | | Group by theme / Sub-themes | clusters and sub-theme bubbles |
+| | Language | interface language — see [Languages](#languages) below |
 | Motion | Spread, Gravity | size of the graph, pull towards each theme |
 | | Minimum spacing | gap kept between bubbles; wins over gravity |
 | | Signal speed | how fast comets run along the links (default 1.8 s per link) |
@@ -373,6 +375,35 @@ Drag a bubble to move it, double-click it to release it; double-click the backgr
 back to the overview. **Rearrange** starts again from a fresh layout (your settings stay). A note
 added later appears next to its sub-theme bubble, without shaking the saved layout. With
 *reduced motion* on, a saved layout is restored without animation.
+
+<a id="languages"></a>
+## 🌐 Languages
+
+The interface ships in English (reference), French, German, Spanish, Brazilian Portuguese,
+Japanese, Korean and Simplified Chinese. It picks your browser's language on first visit
+(`navigator.languages`, falling back to English for anything else), and you can override it any
+time with **Settings → Language** — the choice is saved with the rest of your view, like every
+other setting, so it follows you to any browser or device that opens the same memglow instance.
+Product names (Claude Code, Codex, Cursor, Ollama…) and the word "token" are never translated, by
+design. Prompts memglow builds for your AI (the *Copy prompt for your AI* text, and what the
+optional assistant sends) always stay in English, whatever the interface language — the AI reads
+them, not you.
+
+Zero runtime dependency, no build step: each language is one JSON file in `public/i18n/`, loaded
+by the small `public/i18n.js` on demand. **To add a language**:
+
+1. Copy `public/i18n/en.json` to `public/i18n/<code>.json` (a code like `it`, or `pt-PT`) and
+   translate every value — technical, sober tone; keep every `{placeholder}` exactly as in the
+   English file; a key that needs a plural keeps the `{ "one": "…", "other": "…" }` shape
+   (a language without grammatical plural, like Japanese here, may give one plain string instead).
+   Set `_meta.name` (English name) and `_meta.autonym` (the language's own name for itself, shown
+   in the language picker).
+2. Add the code to `SUPPORTED_LANGS` in `public/i18n.js`, to `SETTINGS.language.values` in
+   `lib/view.js`, to `I18N_LANGS` in `server.js`, and as an `<option>` in the Language `<select>`
+   of `public/index.html`.
+3. Add the same code to `LANGS` at the top of `test/i18n.test.js`, then `npm test` — it checks
+   that the new file has exactly the same keys as `en.json` (none missing, none extra) and the
+   same `{placeholders}`, and that the server actually serves it.
 
 <a id="how-it-works"></a>
 ## 🧭 How it works
