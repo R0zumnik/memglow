@@ -4,92 +4,41 @@
 
 ### Added
 
-- **Journal: machine and channel.** Each line now reads *action · group · note · machine ·
-  channel · tool*, e.g. *Write · Projects · Smart home · laptop · hook · Claude Code* (was
-  *action · group · note · source*). `channel` is a closed list — `hook` (the bundled adapters and
-  the legacy `hooks/memglow-activity.js`), `mcp-proxy`, `file` (a note changed on disk, no hook
-  involved) or `api` (a direct call to the activity API) — and `machine` a short per-sender label
-  (`MEMGLOW_MACHINE`, or `machine` in `~/.memglow/memglow.config.json`; default: short hostname),
-  validated server-side (closed charset, 32 characters at most, never a path or an IP). Both are
-  optional and purely additive: an activity sent without them (every pre-v0.4 sender, any direct
-  `POST /api/activity` that does not set them) displays exactly as before. `POST /api/activity`
-  accepts the two new optional fields; see [docs/api.md](docs/api.md).
+- **MCP server** (`memglow-mcp`, `mcp-server/memglow-mcp.js`, bin `memglow-mcp`): a second,
+  standalone, read-only MCP server, separate from the MCP proxy. It starts entirely on its own —
+  no viewer, no network, no notes folder even required — and lets an assistant query its own
+  memory directly: `memory_health` (notes too large, costliest to read over 7 days, never read in
+  30 days, index size), `split_plan` (a deterministic split suggestion along a note's `##`
+  sections, or an honest "no split needed" under the threshold, plus a ready-to-paste English
+  instruction for the assistant's own memory tool), `related_notes` (notes related to a note —
+  links, sub-theme, and co-usage when activity counters exist — or to a free-text topic), and
+  `note_cost` (token estimate, threshold, status and 7-day reads for one note). No write tool, no
+  full note body ever returned (titles, descriptions and section headings only, secret-masked),
+  and no file is ever written — not the notes, not even memglow's own activity counters. Hand-
+  written JSON-RPC 2.0 over newline-delimited stdio, zero dependency, same reasoning as the
+  existing MCP proxy. Reuses `lib/memory.js` and `lib/cost.js` — same token estimate, same split
+  rule, same secret masking as the viewer and the Memory cost panel.
 
-- **Background: Light preset.** A fourth option next to Deep / Plain / Night blue: a near-white,
-  mint-tinted scene, in the spirit of the project's own light charte. The glow is cut to a trace
-  (threshold raised above the background itself); notes, links, names, sub-theme bubbles, the 3D
-  legend and the read/search/write highlight colours (comets, target rings) are all darkened —
-  same hue, just dark enough to read against white — instead of the near-white tones used on the
-  three dark presets. Nothing changes for Deep, Plain or Night blue. Saved like every other
-  setting (`lib/view.js` → `background`, now `"deep" | "plain" | "night" | "light"`).
-
-- **Protected groups** (`lib/zones.js`): a first-run screen, *"What are your big themes?"*, lists
-  the groups found in the folders and `theme:` keys (note counts, folders); tick the ones to
-  protect and optionally rename how they are shown (display only). Saved in the data folder
-  (`zones.json`, mode 600, atomic) through `PUT /api/zones` — page access rule, `X-Memglow`
-  header + same origin, rate limited, 4 KB body, strict validation; editable in *Settings →
-  Protected groups*; `protectedThemes` in the config file works too (a saved choice wins). The
-  assistant refuses any proposal that would move a note into or out of a protected group, create a
-  note in another group, rename a group or change a protected note's `theme` line (checked per
-  file at validation and again at Apply), and every prompt memglow writes names them.
-- **Organisation suggestions** (`lib/organise.js`, read-only, deterministic): notes of one group
-  strongly tied (a link +2, shared title/description keywords +1 each up to +3; strong at 3) that
-  span 2+ sub-themes, or the only note of a sub-theme tied to another one → *"N notes about X are
-  spread across K sub-themes of G — group them under Y?"*, max 5. New *Organisation* block in
-  Memory cost with *Copy prompt for your AI* and, with the assistant, *Do it with …*: a new
-  `regroup` proposal (`lib/assistant/regroup.js`) — the AI gets metadata only (never note
-  text) and answers `{subtheme, moves, notes}`; memglow edits only the `subtheme`/`sous_theme`
-  line, may move a file to a folder of the same group, updates path links, and refuses group
-  changes, unknown notes or folders, overwrites and any text change. Same diff, one-time token,
-  backup and Undo (moves included). New `memglow-mcp` tool `organisation_suggestions`.
-  Three scattered "docker" notes added to the demo memory to show it.
-- **Always-loaded cost** (`lib/always-loaded.js`): Memory cost shows what is loaded at every
-  session — the index note plus the files listed in `alwaysLoaded` (e.g. `~/.claude/CLAUDE.md`,
-  `AGENTS.md`; size only, never read, only the configured name and ≈ tokens reach the page) —
-  × sessions per day (estimated from index reads over 7 days, else `sessionsPerDay`), with a
-  *trim the index / CLAUDE.md* tip above `indexWarningTokens`. Also in `memory_health`. MCP
-  proxy: new opt-in lever `indexWarning` (`MEMGLOW_PROXY_INDEX_WARNING`) warns once per session
-  when the index note read is above that threshold.
-
-- **Archive tier** (`lib/archive.js`): sections of notes unused for months move, word for word, to
-  an archive note of the same theme (`archive/<theme>-archive.md`), the original note keeps one
-  line `Archived: <section> → [[<theme>-archive#<section>]] (YYYY-MM-DD)`, and an archive summary
-  (`archive/archive-summary.md`, one ≈ 25-token line per archived section) is rebuilt at each
-  application. **Detection** (read only, *Archive* block of Memory cost): a section is dormant when
-  its note was neither read nor found by a search for `archiveAfterDays` days (default 105) and
-  the section was not edited in that time — per section once memglow's new section log
-  (`section-ages.json`: hashes and days, never text) covers the window, per note before that; it
-  needs that much counted history first (*Not enough data yet since …*), lists at most 20
-  sections (biggest first), never the intro, index notes, notes without a theme or the archive
-  itself. Documented limit: counters only see whole-note reads, so reads and searches are judged
-  per note. **Applying**: *Copy prompt for your AI* always; with the assistant on, *Prepare
-  without AI* (memglow builds the verbatim move itself) or *Do it with <provider>* (the AI only
-  reviews the list — titles, sizes, a few masked lines — and chooses what to archive; memglow
-  builds the move). Strict checks before showing and again before writing: every original note
-  rebuilds exactly from the note and its archived sections, each section is in its archive note
-  once and verbatim, same theme, append-only archive notes, never a file memglow did not make,
-  every link names an existing note and heading; then diff, one-time token, backup, Undo.
-  New route `POST /api/assistant/archive` (same access, CSRF and rate rules as the others).
-- **`archive_lookup`** in `memglow-mcp` (read only): the archived sections whose topic or original
-  note matches a query, from the archive summary — references only, never the archived text.
-- **Proxy lever 6, `archiveHint`** (off by default, `MEMGLOW_PROXY_ARCHIVE_HINT`): when a search finds
-  nothing in the live memory, adds "memglow: nothing found in the live memory — the archive summary
-  lists: …" with matching archived section titles only.
-- Activity counters keep `started` (first day of counting) and `last` (last read / search / write
-  day per note) beyond the 90-day purge; older counter files are migrated on load.
-
-- **Interface in 8 languages**: English (reference), French, German, Spanish, Brazilian
-  Portuguese, Japanese, Korean and Simplified Chinese. Picks `navigator.languages` on first visit,
-  falls back to English; switchable any time from **Settings → Language**, saved with the rest of
-  the view (`lib/view.js` `SETTINGS.language`, `public/app.js` `VIEW_SETTINGS.langue`) like every
-  other setting — one browser's choice follows to any device that opens the same instance. Zero
-  dependency: one JSON file per language in `public/i18n/<code>.json`, served statically with the
-  page's usual security headers, loaded by a small new `public/i18n.js` (`t(key, params)`, simple
-  `{placeholder}` interpolation, `one`/`other` plurals, a plain string for a plural-less language).
-  Product names (Claude Code, Codex, Cursor, Ollama…) and the word "token" are never translated;
-  prompts memglow builds for the AI (the *Copy prompt for your AI* text, and what the optional
-  assistant sends) always stay in English regardless of the interface language. See
-  [Languages](README.md#languages) for how to add one.
+- **MCP proxy levers** (`lib/proxy-levers.js`): the proxy can now annotate the memory server's
+  answers to save tokens and round trips — never the notes, which it only reads (cached: one folder
+  scan per poll interval, plus one after each write). Each lever has a switch in
+  `memglow.config.json` → `"proxy"` and a `MEMGLOW_PROXY_*` variable. On by default, and only
+  ever *adding* a text block before or after the server's untouched content: (1) **size warning**
+  when a note over `largeNoteTokens` is read, or written past it, suggesting a split within the
+  same theme (once per note and session); (2) **richer search results** — title, theme, ≈tokens
+  and description of each note found; (3) **context suggestions** — up to 3-5 related notes after
+  a read (links, sub-theme, co-usage), names and sizes only. Off by default, because they change
+  what the assistant receives (measure answer quality first): (4) **session read de-duplication**
+  — an unchanged note re-read in the same session gets a short notice instead of its content;
+  (5) **table of contents first** — a large note comes back as its outline with ≈tokens per
+  section, then one section on demand, cut verbatim from the server's answer (basic-memory's
+  `read_note` has no section parameter). For 4 and 5, an optional `memglow_fresh` argument (added
+  to the read tools in `tools/list`, stripped before the server) or simply repeating the read
+  returns the full note. Tokens saved are logged on stderr and summed per day in
+  `proxy-savings.json` in memglow's data folder. Works in stdio and Streamable HTTP (JSON and SSE)
+  modes; with every lever off the proxy is the same pure byte relay as before. Readers of
+  frontmatter, sections and related notes are shared with the viewer and `memglow-mcp`
+  (`lib/related.js`, `sectionSpans()` in `lib/cost.js`).
 
 - **Assistant (optional, off by default)**: a *Do it with Claude* button next to *Copy prompt for
   your AI* on each large or costly note, and an *Assistant* panel below Memory cost. **The AI only
@@ -124,41 +73,151 @@
   (*Local model — nothing leaves your machine* or *Your note will be sent to <host>*). Per-provider
   settings sections (`assistant.anthropic`, `assistant["openai-compatible"]`).
 
-- **MCP proxy levers** (`lib/proxy-levers.js`): the proxy can now annotate the memory server's
-  answers to save tokens and round trips — never the notes, which it only reads (cached: one folder
-  scan per poll interval, plus one after each write). Each lever has a switch in
-  `memglow.config.json` → `"proxy"` and a `MEMGLOW_PROXY_*` variable. On by default, and only
-  ever *adding* a text block before or after the server's untouched content: (1) **size warning**
-  when a note over `largeNoteTokens` is read, or written past it, suggesting a split within the
-  same theme (once per note and session); (2) **richer search results** — title, theme, ≈tokens
-  and description of each note found; (3) **context suggestions** — up to 3-5 related notes after
-  a read (links, sub-theme, co-usage), names and sizes only. Off by default, because they change
-  what the assistant receives (measure answer quality first): (4) **session read de-duplication**
-  — an unchanged note re-read in the same session gets a short notice instead of its content;
-  (5) **table of contents first** — a large note comes back as its outline with ≈tokens per
-  section, then one section on demand, cut verbatim from the server's answer (basic-memory's
-  `read_note` has no section parameter). For 4 and 5, an optional `memglow_fresh` argument (added
-  to the read tools in `tools/list`, stripped before the server) or simply repeating the read
-  returns the full note. Tokens saved are logged on stderr and summed per day in
-  `proxy-savings.json` in memglow's data folder. Works in stdio and Streamable HTTP (JSON and SSE)
-  modes; with every lever off the proxy is the same pure byte relay as before. Readers of
-  frontmatter, sections and related notes are shared with the viewer and `memglow-mcp`
-  (`lib/related.js`, `sectionSpans()` in `lib/cost.js`).
+- **Protected groups** (`lib/zones.js`): a first-run screen, *"What are your big themes?"*, lists
+  the groups found in the folders and `theme:` keys (note counts, folders); tick the ones to
+  protect and optionally rename how they are shown (display only). Saved in the data folder
+  (`zones.json`, mode 600, atomic) through `PUT /api/zones` — page access rule, `X-Memglow`
+  header + same origin, rate limited, 4 KB body, strict validation; editable in *Settings →
+  Protected groups*; `protectedThemes` in the config file works too (a saved choice wins). The
+  assistant refuses any proposal that would move a note into or out of a protected group, create a
+  note in another group, rename a group or change a protected note's `theme` line (checked per
+  file at validation and again at Apply), and every prompt memglow writes names them.
 
-- **MCP server** (`memglow-mcp`, `mcp-server/memglow-mcp.js`, bin `memglow-mcp`): a second,
-  standalone, read-only MCP server, separate from the MCP proxy. It starts entirely on its own —
-  no viewer, no network, no notes folder even required — and lets an assistant query its own
-  memory directly: `memory_health` (notes too large, costliest to read over 7 days, never read in
-  30 days, index size), `split_plan` (a deterministic split suggestion along a note's `##`
-  sections, or an honest "no split needed" under the threshold, plus a ready-to-paste English
-  instruction for the assistant's own memory tool), `related_notes` (notes related to a note —
-  links, sub-theme, and co-usage when activity counters exist — or to a free-text topic), and
-  `note_cost` (token estimate, threshold, status and 7-day reads for one note). No write tool, no
-  full note body ever returned (titles, descriptions and section headings only, secret-masked),
-  and no file is ever written — not the notes, not even memglow's own activity counters. Hand-
-  written JSON-RPC 2.0 over newline-delimited stdio, zero dependency, same reasoning as the
-  existing MCP proxy. Reuses `lib/memory.js` and `lib/cost.js` — same token estimate, same split
-  rule, same secret masking as the viewer and the Memory cost panel.
+- **Organisation suggestions** (`lib/organise.js`, read-only, deterministic): notes of one group
+  strongly tied (a link +2, shared title/description keywords +1 each up to +3; strong at 3) that
+  span 2+ sub-themes, or the only note of a sub-theme tied to another one → *"N notes about X are
+  spread across K sub-themes of G — group them under Y?"*, max 5. New *Organisation* block in
+  Memory cost with *Copy prompt for your AI* and, with the assistant, *Do it with …*: a new
+  `regroup` proposal (`lib/assistant/regroup.js`) — the AI gets metadata only (never note
+  text) and answers `{subtheme, moves, notes}`; memglow edits only the `subtheme`/`sous_theme`
+  line, may move a file to a folder of the same group, updates path links, and refuses group
+  changes, unknown notes or folders, overwrites and any text change. Same diff, one-time token,
+  backup and Undo (moves included). New `memglow-mcp` tool `organisation_suggestions`.
+  Three scattered "docker" notes added to the demo memory to show it.
+
+- **Always-loaded cost** (`lib/always-loaded.js`): Memory cost shows what is loaded at every
+  session — the index note plus the files listed in `alwaysLoaded` (e.g. `~/.claude/CLAUDE.md`,
+  `AGENTS.md`; size only, never read, only the configured name and ≈ tokens reach the page) —
+  × sessions per day (estimated from index reads over 7 days, else `sessionsPerDay`), with a
+  *trim the index / CLAUDE.md* tip above `indexWarningTokens`. Also in `memory_health`. MCP
+  proxy: new opt-in lever `indexWarning` (`MEMGLOW_PROXY_INDEX_WARNING`) warns once per session
+  when the index note read is above that threshold.
+
+- **Archive tier** (`lib/archive.js`): sections of notes unused for months move, word for word, to
+  an archive note of the same theme (`archive/<theme>-archive.md`), the original note keeps one
+  line `Archived: <section> → [[<theme>-archive#<section>]] (YYYY-MM-DD)`, and an archive summary
+  (`archive/archive-summary.md`, one ≈ 25-token line per archived section) is rebuilt at each
+  application. **Detection** (read only, *Archive* block of Memory cost): a section is dormant when
+  its note was neither read nor found by a search for `archiveAfterDays` days (default 105) and
+  the section was not edited in that time — per section once memglow's new section log
+  (`section-ages.json`: hashes and days, never text) covers the window, per note before that; it
+  needs that much counted history first (*Not enough data yet since …*), lists at most 20
+  sections (biggest first), never the intro, index notes, notes without a theme or the archive
+  itself. Documented limit: counters only see whole-note reads, so reads and searches are judged
+  per note. **Applying**: *Copy prompt for your AI* always; with the assistant on, *Prepare
+  without AI* (memglow builds the verbatim move itself) or *Do it with <provider>* (the AI only
+  reviews the list — titles, sizes, a few masked lines — and chooses what to archive; memglow
+  builds the move). Strict checks before showing and again before writing: every original note
+  rebuilds exactly from the note and its archived sections, each section is in its archive note
+  once and verbatim, same theme, append-only archive notes, never a file memglow did not make,
+  every link names an existing note and heading; then diff, one-time token, backup, Undo.
+  New route `POST /api/assistant/archive` (same access, CSRF and rate rules as the others).
+
+- **`archive_lookup`** in `memglow-mcp` (read only): the archived sections whose topic or original
+  note matches a query, from the archive summary — references only, never the archived text.
+
+- **Proxy lever 6, `archiveHint`** (off by default, `MEMGLOW_PROXY_ARCHIVE_HINT`): when a search finds
+  nothing in the live memory, adds "memglow: nothing found in the live memory — the archive summary
+  lists: …" with matching archived section titles only.
+
+- **Journal: machine and channel.** Each line now reads *action · group · note · machine ·
+  channel · tool*, e.g. *Write · Projects · Smart home · laptop · hook · Claude Code* (was
+  *action · group · note · source*). `channel` is a closed list — `hook` (the bundled adapters and
+  the legacy `hooks/memglow-activity.js`), `mcp-proxy`, `file` (a note changed on disk, no hook
+  involved) or `api` (a direct call to the activity API) — and `machine` a short per-sender label
+  (`MEMGLOW_MACHINE`, or `machine` in `~/.memglow/memglow.config.json`; default: short hostname),
+  validated server-side (closed charset, 32 characters at most, never a path or an IP). Both are
+  optional and purely additive: an activity sent without them (every pre-v0.4 sender, any direct
+  `POST /api/activity` that does not set them) displays exactly as before. `POST /api/activity`
+  accepts the two new optional fields; see [docs/api.md](docs/api.md).
+
+- **Background: Light preset.** A fourth option next to Deep / Plain / Night blue: a near-white,
+  mint-tinted scene, in the spirit of the project's own light charte. The glow is cut to a trace
+  (threshold raised above the background itself); notes, links, names, sub-theme bubbles, the 3D
+  legend and the read/search/write highlight colours (comets, target rings) are all darkened —
+  same hue, just dark enough to read against white — instead of the near-white tones used on the
+  three dark presets. Nothing changes for Deep, Plain or Night blue. Saved like every other
+  setting (`lib/view.js` → `background`, now `"deep" | "plain" | "night" | "light"`).
+
+- **Interface in 8 languages**: English (reference), French, German, Spanish, Brazilian
+  Portuguese, Japanese, Korean and Simplified Chinese. Picks `navigator.languages` on first visit,
+  falls back to English; switchable any time from **Settings → Language**, saved with the rest of
+  the view (`lib/view.js` `SETTINGS.language`, `public/app.js` `VIEW_SETTINGS.langue`) like every
+  other setting — one browser's choice follows to any device that opens the same instance. Zero
+  dependency: one JSON file per language in `public/i18n/<code>.json`, served statically with the
+  page's usual security headers, loaded by a small new `public/i18n.js` (`t(key, params)`, simple
+  `{placeholder}` interpolation, `one`/`other` plurals, a plain string for a plural-less language).
+  Product names (Claude Code, Codex, Cursor, Ollama…) and the word "token" are never translated;
+  prompts memglow builds for the AI (the *Copy prompt for your AI* text, and what the optional
+  assistant sends) always stay in English regardless of the interface language. See
+  [Languages](README.md#languages) for how to add one.
+
+- **v0.4 texts translated**: everything the protected groups, organisation, always-loaded,
+  archive and journal work added to the page goes through the same keys, in all 8 languages
+  (252 keys in all). Organisation suggestions carry their figures and display names (`facts`) and
+  trimming tips their numbers (`tokens`, `threshold`, `name`), so the page words them in its own
+  language; the English `message`, `reasons` and `text` stay in `/api/cost` for the MCP tool,
+  the AI prompts and older pages.
+
+### Changed
+
+- Activity counters keep `started` (first day of counting) and `last` (last read / search / write
+  day per note) beyond the 90-day purge; older counter files are migrated on load.
+
+- **Journal line**: *action · group · note · machine · channel · tool* instead of
+  *action · group · note · source* (see *Journal: machine and channel* above); the `file` and
+  `demo` channels are translated, `hook`, `MCP proxy` and `API` are shown as they are.
+
+- **`memglow-mcp`** now lists six read-only tools: `memory_health` (which also reports the
+  always-loaded cost), `split_plan`, `related_notes`, `note_cost`, `organisation_suggestions` and
+  `archive_lookup`.
+
+- **Memory cost**: two new blocks side by side, *Organisation* and *Always loaded · every
+  session*, then *Archive*. The assistant buttons are named after the default provider
+  (*Do it with <provider>*, was *Do it with Claude*), and the Assistant panel handles three kinds of
+  proposal — split, regroup, archive — with the same diff, one-time token, backup and Undo.
+
+### Fixed
+
+- **Archiving inside a protected group** (found while integrating the protected groups and the
+  archive tier): an archive note is created in the group of the sections it receives, and now says
+  so (`source` on the file), so the protected-groups check accepts it instead of refusing every
+  archive plan that touches a protected group. A forged archive note in another group is still
+  refused.
+
+### Security
+
+- **Protected groups cover every proposal**: split, regroup and archive plans are checked against
+  them when proposed and again at Apply, and every prompt memglow writes for an AI — split, regroup
+  and archive copy prompts included — names them.
+
+- **Assistant**: off by default; when off its routes, script and buttons do not exist (`404`). The
+  AI never gets a tool and never writes: memglow validates, shows the exact diff, needs a one-time
+  server token (2 min, single use), backs up first (no backup, no write) and keeps Undo. Secret-
+  looking lines are masked before anything is sent. API keys only from the environment or a
+  mode-600 file, never sent to the browser, never logged.
+
+- **New write routes** (`PUT /api/zones`, `POST /api/assistant/archive`): same access rule as the
+  page, `X-Memglow` header + same origin, rate limited, small bodies, strict validation;
+  `zones.json` is mode 600, written atomically in the data folder, never in the notes folder.
+
+- **Read-only by construction**: `memglow-mcp` has no write tool and returns no full note body;
+  `archive_lookup` and the proxy's `archiveHint` return titles and references only, never archived
+  text. The journal's `machine` field is validated server-side (closed charset, 32 characters, never
+  a path or an IP).
+
+- **Interface texts**: translations are static files shipped with memglow; note titles, group
+  names, sub-themes and every server text are escaped before they reach `innerHTML`.
 
 ## 0.3.1 — 2026-10-01
 
