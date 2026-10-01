@@ -39,7 +39,7 @@ async function send(type, ids) {
     method: "POST",
     headers: { Authorization: "Bearer " + TOKEN, "Content-Type": "application/json" },
     // demo: true → animated, but not kept in the history nor counted in Memory cost
-    body: JSON.stringify(counted ? { type, ids, source: "demo" } : { type, ids, source: "demo", demo: true }),
+    body: JSON.stringify(counted ? { type, ids, source: "demo", channel: "demo" } : { type, ids, source: "demo", channel: "demo", demo: true }),
   });
   console.log(new Date().toISOString().slice(11, 19), type.padEnd(6), ids.slice(0, 3).join(", "), r.status);
 }

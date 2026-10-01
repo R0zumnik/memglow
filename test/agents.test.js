@@ -45,6 +45,38 @@ test("core: only clean note names leave, never content", () => {
   assert.ok(!JSON.stringify(r).includes("secret"));
 });
 
+test("core: sanitizeMachine — closed charset, length limit, never a path or an IP", () => {
+  assert.strictEqual(core.sanitizeMachine("laptop-2"), "laptop-2", "already valid: unchanged");
+  assert.strictEqual(core.sanitizeMachine("My Laptop!"), "My-Laptop", "cleaned, not rejected outright");
+  assert.strictEqual(core.sanitizeMachine("../etc/passwd"), "etc-passwd", "path separators stripped, no leading dashes");
+  assert.strictEqual(core.sanitizeMachine("x".repeat(80)).length, 32, "truncated to the limit");
+  assert.strictEqual(core.sanitizeMachine("!!!"), "host", "nothing usable left: falls back");
+  assert.strictEqual(core.sanitizeMachine(""), "host");
+  assert.ok(core.MACHINE_RE.test(core.sanitizeMachine("anything at all, really")));
+});
+
+test("core: report() — channel defaults to \"hook\", carries this machine's label, dryRun returns the body unsent", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-report-"));
+  const saved = { MEMGLOW_HOME: process.env.MEMGLOW_HOME, MEMGLOW_MEMORY_DIR: process.env.MEMGLOW_MEMORY_DIR,
+    MEMGLOW_MACHINE: process.env.MEMGLOW_MACHINE, MEMGLOW_TOKEN: process.env.MEMGLOW_TOKEN };
+  process.env.MEMGLOW_HOME = home;
+  process.env.MEMGLOW_MEMORY_DIR = NOTES;
+  process.env.MEMGLOW_MACHINE = "test-rig";
+  process.env.MEMGLOW_TOKEN = "k".repeat(40);
+  try {
+    const evt = { kind: "file", op: "read", path: note("alice") };
+    const body = core.report(evt, "claude-code", { dryRun: true });
+    assert.deepStrictEqual(body, { type: "read", ids: ["alice"], source: "claude-code", channel: "hook", machine: "test-rig" });
+    const proxied = core.report(evt, "mcp", { dryRun: true, channel: "mcp-proxy" });
+    assert.strictEqual(proxied.channel, "mcp-proxy");
+    const bogus = core.report(evt, "mcp", { dryRun: true, channel: "ssh" });
+    assert.strictEqual(bogus.channel, "hook", "an unknown channel falls back to hook, never passed through raw");
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("claude-code: MCP and file tools", () => {
   assert.deepStrictEqual(run("claude-code", { tool_name: "mcp__basic-memory__write_note", tool_input: { title: "bob", directory: "people" } }), [{ type: "write", ids: ["bob"] }]);
   assert.deepStrictEqual(run("claude-code", { tool_name: "Read", tool_input: { file_path: note("alice") } }), [{ type: "read", ids: ["alice"] }]);
@@ -115,7 +147,7 @@ const waitFor = async (fn, ms = 4000) => { const t = Date.now(); while (!fn() &&
 test("hook scripts: expected stdout, exit 0, one POST with ids only", async () => {
   const { srv, got, url } = await receiver();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-home-"));
-  const env = { MEMGLOW_URL: url, MEMGLOW_TOKEN: "k".repeat(40), MEMGLOW_HOME: home, MEMGLOW_MEMORY_DIR: NOTES };
+  const env = { MEMGLOW_URL: url, MEMGLOW_TOKEN: "k".repeat(40), MEMGLOW_HOME: home, MEMGLOW_MEMORY_DIR: NOTES, MEMGLOW_MACHINE: "ci-runner" };
   try {
     const g = await hook("gemini", { tool_name: "read_file", tool_input: { absolute_path: note("alice") } }, [], env);
     assert.deepStrictEqual([g.code, g.out], [0, "{}"]);
@@ -130,7 +162,9 @@ test("hook scripts: expected stdout, exit 0, one POST with ids only", async () =
     for (const r of got) {
       assert.strictEqual(r.url, "/api/activity");
       assert.strictEqual(r.auth, "Bearer " + "k".repeat(40));
-      assert.deepStrictEqual(Object.keys(r.body).sort(), ["ids", "source", "type"]);
+      assert.deepStrictEqual(Object.keys(r.body).sort(), ["channel", "ids", "machine", "source", "type"]);
+      assert.strictEqual(r.body.channel, "hook", "every bundled adapter reports over the hook channel");
+      assert.strictEqual(r.body.machine, "ci-runner");
     }
     assert.deepStrictEqual(got.map((r) => r.body.ids[0]).sort(), ["alice", "bob", "carol"]);
     assert.ok(!JSON.stringify(got).includes("private text"));

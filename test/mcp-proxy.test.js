@@ -83,6 +83,8 @@ test("stdio proxy: bytes relayed unchanged, ids reported (no content), exit code
     assert.strictEqual(got.length, 1, "the failed call is not reported");
     assert.strictEqual(got[0].type, "read");
     assert.strictEqual(got[0].source, "test");
+    assert.strictEqual(got[0].channel, "mcp-proxy", "the proxy reports its own channel by default");
+    assert.ok(got[0].machine, "a machine label is always sent");
     assert.deepStrictEqual(got[0].ids.sort(), ["alice", "bob"]);
     assert.ok(!JSON.stringify(got).includes("secret"));
     p.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "quit" }) + "\n");
