@@ -345,6 +345,12 @@ function hauteurPanneau(basScene, hautPanneau, marge, mini) {
   return Math.max(mini || 140, Math.floor(basScene - hautPanneau - (marge || 16)));
 }
 var CIBLE_COULEUR = { read: "#4DEBFF", write: "#FF4D2E", search: "#C9A6FF" };
+// Same hue family as CIBLE_COULEUR, darkened for contrast on the "Light" background (≥3:1 against
+// its brightest tint, ≈0.93 relative luminance — see FONDS.clair and teinteLisible below).
+var CIBLE_COULEUR_CLAIR = { read: "#0086A8", write: "#B33A1E", search: "#7A4FD1" };
+// The index note's colour on "Light": the usual warm gold (#FFF3D6) is too pale to scale down and
+// stay warm (see teinteLisible), so a proper dark goldenrod is used directly — same hue family.
+var COULEUR_CLAIR_INDEX = "#B8860B";
 function creerCible(opts) {
   "use strict";
   var o = opts || {};
@@ -497,16 +503,55 @@ function creerCollision(rayonDe, margeCourante) {
 }
 
 /* Scene background presets ("Background" setting): deep (default: radial gradient, vignette,
-   faint fixed star dust), plain (#04120F, the former background), night blue. Every tint stays
-   very dark (luminance < 0.03, far below the glow threshold 0.58): the glow never spreads over the
-   background. Data only; the page draws it on a canvas. */
+   faint fixed star dust), plain (#04120F, the former background), night blue, light. Every DARK
+   tint stays very dark (luminance < 0.03, far below the glow threshold 0.58): the glow never
+   spreads over the background. "clair" (Light) is the one deliberate exception — a near-white,
+   faintly mint-tinted gradient (luminance up to ≈0.93) in the spirit of the project's own light
+   charte — so for it alone: no star dust (etoiles: 0), the glow is raised to a threshold above the
+   background itself and cut almost to nothing (seuilLueur, coefLueur — see the Glow slider wiring
+   below), and `clair: true` flags every other place in this file that must darken a colour to stay
+   readable on white (teinteLisible, CIBLE_COULEUR_CLAIR, COULEUR_CLAIR_INDEX). Data only; the page
+   draws it on a canvas. */
 var FONDS = {
   profond: { uni: "#04120F", centre: "#0B2B25", milieu: "#05160F", bord: "#010504", etoiles: 1, teinteEtoile: [205, 255, 232] },
   uni: { uni: "#04120F" },
-  nuit: { uni: "#050B18", centre: "#122447", milieu: "#07102A", bord: "#010208", etoiles: 1.4, teinteEtoile: [210, 225, 255] }
+  nuit: { uni: "#050B18", centre: "#122447", milieu: "#07102A", bord: "#010208", etoiles: 1.4, teinteEtoile: [210, 225, 255] },
+  clair: {
+    uni: "#EEF6F1", centre: "#F3F9F6", milieu: "#E3F0E8", bord: "#D4E6DA", etoiles: 0, teinteEtoile: [255, 255, 255],
+    clair: true, seuilLueur: 0.97, coefLueur: 0.12
+  }
 };
 function fondValide(v) {
   return Object.prototype.hasOwnProperty.call(FONDS, v) ? v : "profond";
+}
+// WCAG-2.1 relative luminance of an sRGB colour (0-1 channels). Pure.
+function luminanceRelative(r, g, b) {
+  function lin(u) { return u <= 0.04045 ? u / 12.92 : Math.pow((u + 0.055) / 1.055, 2.4); }
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+/* On the "Light" background, a colour must be dark enough to read: scaled down — same hue, same
+   ratio between channels, so the same colour family, just darker — until its relative luminance is
+   at or under `max` (default 0.24, ≈3.4:1 against Light's brightest tint). Left unchanged outside
+   "clair" mode, already-dark colours, or an unparsable hex. Pure, no THREE, no DOM: notes, links,
+   comets, sub-theme bubbles and the 3D legend all go through it (see the rendering code below). */
+function teinteLisible(hex, clair, max) {
+  if (!clair || typeof hex !== "string") return hex;
+  var m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+  if (!m) return hex;
+  var seuil = typeof max === "number" ? max : 0.24;
+  var h = m[1];
+  var r = parseInt(h.slice(0, 2), 16) / 255, g = parseInt(h.slice(2, 4), 16) / 255, b = parseInt(h.slice(4, 6), 16) / 255;
+  if (luminanceRelative(r, g, b) <= seuil) return "#" + h.toUpperCase();
+  var lo = 0, hi = 1;
+  for (var i = 0; i < 24; i++) {
+    var mid = (lo + hi) / 2;
+    if (luminanceRelative(r * mid, g * mid, b * mid) > seuil) hi = mid; else lo = mid;
+  }
+  function h2(v) {
+    var n = Math.max(0, Math.min(255, Math.round(v * lo))).toString(16);
+    return n.length < 2 ? "0" + n : n;
+  }
+  return "#" + h2(r * 255) + h2(g * 255) + h2(b * 255);
 }
 
 /* "Name distance": opacity of a name from the camera → note distance. Full up to `seuil`, zero at
@@ -528,11 +573,14 @@ function masquesValides(masques, themes) {
   return out;
 }
 
-/* Activity journal line: ACTION · GROUP · NOTE · SOURCE ("Write · Projects · Release notes ·
-   Claude Code"), for an activity as for "Note changed / New note / Note removed" (source "File":
-   seen on disk). The group is the top-level theme, spelled out (`names`: { themeId: label }).
-   The colour of the dot (the action's colour for an activity on a single note) is decided
-   elsewhere and does not change. o: { type, theme, label, more, source }. Pure. */
+/* Activity journal line: ACTION · GROUP · NOTE · MACHINE · CHANNEL · TOOL ("Write · Projects ·
+   Smart home · laptop · hook · Claude Code"), for an activity as for "Note changed / New note /
+   Note removed" (channel "file": seen on disk, no machine or tool). The group is the top-level
+   theme, spelled out (`names`: { themeId: label }). The colour of the dot (the action's colour
+   for an activity on a single note) is decided elsewhere and does not change.
+   Backward compatible: `machine` and `channel` are optional — an activity sent before v0.4 (or by
+   a sender that does not know about them) has neither, and the line reads exactly as it used to:
+   ACTION · GROUP · NOTE · TOOL. o: { type, theme, label, more, source, machine, channel }. Pure. */
 var JOURNAL_ACTIONS = {
   read: "Read", search: "Search", write: "Write",
   added: "New note", changed: "Note changed", removed: "Note removed"
@@ -540,6 +588,10 @@ var JOURNAL_ACTIONS = {
 var SOURCE_LABELS = {
   claude: "Claude Code", "claude-code": "Claude Code", codex: "Codex", gemini: "Gemini CLI", cursor: "Cursor",
   copilot: "Copilot", windsurf: "Windsurf", cline: "Cline", mcp: "MCP", agent: "Agent", demo: "Demo", file: "File"
+};
+// "channel": how the event reached memglow (see docs/api.md). Unknown values are shown as sent.
+var CHANNEL_LABELS = {
+  hook: "hook", "mcp-proxy": "MCP proxy", file: "file", api: "API", demo: "demo"
 };
 function formatJournalLine(o, names) {
   o = o || {};
@@ -549,14 +601,18 @@ function formatJournalLine(o, names) {
     : theme === "index" ? "Index" : "Other";
   var more = Math.max(0, Math.floor(Number(o.more) || 0));
   var src = typeof o.source === "string" ? o.source : "";
+  var mach = typeof o.machine === "string" ? o.machine : "";
+  var chan = typeof o.channel === "string" ? o.channel : "";
   var p = {
     action: JOURNAL_ACTIONS[o.type] || "Activity",
     theme: theme,
     group: group,
     note: String(o.label == null ? "" : o.label) + (more ? " +" + more : ""),
+    machine: mach,
+    channel: Object.prototype.hasOwnProperty.call(CHANNEL_LABELS, chan) ? CHANNEL_LABELS[chan] : chan,
     source: Object.prototype.hasOwnProperty.call(SOURCE_LABELS, src) ? SOURCE_LABELS[src] : src
   };
-  p.text = [p.action, p.group, p.note, p.source].filter(function(x) { return x; }).join(" · ");
+  p.text = [p.action, p.group, p.note, p.machine, p.channel, p.source].filter(function(x) { return x; }).join(" · ");
   return p;
 }
 
@@ -574,7 +630,7 @@ var VIEW_SETTINGS = {
   distNoms: ["nameDistance", "number", 1, 20],
   lueur: ["glow", "number", 0, 2],
   taille: ["sizeBy", "choice", { liens: "links", jetons: "tokens" }],
-  fond: ["background", "choice", { profond: "deep", uni: "plain", nuit: "night" }],
+  fond: ["background", "choice", { profond: "deep", uni: "plain", nuit: "night", clair: "light" }],
   liens: ["linksAtRest", "choice", { masques: "hidden", discrets: "subtle", visibles: "visible" }],
   noms: ["names", "choice", { aucun: "none", actifs: "active", tous: "all" }],
   rotation: ["autoRotate", "bool"],
@@ -681,9 +737,10 @@ function layoutOf(nodes, max) {
 
 if (typeof module !== "undefined" && module.exports) module.exports = {
   creerSuiviCamera, creerEnveloppe, creerCometes, hauteurPanneau, creerCible, CIBLE_COULEUR,
+  CIBLE_COULEUR_CLAIR, COULEUR_CLAIR_INDEX,
   rayonNote, rayonRelais, facteurTaille, plancherRayon, dureeComete, niveauLien, creerCollision,
-  margeEffective, FONDS, fondValide, opaciteNom, masquesValides, RAYON_INDEX,
-  JOURNAL_ACTIONS, SOURCE_LABELS, formatJournalLine, VIEW_SETTINGS, settingsToLocal, settingsFromLocal,
+  margeEffective, FONDS, fondValide, luminanceRelative, teinteLisible, opaciteNom, masquesValides, RAYON_INDEX,
+  JOURNAL_ACTIONS, SOURCE_LABELS, CHANNEL_LABELS, formatJournalLine, VIEW_SETTINGS, settingsToLocal, settingsFromLocal,
   offsetFor, seedPositions, layoutOf
 };
 (function() {
@@ -828,6 +885,12 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   var reduit = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var avecCorps = CFG.showBodies !== false;
   var URL_NOTE = el.getAttribute("data-note");
+  // "Light" background: every colour read from COULEUR below is darkened first (same hue, see
+  // teinteLisible), and the index note gets a proper dark gold instead of its usual pale warm
+  // white (too pale to scale down and stay warm). CIBLE_COULEUR_ACTIVE does the same for the
+  // read/search/write highlight colour (comets, target rings, dots).
+  var estClair = !!FONDS[modeFond].clair;
+  var CIBLE_COULEUR_ACTIVE = estClair ? CIBLE_COULEUR_CLAIR : CIBLE_COULEUR;
   var COULEUR = { index: "#FFFFFF", autre: "#A9C9BF", other: "#A9C9BF" };
   var NOM_THEME = { index: "Index", autre: "Note", other: "Other" };
   var ORDRE_THEMES = [];
@@ -836,6 +899,10 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     NOM_THEME[t.id] = t.label;
     ORDRE_THEMES.push(t.id);
   });
+  if (estClair) {
+    Object.keys(COULEUR).forEach(function(k) { COULEUR[k] = teinteLisible(COULEUR[k], true); });
+    COULEUR.index = COULEUR_CLAIR_INDEX;
+  }
   var NOM_SOUS_THEME = CFG.subthemeLabels || {};
   function nomSousTheme(id) {
     if (NOM_SOUS_THEME[id]) return NOM_SOUS_THEME[id];
@@ -877,15 +944,21 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     var c = new THREE.Color(COULEUR[themeDe(n)] || COULEUR.autre);
     var e = estIndex ? 1 : eclat(n);
     // The index, "sun" of the graph: warm white above 1 (the glow pass renders in float), so it is
-    // always above the glow threshold, however old its last write.
-    if (estIndex) c.set("#FFF3D6").multiplyScalar(1.15);
+    // always above the glow threshold, however old its last write. On "Light" the glow itself is
+    // cut (see appliquerLueur below), so the index just keeps its already-darkened COULEUR.index
+    // (COULEUR_CLAIR_INDEX) instead of being pushed brighter — pushing it would wash out on white.
+    if (estIndex) { if (!estClair) c.set("#FFF3D6").multiplyScalar(1.15); }
     else c.multiplyScalar(0.25 + 0.95 * e);
-    var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: c.clone(), transparent: true, opacity: 0.55 + 0.45 * e }));
+    // On "Light" a translucent bubble blends toward the (near-white) background, so the opacity
+    // floor is raised: otherwise a recent note, which already has the lowest floor, would nearly
+    // vanish into it.
+    var opaciteBase = estClair ? 0.78 : 0.55, opaciteGamme = estClair ? 0.22 : 0.45;
+    var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: c.clone(), transparent: true, opacity: opaciteBase + opaciteGamme * e }));
     var r = rayonNote({ estIndex, mode: modeTaille, degre: degre[n.id], jetons: n.tokens, facteur });
     m.scale.setScalar(r);
     m.userData.rayon = r;
     m.userData.base = c;
-    m.userData.opacite = 0.55 + 0.45 * e;
+    m.userData.opacite = opaciteBase + opaciteGamme * e;
     m.userData.minPx = estIndex ? 7 : 2.4;
     if (n.__phase === void 0) n.__phase = Math.random() * Math.PI * 2;
     n.__mesh = m;
@@ -973,7 +1046,9 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     }
   }
   function spriteNom(texte) {
-    return spriteTexte(texte, "#EAF4F0", 40, 600, 4.2);
+    // Note names float above their bubble as plain text (no COULEUR tinting): near-white on the
+    // dark presets, dark ink on "Light".
+    return spriteTexte(texte, estClair ? "#1E2A26" : "#EAF4F0", 40, 600, 4.2);
   }
   function spriteTexte(texte, couleur, px, graisse, h) {
     var c = document.createElement("canvas");
@@ -1008,7 +1083,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   var cible = creerCible();
   var couleursCible = {};
   Object.keys(CIBLE_COULEUR).forEach(function(k) {
-    couleursCible[k] = new THREE.Color(CIBLE_COULEUR[k]);
+    couleursCible[k] = new THREE.Color(CIBLE_COULEUR_ACTIVE[k]);
   });
   var texAnneau = null;
   function textureAnneau() {
@@ -1030,7 +1105,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   var ciblees = [];
   var minuterieReduite = null;
   function objetsCible(n, type) {
-    var hex = CIBLE_COULEUR[type];
+    var hex = CIBLE_COULEUR_ACTIVE[type];
     var o = n.__cibleObj;
     if (o && o.type === type) return o;
     if (o) {
@@ -1069,7 +1144,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   }
   function cibler(id, type) {
     var n = parId[id];
-    if (!n || themeDe(n) === "index" || !CIBLE_COULEUR[type]) return;
+    if (!n || themeDe(n) === "index" || !CIBLE_COULEUR_ACTIVE[type]) return;
     var t = performance.now();
     cible.activer(n, type, t);
     objetsCible(n, type);
@@ -1192,7 +1267,10 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   function couleurComete(n) {
     var th = themeDe(n);
     if (!couleursComete[th]) {
-      var c = new THREE.Color(COULEUR[th] || COULEUR.autre).lerp(BLANC, 0.45);
+      var c = new THREE.Color(COULEUR[th] || COULEUR.autre);
+      // Lightened 45% towards white — except on "Light", where COULEUR is already the darkened
+      // (readable) version of the theme colour, and lightening it further would only wash it out.
+      if (!estClair) c.lerp(BLANC, 0.45);
       couleursComete[th] = [c.r, c.g, c.b];
     }
     return couleursComete[th];
@@ -1233,7 +1311,10 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
           posA.needsUpdate = true;
           colA.needsUpdate = true;
           geo2.setDrawRange(0, n);
-          couleurTete.setRGB(col[3 * (n - 1)], col[3 * (n - 1) + 1], col[3 * (n - 1) + 2]).lerp(BLANC, 0.55).multiplyScalar(1.5);
+          couleurTete.setRGB(col[3 * (n - 1)], col[3 * (n - 1) + 1], col[3 * (n - 1) + 2]);
+          // Whitened and pushed above 1 so the comet head is the brightest point of the trip — on
+          // "Light" that would wash it out against the pale background, so it is darkened instead.
+          if (estClair) couleurTete.multiplyScalar(0.8); else couleurTete.lerp(BLANC, 0.55).multiplyScalar(1.5);
           tete.material.color.copy(couleurTete);
         },
         tete: function(x, y, z, echelle, opacite) {
@@ -1279,7 +1360,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   };
   var modeLiens = lireReglage("liens", "discrets");
   if (!REPOS_LIENS[modeLiens]) modeLiens = "discrets";
-  var GRIS_LIEN = new THREE.Color("#A9C9BF");
+  var GRIS_LIEN = new THREE.Color(teinteLisible("#A9C9BF", estClair));
   function materiauLien(l) {
     if (!l.__mat) l.__mat = new THREE.LineBasicMaterial({ color: GRIS_LIEN.clone(), transparent: true, opacity: 0.1, depthWrite: false });
     return l.__mat;
@@ -1837,12 +1918,17 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   if (choixFond) {
     choixFond.value = modeFond;
     choixFond.addEventListener("change", function() {
+      // Note, link and comet colours are picked once per page load from `estClair` (the mode at
+      // load time): switching to or from "Light" here updates the scene gradient and the glow at
+      // once, and the rest catches up on the next load (same preset either way, since the view is
+      // saved on the instance). Re-deriving every colour live would need touching every mesh.
       modeFond = fondValide(choixFond.value);
       garderReglage("fond", modeFond);
       try {
         dessinerFond();
       } catch (e) {
       }
+      appliquerLueur();
     });
   }
   try {
@@ -1874,7 +1960,18 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   var curseurLueur = document.getElementById("mem-lueur");
   var lueur = parseFloat(lireReglage("lueur", "0.9"));
   if (!(lueur >= 0 && lueur <= 2)) lueur = 0.9;
-  if (bloom) bloom.strength = lueur;
+  // On "Light" the background itself is near-white (up to ≈0.93 relative luminance): left at the
+  // base threshold (0.58) it would bloom, washing the whole scene out. FONDS.clair instead raises
+  // the threshold above it and cuts the strength to a trace (seuilLueur, coefLueur) — reapplied
+  // here and on every change of Background or of the Glow slider, so it always matches the CURRENT
+  // preset (unlike note/link colours, this needs no mesh to be touched).
+  function appliquerLueur() {
+    if (!bloom) return;
+    var p = FONDS[modeFond] || FONDS.profond;
+    bloom.threshold = typeof p.seuilLueur === "number" ? p.seuilLueur : 0.58;
+    bloom.strength = lueur * (typeof p.coefLueur === "number" ? p.coefLueur : 1);
+  }
+  appliquerLueur();
   if (curseurLueur) {
     curseurLueur.value = lueur;
     curseurLueur.disabled = !bloom;
@@ -1882,7 +1979,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       var v = parseFloat(curseurLueur.value);
       if (!(v >= 0 && v <= 2)) return;
       garderReglage("lueur", v);
-      if (bloom) bloom.strength = v;
+      lueur = v;
+      appliquerLueur();
     });
   }
   var controles = graphe.controls();
@@ -2323,12 +2421,14 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     heure.textContent = new Date(ligne.t || Date.now()).toLocaleTimeString(void 0, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     var dot = document.createElement("span");
     dot.className = ligne.cible ? "mem-dot mem-dot--cible-" + ligne.cible : "mem-dot mem-dot--" + (ligne.theme || "autre");
-    // ACTION · GROUP · NOTE · SOURCE (formatJournalLine); the group is a small tag tinted with its
-    // colour (.mem-grp--<theme>, generated with the theme colours). Everything in textContent.
+    // ACTION · GROUP · NOTE · MACHINE · CHANNEL · TOOL (formatJournalLine); the group is a small
+    // tag tinted with its colour (.mem-grp--<theme>, generated with the theme colours). Machine and
+    // channel are only present on activity sent by an updated hook/proxy — absent, they are simply
+    // skipped (same backward compatibility as formatJournalLine itself). Everything in textContent.
     var f = ligne.format || formatJournalLine({}, NOM_THEME);
     var txt = document.createElement("span");
     txt.className = "mem-journal__txt";
-    [f.action, f.group, f.note, f.source].forEach(function(m, i) {
+    [f.action, f.group, f.note, f.machine, f.channel, f.source].forEach(function(m, i) {
       if (!m) return;
       if (i > 0) {
         var sep = document.createElement("span");
@@ -2406,7 +2506,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       diff: evt.diff,
       format: formatJournalLine({
         type: evt.type === "added" || evt.type === "removed" ? evt.type : "changed",
-        theme: theme, label: connu && connu.label || evt.id, source: "file"
+        theme: theme, label: connu && connu.label || evt.id, channel: "file"
       }, NOM_THEME)
     });
   }
@@ -2426,7 +2526,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       else if (evt.type === "write") ids.forEach(eclore);
       if (suivi) suivi.viser(noeudsPour(ids));
     }
-    var seule = ids.length === 1 && themeDe(parId[ids[0]]) !== "index" && CIBLE_COULEUR[evt.type];
+    var seule = ids.length === 1 && themeDe(parId[ids[0]]) !== "index" && CIBLE_COULEUR_ACTIVE[evt.type];
     if (seule && !sansAnimation) cibler(ids[0], evt.type);
     var premier = parId[ids[0]];
     var ligne = {
@@ -2436,7 +2536,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       cible: seule ? evt.type : null,
       diff: evt.type === "write" ? evt.diff : null,
       format: formatJournalLine({
-        type: evt.type, theme: themeDe(premier), label: premier.label, more: ids.length - 1, source: evt.source
+        type: evt.type, theme: themeDe(premier), label: premier.label, more: ids.length - 1,
+        source: evt.source, machine: evt.machine, channel: evt.channel
       }, NOM_THEME)
     };
     var deja = ligne.diff && lignesParDiff[ligne.diff];

@@ -228,7 +228,7 @@ not answer within a few seconds.
 | Display | Glow | strength of the glow |
 | | Names | none, active notes only, or all |
 | | Name distance | names fade out beyond this distance (20 = always shown) |
-| | Background | Deep (gradient and faint stars, default), Plain, Night blue |
+| | Background | Deep (gradient and faint stars, default), Plain, Night blue, Light |
 | | Bubble size | 0.5× to 3× |
 | | Size by | number of links, or token cost |
 | | Group by theme / Sub-themes | clusters and sub-theme bubbles |
@@ -304,9 +304,10 @@ link is in each adapter's README.
 
 **Writes from anything are already covered.** memglow polls the notes folder: whenever a note's
 body changes on disk — whoever changed it — the note blooms, the camera goes to it and the
-journal says *Note changed · Projects · Release notes · File* (it also counts as a write in
+journal says *Note changed · Projects · Release notes · file* (it also counts as a write in
 Memory cost). Hooks and the proxy add what the disk cannot tell: **reads and searches**, and
-*which* tool did it — *Read · Projects · Release notes · Claude Code*.
+*which* tool did it, from *which* machine, over *which* channel — e.g.
+*Read · Projects · Release notes · laptop · hook · Claude Code*.
 
 <a id="install"></a>
 ## 🛠️ Install: `memglow init`
@@ -372,11 +373,13 @@ Adapter settings (environment of the AI tool, else `~/.memglow/memglow.config.js
 | `MEMGLOW_TOKEN` / `MEMGLOW_TOKEN_FILE` | `~/.memglow/token` | the server's activity token |
 | `MEMGLOW_MEMORY_DIR` | from `memglow init` | plain file reads / edits count only for `.md` files in this folder |
 | `MEMGLOW_MCP_SERVERS` | `basic-memory,memory,obsidian,notes,filesystem` | MCP servers that count as "memory" |
+| `MEMGLOW_MACHINE` | short hostname | label for this machine in the journal (e.g. "laptop"); also settable as `machine` in `~/.memglow/memglow.config.json` |
 
 Every adapter answers its tool at once, sends the event from a detached process that gives up
 after 3 s, prints nothing else and exits 0: memglow being down never slows your assistant.
 
-The v0.1 Claude Code hook, `hooks/memglow-activity.js`, keeps working unchanged.
+The v0.1 Claude Code hook, `hooks/memglow-activity.js`, keeps working unchanged (it also reads
+`MEMGLOW_MACHINE`, same default).
 
 <a id="activity-api"></a>
 ## 📡 Activity API
@@ -389,9 +392,11 @@ curl -H "Authorization: Bearer $(cat ~/.memglow/token)" -H 'Content-Type: applic
 ```
 
 `type` is `read`, `search` or `write`; `ids` are note names or paths (only existing notes are
-kept); `source` is the label in the journal (each line reads *action · group · note · source*,
-e.g. *Write · Projects · Release notes · my-agent*). Full reference with Python and Node examples:
-[docs/api.md](docs/api.md).
+kept); `source` is the tool shown in the journal (each line reads *action · group · note ·
+machine · channel · tool*, e.g. *Write · Projects · Release notes · laptop · hook · my-agent* —
+`machine` and `channel` are optional extras, v0.4: a short per-sender label and how the event got
+there — `hook`, `mcp-proxy`, `file` or `api`; an event without them shows exactly as before). Full
+reference with Python and Node examples: [docs/api.md](docs/api.md).
 
 <a id="mcp-proxy"></a>
 ## 🔌 MCP proxy

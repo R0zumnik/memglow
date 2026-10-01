@@ -90,6 +90,11 @@ test("view: the page's settings map matches the server's list exactly", () => {
   assert.deepStrictEqual(typed, { spread: 12.5, sizeBy: "tokens", background: "night", autoRotate: false, hiddenThemes: ["people"] });
   assert.deepStrictEqual(view.validateSettings(typed, rules), typed, "what the page sends passes validation");
   assert.deepStrictEqual(page.settingsToLocal(typed), { ecart: "12.5", taille: "jetons", fond: "nuit", rotation: "0", masquesThemes: '{"people":true}' });
+  // "Light" round-trips the same way as the three existing presets.
+  const typedClair = page.settingsFromLocal((k) => (k === "fond" ? "clair" : null));
+  assert.deepStrictEqual(typedClair, { background: "light" });
+  assert.deepStrictEqual(view.validateSettings(typedClair, rules), typedClair);
+  assert.deepStrictEqual(page.settingsToLocal(typedClair), { fond: "clair" });
 });
 
 test("view: saved layout seeds the nodes, new notes go near their bubble", () => {
@@ -122,6 +127,37 @@ test("journal: ACTION · GROUP · NOTE · SOURCE, group spelled out", () => {
   assert.strictEqual(page.formatJournalLine({ type: "removed", theme: "index", label: "Memory", source: "file" }, names).text, "Note removed · Index · Memory · File");
   assert.strictEqual(page.formatJournalLine({ type: "search", theme: "projects", label: "Z", source: "my-tool" }, names).text, "Search · Work · Z · my-tool", "unknown source shown as sent");
   assert.strictEqual(page.formatJournalLine({ type: "added", label: "N" }, names).text, "New note · Other · N");
+});
+
+test("journal: machine and channel (v0.4), backward compatible when absent", () => {
+  const names = { projects: "Work" };
+  // Full line: ACTION · GROUP · NOTE · MACHINE · CHANNEL · TOOL.
+  const f = page.formatJournalLine({
+    type: "write", theme: "projects", label: "Smart home", source: "claude-code", machine: "laptop", channel: "hook",
+  }, names);
+  assert.strictEqual(f.text, "Write · Work · Smart home · laptop · hook · Claude Code");
+  assert.strictEqual(
+    page.formatJournalLine({ type: "read", theme: "projects", label: "X", source: "cursor", channel: "mcp-proxy" }, names).text,
+    "Read · Work · X · MCP proxy · Cursor", "channel label, no machine configured"
+  );
+  assert.strictEqual(
+    page.formatJournalLine({ type: "changed", theme: "projects", label: "Y", channel: "file" }, names).text,
+    "Note changed · Work · Y · file", "a note seen on disk: channel only, no tool"
+  );
+  assert.strictEqual(
+    page.formatJournalLine({ type: "write", theme: "projects", label: "Z", source: "my-agent", channel: "api" }, names).text,
+    "Write · Work · Z · API · my-agent"
+  );
+  assert.strictEqual(
+    page.formatJournalLine({ type: "write", theme: "projects", label: "Z", channel: "unknown-channel" }, names).text,
+    "Write · Work · Z · unknown-channel", "an unrecognised channel is shown as sent, not dropped"
+  );
+  // No machine or channel at all (every sender before v0.4, or one that chooses not to send them):
+  // identical to the pre-v0.4 line.
+  assert.strictEqual(
+    page.formatJournalLine({ type: "write", theme: "projects", label: "Project notes", source: "claude-code" }, names).text,
+    "Write · Work · Project notes · Claude Code"
+  );
 });
 
 // ---- write de-duplication ----

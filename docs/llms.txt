@@ -33,7 +33,7 @@ memglow reads a folder of Markdown notes read-only: a basic-memory knowledge bas
 ## Docs
 
 - [README](https://github.com/R0zumnik/memglow/blob/main/README.md): features, Memory cost, settings, quick start, supported tools, configuration, security, FAQ
-- [Activity API](https://github.com/R0zumnik/memglow/blob/main/docs/api.md): `POST /api/activity` with a bearer token, `{type: read|search|write, ids: [...], source}`
+- [Activity API](https://github.com/R0zumnik/memglow/blob/main/docs/api.md): `POST /api/activity` with a bearer token, `{type: read|search|write, ids: [...], source, channel, machine}` (channel and machine are optional, v0.4: how the event reached memglow — hook, mcp-proxy, file, api — and a short per-machine label)
 - [Changelog](https://github.com/R0zumnik/memglow/blob/main/CHANGELOG.md)
 - [Landing page](https://r0zumnik.github.io/memglow/)
 
