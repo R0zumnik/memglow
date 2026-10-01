@@ -145,13 +145,22 @@ or `MEMGLOW_ASSISTANT=1`. It needs `MEMGLOW_SHOW_BODIES` on (you must see what w
 and a data folder outside your notes (for backups). Off, its routes answer `404` like any unknown
 route, and no button or panel is shown.
 
-**Providers** (`assistant.provider`):
+**Providers** (`assistant.provider` sets the default; every ready provider can be picked in the
+panel when you ask):
 
-| Provider | Runs | Status |
-|---|---|---|
-| `claude-code` (default) | your own Claude Code CLI (`claude`), your subscription or key, on your machine | ✅ supported |
-| `anthropic`, `openai-compatible` (incl. local Ollama / LM Studio) | HTTP APIs | planned |
-| `codex`, `gemini`, `cursor` | their CLIs | not yet: memglow has not verified a way to run them with no tool at all |
+| Provider | Runs | Where your note goes | Status |
+|---|---|---|---|
+| `claude-code` (default) | your own Claude Code CLI (`claude`), your subscription or key | wherever your CLI sends it (Anthropic by default) | ✅ supported |
+| `anthropic` | Anthropic Messages API, your API key | `api.anthropic.com` | ✅ supported |
+| `openai-compatible` + `preset: "openai"` | OpenAI Chat Completions, your key | `api.openai.com` | ✅ supported |
+| `openai-compatible` + `preset: "mistral"` | Mistral, your key | `api.mistral.ai` | ✅ supported |
+| `openai-compatible` + `preset: "openrouter"` | OpenRouter, your key | `openrouter.ai` (then the model's vendor) | ✅ supported |
+| `openai-compatible` + `preset: "ollama"` | Ollama on this machine, `http://127.0.0.1:11434/v1`, no key | **nowhere: it stays on your machine** | ✅ supported |
+| `openai-compatible` + `preset: "lmstudio"` | LM Studio on this machine, `http://127.0.0.1:1234/v1`, no key | **nowhere: it stays on your machine** | ✅ supported |
+| `codex`, `gemini`, `cursor` | their CLIs | — | not yet: memglow has not verified a way to run them with no tool at all |
+
+Any other OpenAI-compatible server works with `baseUrl` instead of `preset` (memglow calls
+`<baseUrl>/chat/completions`).
 
 `claude-code` is run as `claude -p --tools "" --strict-mcp-config --restricted --permission-mode
 dontAsk` with a deny-all permission rule, no session saved, the prompt on stdin (never on the
@@ -159,6 +168,45 @@ command line, never through a shell), in an empty folder of memglow's data folde
 `command` (path to `claude`), `model`, `maxBudgetUsd`, `timeoutMinutes` (default 10). Claude Code
 must be installed and signed in (run `claude` once in a terminal). The panel lists the providers it
 detects and says clearly when one is missing.
+
+**HTTP providers** (`anthropic`, `openai-compatible`) — examples:
+
+```json
+{ "assistant": { "enabled": true, "provider": "anthropic", "model": "claude-sonnet-5-5" } }
+```
+
+```json
+{ "assistant": { "enabled": true, "provider": "openai-compatible", "preset": "ollama", "model": "llama3.1" } }
+```
+
+The top-level `model`, `baseUrl`, `preset`, `maxTokens`, `apiKeyEnv`, `apiKeyFile` apply to the
+default provider. To have several ready at once, give the others their own section, e.g.
+`"anthropic": { "model": "…" }` or `"openai-compatible": { "preset": "lmstudio", "model": "…" }`
+inside `assistant`. `anthropic` defaults to `claude-sonnet-5-5` and `maxTokens` 32000;
+`openai-compatible` needs a `model` (the name your server knows) and sends `max_tokens` only if
+you set `maxTokens`.
+
+- **The API key is never in `memglow.config.json`** — memglow refuses to start the assistant if
+  it finds `apiKey` (or `key`, `token`, `secret`…) there. Put it in the environment variable
+  `MEMGLOW_ASSISTANT_API_KEY` (or the variable named by `apiKeyEnv`, e.g. `"apiKeyEnv":
+  "ANTHROPIC_API_KEY"`), or alone in the file `assistant-api-key` of memglow's data folder
+  (`apiKeyFile` to rename it) with mode `600` — a file other users can read is refused, with the
+  `chmod` to run. The key is sent only to the provider's address (`x-api-key` for Anthropic,
+  `Authorization: Bearer` otherwise), never to the browser (the panel only says *key: set / not
+  set*), never logged, never in an error message. Ollama and LM Studio need no key.
+- **HTTPS is required** for any address that is not this machine (`127.0.0.1`, `::1`,
+  `localhost`): `http://` to anything else is refused, and so is a URL with a user name or
+  password in it. Redirects are not followed. In Docker, a model on the host is not loopback
+  from inside the container: run memglow with host networking, or put the model behind HTTPS.
+- **Before you click Propose**, the panel says where the note goes: *Local model — nothing leaves
+  your machine*, or *Your note will be sent to api.example.com*.
+- **What is sent** is exactly the prompt built for every provider, nothing else from your memory:
+  the note you picked (secret-looking lines replaced by placeholders), its title, group, size and
+  sections, the lines of other notes that link to it, the names of your existing notes (so new
+  files never reuse one), and your optional extra instructions. No tool is declared in the request
+  (no `tools` / `functions`); an answer that tries to call one is rejected, as is an answer that is
+  not valid JSON, cut off, or larger than 4 MB. Each request is time-limited (`timeoutMinutes`).
+  HTTP errors are reported plainly (401 key refused, 429 rate limit with its delay, 5xx).
 
 With **basic-memory**, memglow writes the Markdown files directly; basic-memory re-indexes changed
 files on its own (its sync watches the folder). New notes have no `permalink` until basic-memory
@@ -453,7 +501,11 @@ With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 | `MEMGLOW_ASSISTANT` / `assistant.enabled` | off | the optional [assistant](#assistant) (`1` on, `0` off whatever the file says) |
 | `MEMGLOW_ASSISTANT_PROVIDER` / `assistant.provider` | `claude-code` | which AI proposes |
 | `MEMGLOW_ASSISTANT_COMMAND` / `assistant.command` | `claude` | path of the Claude Code CLI |
-| `MEMGLOW_ASSISTANT_MODEL` / `assistant.model` | CLI default | model name passed to the provider |
+| `MEMGLOW_ASSISTANT_MODEL` / `assistant.model` | CLI default; `claude-sonnet-5-5` for `anthropic` | model name passed to the provider |
+| `MEMGLOW_ASSISTANT_BASE_URL` / `assistant.baseUrl` | — | API address of `openai-compatible` (or another Anthropic endpoint); HTTPS unless on this machine |
+| `MEMGLOW_ASSISTANT_PRESET` / `assistant.preset` | — | `openai`, `mistral`, `openrouter`, `ollama`, `lmstudio` (fills `baseUrl`) |
+| `MEMGLOW_ASSISTANT_API_KEY` | — | API key of the HTTP provider (never in the config file); or `assistant.apiKeyEnv` = name of another variable, or a mode-600 file `assistant-api-key` (`assistant.apiKeyFile`) in the data folder |
+| `assistant.maxTokens` | `32000` (`anthropic`), unset | longest answer allowed |
 | `assistant.timeoutMinutes`, `assistant.maxBudgetUsd` | `10`, — | stop a proposal after this long; spending cap for Claude Code |
 | `assistant.backup` | `auto` | `auto` (git snapshot if the notes are a git repository, else a copy), `git` or `copy` |
 | `assistant.allowMissingLines` | `0` | how many original lines may be missing from a proposal (0 = none) |
@@ -498,7 +550,10 @@ container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same toke
   memglow's checks refuse or that you see, line by line, before deciding. Applying needs a
   one-time server token (256 bits, 2 minutes, single use, only its hash kept); a backup that fails
   stops everything. memglow's logs carry job ids, states and durations — never note text nor the
-  AI's answer. Secret-looking lines are replaced by placeholders before anything is sent.
+  AI's answer. Secret-looking lines are replaced by placeholders before anything is sent. HTTP
+  providers: API key only from an environment variable or a mode-600 file (refused in the config
+  file), never sent to the browser, logged or shown in an error; HTTPS required off this machine;
+  no redirect followed; answers capped in time and size.
 - By default it listens on `127.0.0.1` only. If you expose it, set `MEMGLOW_PASSWORD` and put it
   behind HTTPS.
 - Without a password, memglow only answers requests addressed to `localhost`, `127.0.0.1` or
@@ -584,10 +639,11 @@ up the notes (git snapshot or copy) and writes only then, with Undo. Off by defa
 <details>
 <summary><b>Can the assistant run with something else than Claude Code?</b></summary>
 
-Not yet. memglow only enables an AI it can run with **no tool at all**, and it has verified that
-for Claude Code only. HTTP APIs (Anthropic, OpenAI-compatible including local Ollama / LM Studio)
-are planned; Codex, Gemini and Cursor CLIs are listed in the panel when installed but stay off
-until memglow can verify the same guarantee.
+Yes: the Anthropic API with your key, or any OpenAI-compatible API — OpenAI, Mistral, OpenRouter,
+or a model on your own machine with Ollama or LM Studio, where nothing leaves your computer. See
+[Providers](#assistant). memglow only enables an AI it can run with **no tool at all**: HTTP
+requests declare none. Codex, Gemini and Cursor CLIs are listed in the panel when installed but
+stay off until memglow can verify the same guarantee.
 </details>
 
 <details>

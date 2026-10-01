@@ -28,6 +28,8 @@
     "enabled": false,
     "provider": "claude-code",
     "timeoutMinutes": 10,
-    "backup": "auto"
+    "backup": "auto",
+    "anthropic": { "model": "claude-sonnet-5-5", "maxTokens": 32000 },
+    "openai-compatible": { "preset": "ollama", "model": "llama3.1" }
   }
 }

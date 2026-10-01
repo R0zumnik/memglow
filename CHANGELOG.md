@@ -19,8 +19,23 @@
   changed since). Secret-looking lines are replaced by placeholders before the note is sent.
   Enabled with `assistant.enabled` / `MEMGLOW_ASSISTANT=1`; its routes answer `404` otherwise;
   same access rule as the page, CSRF header + same origin, rate limited, one job at a time.
-  Providers are adapters (`lib/assistant/providers/`): `claude-code` today; HTTP APIs and the
-  Codex, Gemini and Cursor CLIs are listed as not supported yet.
+  Providers are adapters (`lib/assistant/providers/`); the Codex, Gemini and Cursor CLIs are
+  listed as not supported yet.
+
+- **Assistant HTTP providers**: `anthropic` (Messages API, streamed, your key; default model
+  `claude-sonnet-5-5`) and `openai-compatible` (`<baseUrl>/chat/completions`, streamed) with
+  presets `openai`, `mistral`, `openrouter`, `ollama` (`http://127.0.0.1:11434/v1`) and `lmstudio`
+  (`http://127.0.0.1:1234/v1`) — local models need no key and nothing leaves the machine. Native
+  `fetch`, no dependency. Same prompt and same validation as `claude-code`; no tool declared, an
+  answer calling one is rejected, as is invalid JSON, a cut-off answer or one over 4 MB; time
+  limit; no redirect followed; clean messages for 401 / 429 (with its delay) / 5xx. The API key
+  comes only from `MEMGLOW_ASSISTANT_API_KEY` (or the variable named by `assistant.apiKeyEnv`) or
+  a mode-600 `assistant-api-key` file in the data folder — a key in `memglow.config.json` or a
+  readable key file is refused with a message; never sent to the browser (*key: set / not set*),
+  never logged, never in an error. HTTPS required for any non-loopback address. The panel lets
+  you pick any ready provider per request and says, before *Propose*, where the note goes
+  (*Local model — nothing leaves your machine* or *Your note will be sent to <host>*). Per-provider
+  settings sections (`assistant.anthropic`, `assistant["openai-compatible"]`).
 
 - **MCP proxy levers** (`lib/proxy-levers.js`): the proxy can now annotate the memory server's
   answers to save tokens and round trips — never the notes, which it only reads (cached: one folder

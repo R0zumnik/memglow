@@ -92,20 +92,45 @@ function aiRenderHistory(h, currentId) {
 
 function aiRenderProviders(list, current) {
   return (list || []).map(function (p) {
-    var state = !p.implemented ? "not supported yet" : p.available ? "ready" : p.detected ? "installed, not ready" : "not found";
-    return '<li' + (p.id === current ? ' class="mg-ai__current"' : '') + '><code>' + aiEsc(p.id) + '</code> ' + aiEsc(p.label) + ' — ' + aiEsc(state) + (p.id === current ? " (selected)" : "") + '</li>';
+    var state = !p.implemented ? "not supported yet" : p.available ? "ready" : p.detected ? "installed, not ready" : "not set up";
+    var extra = "";
+    if (p.kind === "http" && p.implemented) {
+      extra = ' <span class="mg-ai__meta">' + (p.destination ? (p.local ? "on this machine (" + aiEsc(p.destination) + ")" : "sends to " + aiEsc(p.destination)) : "no URL") +
+        (p.model ? " · model " + aiEsc(p.model) : "") + " · key: " + aiEsc(p.key || "not set") + '</span>';
+    }
+    var why = p.implemented && !p.available && p.reason ? '<br><span class="mg-ai__meta">' + aiEsc(p.reason) + '</span>' : "";
+    return '<li' + (p.id === current ? ' class="mg-ai__current"' : '') + '><code>' + aiEsc(p.id) + '</code> ' + aiEsc(p.label) + ' — ' + aiEsc(state) + (p.id === current ? " (default)" : "") + extra + why + '</li>';
   }).join("");
 }
 
-function aiAskForm(noteId, label) {
+/** Where the note goes with this provider, said BEFORE the user asks. */
+function aiDestination(p) {
+  if (!p) return "";
+  if (p.kind === "http") {
+    if (p.local) return '<p class="mg-ai__dest mg-ai__dest--local" id="mg-ai-dest">Local model — nothing leaves your machine (' + aiEsc(p.destination) + ').</p>';
+    return '<p class="mg-ai__dest" id="mg-ai-dest">Your note will be sent to <strong>' + aiEsc(p.destination || "?") + '</strong>' + (p.model ? ' (model ' + aiEsc(p.model) + ')' : '') + '.</p>';
+  }
+  return '<p class="mg-ai__dest" id="mg-ai-dest">Your note will be sent through your ' + aiEsc(p.label) + ' (to Anthropic, or wherever your CLI is set up to send it).</p>';
+}
+
+/** `providers` = the status list, `current` = the default provider id. */
+function aiAskForm(noteId, label, providers, current) {
+  var ready = (providers || []).filter(function (p) { return p.implemented && p.available; });
+  var sel = ready.filter(function (p) { return p.id === current; })[0] || ready[0] || null;
+  var picker = ready.length > 1
+    ? '<label class="mg-ai__extra">AI<select id="mg-ai-provider">' + ready.map(function (p) {
+      return '<option value="' + aiEsc(p.id) + '"' + (p === sel ? " selected" : "") + '>' + aiEsc(p.label) + '</option>';
+    }).join("") + '</select></label>'
+    : "";
   return '<p class="mg-ai__title">Split <strong>' + aiEsc(label || noteId) + '</strong>?</p>' +
-    '<p class="mg-ai__msg">The note is sent to the AI, which answers with a proposal. Nothing is written until you approve the exact changes.</p>' +
+    '<p class="mg-ai__msg">The note is sent to the AI, which answers with a proposal. Nothing is written until you approve the exact changes. Lines that look like secrets are replaced by placeholders first.</p>' +
+    picker + aiDestination(sel) +
     '<label class="mg-ai__extra">Extra instructions (optional)<textarea id="mg-ai-extra" maxlength="1000" rows="2"></textarea></label>' +
-    '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="propose" data-note="' + aiEsc(noteId) + '">Ask for a proposal</button><button type="button" class="bn-btn" data-ai="close">Not now</button></div>';
+    '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="propose" data-note="' + aiEsc(noteId) + '"' + (sel ? ' data-provider="' + aiEsc(sel.id) + '"' : '') + '>Propose</button><button type="button" class="bn-btn" data-ai="close">Not now</button></div>';
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { aiEsc: aiEsc, aiRenderJob: aiRenderJob, aiRenderHistory: aiRenderHistory, aiRenderProviders: aiRenderProviders, aiAskForm: aiAskForm, aiDiff: aiDiff };
+  module.exports = { aiEsc: aiEsc, aiRenderJob: aiRenderJob, aiRenderHistory: aiRenderHistory, aiRenderProviders: aiRenderProviders, aiAskForm: aiAskForm, aiDiff: aiDiff, aiDestination: aiDestination };
 }
 
 (function () {
@@ -118,7 +143,7 @@ if (typeof module !== "undefined" && module.exports) {
   var elJob = document.getElementById("mg-ai-job");
   var elHist = document.getElementById("mg-ai-history");
   var elProv = document.getElementById("mg-ai-providers");
-  var st = null, asking = null, lastNote = null, lastExtra = "";
+  var st = null, asking = null, lastNote = null, lastExtra = "", lastProvider = "";
 
   function post(action, body) {
     return fetch(api + "/" + action, {
@@ -140,8 +165,8 @@ if (typeof module !== "undefined" && module.exports) {
     if (!st) return;
     if (!st.available) say(st.reason || "The assistant is not available.", true);
     else say("Ready — provider: " + st.provider.label + ".", false);
-    if (asking && !(st.job && (st.job.state === "running" || st.job.state === "applying"))) elJob.innerHTML = aiAskForm(asking.id, asking.label);
-    else elJob.innerHTML = aiRenderJob(st.job, st.provider && st.provider.label);
+    if (asking && !(st.job && (st.job.state === "running" || st.job.state === "applying"))) elJob.innerHTML = aiAskForm(asking.id, asking.label, st.providers, st.provider && st.provider.id);
+    else elJob.innerHTML = aiRenderJob(st.job, labelOfProvider(st.job && st.job.provider));
     elHist.innerHTML = aiRenderHistory(st.history, st.job && st.job.id);
     elProv.innerHTML = aiRenderProviders(st.providers, st.provider && st.provider.id);
   }
@@ -152,6 +177,23 @@ if (typeof module !== "undefined" && module.exports) {
     }).then(function (s) { st = s; render(); }).catch(function () { say("Could not reach memglow: reload the page.", true); });
   }
   function fail(e) { say(e.message || String(e), true); load(); }
+
+  function providerOf(id) {
+    return ((st && st.providers) || []).filter(function (p) { return p.id === id; })[0] || null;
+  }
+  function labelOfProvider(id) {
+    var p = providerOf(id);
+    return p ? p.label : st && st.provider && st.provider.label;
+  }
+  // Another AI picked in the form: say where the note will go before the click on Propose.
+  root.addEventListener("change", function (e) {
+    if (!e.target || e.target.id !== "mg-ai-provider") return;
+    var p = providerOf(e.target.value);
+    var dest = document.getElementById("mg-ai-dest");
+    if (dest && p) dest.outerHTML = aiDestination(p);
+    var btn = root.querySelector('[data-ai="propose"]');
+    if (btn && p) btn.setAttribute("data-provider", p.id);
+  });
 
   function labelOf(id) {
     var row = document.querySelector('[data-note="' + String(id).replace(/["\\]/g, "") + '"] .mg-cost__label');
@@ -175,8 +217,9 @@ if (typeof module !== "undefined" && module.exports) {
       var note = what === "propose" ? b.getAttribute("data-note") : (st && st.job && st.job.note && st.job.note.id) || lastNote;
       var ta = document.getElementById("mg-ai-extra");
       var extra = what === "propose" ? (ta ? ta.value : "") : lastExtra;
-      lastNote = note; lastExtra = extra; asking = null;
-      post("propose", { note: note, extra: extra }).then(function (o) { st.job = o.job; render(); }).catch(fail);
+      var prov = what === "propose" ? (b.getAttribute("data-provider") || "") : (st && st.job && st.job.provider) || lastProvider;
+      lastNote = note; lastExtra = extra; lastProvider = prov; asking = null;
+      post("propose", { note: note, extra: extra, provider: prov }).then(function (o) { st.job = o.job; render(); }).catch(fail);
     } else if (what === "apply") {
       // Two steps, one click: a one-time server token, then apply with it.
       post("confirm", { job: job }).then(function (o) { return post("apply", { job: job, token: o.token }); }).then(load).catch(fail);

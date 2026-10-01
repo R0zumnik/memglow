@@ -456,6 +456,10 @@ a { color: var(--bn-accent-teal); }
 .mg-ai__apply { border-color: var(--bn-accent-teal); color: var(--bn-accent-teal); }
 .mg-ai__hint { margin: 6px 0 0; font-size: 12px; color: var(--bn-ink-dim); }
 .mg-ai__extra { display: block; margin: 6px 0; font-size: 12px; color: var(--bn-ink-dim); }
+.mg-ai__extra select { display: block; margin-top: 4px; font: inherit; font-size: 13px; background: var(--bn-surface); color: var(--bn-ink); border: 1px solid var(--bn-line); border-radius: 8px; padding: 4px 6px; max-width: 100%; }
+.mg-ai__dest { margin: 6px 0; font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--bn-line); }
+.mg-ai__dest--local { border-style: dashed; }
+.mg-ai__meta { font-size: 12px; color: var(--bn-ink-dim); }
 .mg-ai__extra textarea { display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 13px; background: var(--bn-surface); color: var(--bn-ink); border: 1px solid var(--bn-line); border-radius: 8px; padding: 6px 8px; }
 .mg-ai__sub { margin: 12px 0 4px; font-size: 12px; color: var(--bn-ink-dim); text-transform: uppercase; letter-spacing: 0.06em; }
 .mg-ai__recent { list-style: none; margin: 0; padding: 0; font-size: 13px; }

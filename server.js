@@ -307,7 +307,7 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
         const id = typeof body.job === "string" && /^[0-9a-f]{16}$/.test(body.job) ? body.job : "";
         let r;
         switch (am[1]) {
-          case "propose": r = assistant.propose(String(body.note || ""), { extra: typeof body.extra === "string" ? body.extra : "" }); break;
+          case "propose": r = assistant.propose(String(body.note || ""), { extra: typeof body.extra === "string" ? body.extra : "", provider: typeof body.provider === "string" ? body.provider.slice(0, 40) : "" }); break;
           case "confirm": r = assistant.confirm(id); break;
           case "apply": r = assistant.apply(id, body.token); break;
           case "undo": r = assistant.undo(id); break;
