@@ -104,6 +104,21 @@ own memory, from the activity your hooks report:
   per day* — sessions per day are estimated from the reads of the index note over the last 7
   days (an assistant reads it once per session), otherwise `sessionsPerDay` (default 5). Above
   `indexWarningTokens` (default 2,000) you get a tip: *trim the index / CLAUDE.md*.
+- **Time to find a note · 7 days** — from the activity memglow already receives: for each
+  search, the first read by the same assistant (same source, machine and channel) within
+  **2 minutes**. Median time to the note, median steps (each extra search before the read is one
+  more step), the share of searches with no read after, and the 5 slowest or missed searches —
+  note **titles** only. A search answered from its results alone also counts as "no read after":
+  memglow cannot tell it from a search that gave up. Searches that found nothing are counted only
+  through the [MCP proxy](#mcp-proxy) (a hook reports nothing then).
+- **Memory engine speed · 7 days** — how long the memory server takes to answer, per tool type
+  (search / read / write): calls, median (p50) and 95th percentile (p95). Measured by the
+  [MCP proxy](#mcp-proxy) for every tool call (request forwarded → response back) and sent with
+  the activity as `durationMs` (memglow keeps it only if it is a number between 0 and 600,000 ms).
+  Hooks have no timing, so without the proxy this block stays empty. **Slow-search alert**: shown
+  when, with at least 10 searches in each window, the median of the last 24 hours is at least
+  **2×** the median of the 6 days before **and** at least **250 ms** slower (the floor keeps a
+  20 → 45 ms wobble on a fast local server from alerting).
 
 **How Organisation decides** (deterministic, explainable, capped at 5 suggestions of 12 notes):
 keywords of a note = words of 4+ letters of its title, id and description (minus common words
@@ -117,7 +132,7 @@ this.
 
 Numbers are **estimates** (≈ bytes ÷ 4, not a tokenizer), meant to compare notes with each
 other — memglow promises no saving. Memory cost never touches your notes: the counts (note
-ids, days and numbers only; per-day counts kept 90 days, plus the last day each note was read, found or written) live in its own data folder, `~/.memglow` by default
+ids, days and numbers only; per-day counts kept 90 days, plus the last day each note was read, found or written; for *Time to find a note* and *Memory engine speed*, 8 days of search/read events — note ids, a source label, times — and of durations, in `find-time.json` and `engine-speed.json`) live in its own data folder, `~/.memglow` by default
 (`MEMGLOW_DATA_DIR`, `/data` in Docker). A note whose text changes on disk counts as a write even
 without a hook (an assistant without hooks, an edit by hand); when a hook reports the same write
 within 15 seconds, it is counted once. Activity sent with `"demo": true` is animated but not
@@ -576,7 +591,10 @@ curl -H "Authorization: Bearer $(cat ~/.memglow/token)" -H 'Content-Type: applic
 kept); `source` is the tool shown in the journal (each line reads *action · group · note ·
 machine · channel · tool*, e.g. *Write · Projects · Release notes · laptop · hook · my-agent* —
 `machine` and `channel` are optional extras, v0.4: a short per-sender label and how the event got
-there — `hook`, `mcp-proxy`, `file` or `api`; an event without them shows exactly as before). Full
+there — `hook`, `mcp-proxy`, `file` or `api`; an event without them shows exactly as before).
+`durationMs` (optional, v0.4, sent by the MCP proxy) is the memory server's response time for
+that call, used by *Memory engine speed*; a value that is not a number from 0 to 600,000 is
+ignored. Full
 reference with Python and Node examples: [docs/api.md](docs/api.md).
 
 <a id="mcp-proxy"></a>

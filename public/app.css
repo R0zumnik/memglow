@@ -637,6 +637,17 @@ a { color: var(--bn-accent-teal); }
 /* Archive block (dormant sections) */
 .mg-arch { margin-top: var(--bn-space-4); }
 .mg-arch__hint { margin: 0 0 var(--bn-space-2); font-size: 12px; color: var(--bn-ink-dim); max-width: 760px; }
+/* Time to find a note, memory engine speed (public/cost.js costFindTime / costEngineSpeed) */
+.mg-cost__figs--three { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 4px; }
+.mg-cost__figs--three .mg-cost__fig-val { font-size: 18px; }
+.mg-cost__minor { margin: var(--bn-space-2) 0 4px; font-size: 12px; font-weight: 600; color: var(--bn-ink-dim); }
+.mg-cost__hint { margin: var(--bn-space-2) 0 0; font-size: 11px; color: var(--bn-ink-dim); line-height: 1.45; }
+.mg-cost__alert { margin: 0 0 var(--bn-space-2); padding: 6px 10px; border-radius: 8px; font-size: 13px; color: #FFB86B; background: rgba(255, 184, 107, 0.10); border: 1px solid rgba(255, 184, 107, 0.35); }
+.mg-cost__table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.mg-cost__table th, .mg-cost__table td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--bn-line); }
+.mg-cost__table th:first-child { text-align: left; }
+.mg-cost__table thead th { font-size: 11px; font-weight: 600; color: var(--bn-ink-dim); }
+.mg-cost__table td { color: #FFFFFF; }
 .mg-arch__row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 2px 10px; padding: 5px 8px; border-radius: 8px; font-size: 13px; cursor: pointer; }
 .mg-arch__row:hover { background: rgba(255, 255, 255, 0.05); }
 .mg-arch__row input { margin: 0; grid-row: 1 / span 2; accent-color: var(--bn-accent-teal); }

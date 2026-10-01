@@ -4,6 +4,20 @@
 
 ### Added
 
+- **Memory cost → Time to find a note · 7 days** (`lib/find-time.js`): from the activity memglow
+  already receives, for each search the first read by the same actor (source + machine + channel)
+  within 2 minutes — median time to the note, median steps, share of searches with no read after,
+  and the 5 slowest or missed searches (titles only). A search through the MCP proxy that found no
+  known note is now reported too (no ids; not animated, `202` as before) so it counts as missed.
+  Stored as ids, a source label and times in `find-time.json` in the data folder (8 days).
+- **Memory cost → Memory engine speed · 7 days** (`lib/engine-speed.js`): the MCP proxy times
+  every tool call against the memory server (monotonic clock, request forwarded → response back)
+  and sends `durationMs` with the activity; memglow keeps it only as a number from 0 to 600,000 ms
+  and shows calls, p50 and p95 per tool type (search / read / write), plus a slow-search alert
+  (≥ 10 searches in each window, last-24-hour median ≥ 2× the 6 days before and ≥ 250 ms slower).
+  `engine-speed.json` in the data folder (8 days). Both blocks are translated in the 8 languages;
+  durations use the browser's `Intl` unit names.
+
 - **Settings → Forces** (Repulsion, Link force, Link distance, 0.2×–3×, a "Reset forces" button)
   and **Settings → Links → Link opacity** (0×–3×): multipliers around the values already set by
   Spread/Gravity/Minimum spacing and the "Links at rest" preset — default 1× is today's look,

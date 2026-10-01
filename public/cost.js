@@ -40,6 +40,29 @@ var EN_COST = {
   "cost.copied": "Copied ✓", "cost.selectManually": "Select and copy the text below",
   "cost.promptToCopy": "Prompt to copy", "cost.doWith": "Do it with {name}", "cost.organisation": "Organisation",
   "cost.alwaysLoaded": "Always loaded · every session", "cost.archive": "Archive · sections unused for {n} days",
+  "cost.findTime": "Time to find a note · 7 days",
+  "cost.engineSpeed": "Memory engine speed · 7 days",
+  "find.none": "No search counted in the last 7 days yet.",
+  "find.medianTime": "Median time to the note",
+  "find.medianSteps": "Median steps",
+  "find.missed": "Searches with no read after",
+  "find.counted": { one: "{n} search counted", other: "{n} searches counted" },
+  "find.slowest": "Slowest or missed searches",
+  "find.gone": "(note no longer exists)",
+  "find.missedRow": "Search with no read within 2 min",
+  "find.missedShort": "No read",
+  "find.steps": { one: "{n} step", other: "{n} steps" },
+  "find.hint": "From the activity memglow receives: each search, then the first read by the same assistant within 2 minutes (each extra search is one more step). A search answered from its results alone also counts as “no read after”.",
+  "speed.none": "No timed call yet: response times are measured by the memglow MCP proxy.",
+  "speed.alert": "Search is getting slower: median {recent} over the last 24 hours, against {base} over the 6 days before.",
+  "speed.tool": "Tool",
+  "speed.calls": "Calls",
+  "speed.p50": "Median",
+  "speed.p95": "95th percentile",
+  "speed.search": "Search",
+  "speed.read": "Read",
+  "speed.write": "Write",
+  "speed.hint": "Time the memory server takes to answer each call, measured by the memglow MCP proxy (request to response). Alert when the search median of the last 24 hours is at least twice that of the 6 days before, and at least 250 ms slower.",
   "org.none": "No scattered notes found: every subject sits in one sub-theme.", "org.why": "Why",
   "org.scattered": "{n} notes about “{topic}” are spread across {k} sub-themes of {group} — group them under “{target}”?",
   "org.alone": "“{label}” is alone in the sub-theme “{from}” — move it to “{target}”?",
@@ -410,6 +433,74 @@ function costNeverRead(nr, colors, T) {
   }).join("") + '</ul>' + (more > 0 ? '<p class="mg-cost__empty">' + costEsc(T("cost.moreCount", { n: more })) + '</p>' : '');
 }
 
+// ---- Time to find a note (lib/find-time.js) and memory engine speed (lib/engine-speed.js) ----
+
+/** 120 → "120 ms", 1400 → "1.4 s", 80000 → "1 min 20 s" — Intl unit names in the page language
+    (no translation key needed); "—" when unknown. */
+function costDuration(ms, lang) {
+  if (ms == null || !isFinite(ms)) return "—";
+  lang = lang || costLang();
+  ms = Math.max(0, Number(ms));
+  function unit(v, u, digits) {
+    var f = costIntl("NumberFormat", lang, { style: "unit", unit: u, unitDisplay: "short", maximumFractionDigits: digits }, "u" + u + digits);
+    if (f) { try { return f.format(v); } catch (e) { /* old engine: plain form below */ } }
+    var short = { millisecond: "ms", second: "s", minute: "min" }[u];
+    return (digits ? Math.round(v * 10) / 10 : Math.round(v)) + " " + short;
+  }
+  if (ms < 1000) return unit(Math.round(ms), "millisecond", 0);
+  if (ms < 60000) return unit(ms / 1000, "second", ms < 10000 ? 1 : 0);
+  var s = Math.round(ms / 1000), m = Math.floor(s / 60), r = s % 60;
+  return unit(m, "minute", 0) + (r ? " " + unit(r, "second", 0) : "");
+}
+/** 1.5 → "1.5" in the page language (medians of steps can be halves). */
+function costDecimal(n, lang) {
+  var f = costIntl("NumberFormat", lang || costLang(), { maximumFractionDigits: 1 }, "d1");
+  return f ? f.format(Number(n) || 0) : String(Math.round((Number(n) || 0) * 10) / 10);
+}
+
+/** "Time to find a note · 7 days": three figures, then the 5 slowest or missed searches. */
+function costFindTime(f, T) {
+  T = T || defaultCostT;
+  if (!f || !f.searches) return '<p class="mg-cost__empty">' + costEsc(T("find.none")) + '</p>';
+  var figs = [
+    [T("find.medianTime"), costDuration(f.medianDelayMs)],
+    [T("find.medianSteps"), f.medianSteps == null ? "—" : costDecimal(f.medianSteps)],
+    [T("find.missed"), f.missedShare == null ? "—" : costPercent(f.missedShare * 100)],
+  ];
+  var html = '<div class="mg-cost__figs mg-cost__figs--three">' + figs.map(function (d) {
+    return '<div class="mg-cost__fig"><p class="mg-cost__fig-name">' + costEsc(d[0]) + '</p><p class="mg-cost__fig-val">' + costEsc(d[1]) + '</p></div>';
+  }).join("") + '</div>';
+  html += '<p class="mg-cost__fig-det">' + costEsc(T("find.counted", { n: f.searches })) + '</p>';
+  if (f.top && f.top.length) {
+    html += '<p class="mg-cost__minor">' + costEsc(T("find.slowest")) + '</p><ul class="mg-cost__list mg-cost__list--compact">' + f.top.map(function (x) {
+      var title = x.found ? (x.label || T("find.gone")) : T("find.missedRow") + (x.context && x.context.length ? " (" + x.context.join(", ") + ")" : "");
+      var val = x.found ? costDuration(x.delayMs) + " · " + T("find.steps", { n: x.steps }) : T("find.missedShort");
+      var attr = x.found && x.id ? ' data-note="' + costEsc(x.id) + '" tabindex="0" role="button"' : "";
+      return '<li><div class="mg-cost__row mg-cost__row--simple"' + attr + '><span class="mg-cost__name"><span class="mg-cost__label">' + costEsc(title) + '</span></span>' +
+        '<span class="mg-cost__det">' + costEsc(val) + '</span></div></li>';
+    }).join("") + '</ul>';
+  }
+  html += '<p class="mg-cost__hint">' + costEsc(T("find.hint")) + '</p>';
+  return html;
+}
+
+/** "Memory engine speed · 7 days": calls, median and p95 per tool type, and the slow-search alert. */
+function costEngineSpeed(e, T) {
+  T = T || defaultCostT;
+  if (!e || !e.total) return '<p class="mg-cost__empty">' + costEsc(T("speed.none")) + '</p>';
+  var html = "";
+  if (e.alert) html += '<p class="mg-cost__alert" role="status">' + costEsc(T("speed.alert", { recent: costDuration(e.alert.recentMs), base: costDuration(e.alert.baselineMs) })) + '</p>';
+  html += '<table class="mg-cost__table"><thead><tr><th scope="col">' + costEsc(T("speed.tool")) + '</th><th scope="col">' + costEsc(T("speed.calls")) +
+    '</th><th scope="col">' + costEsc(T("speed.p50")) + '</th><th scope="col">' + costEsc(T("speed.p95")) + '</th></tr></thead><tbody>';
+  ["search", "read", "write"].forEach(function (k) {
+    var r = e.types && e.types[k];
+    if (!r || !r.calls) return;
+    html += '<tr><th scope="row">' + costEsc(T("speed." + k)) + '</th><td>' + costEsc(costNumber(r.calls)) + '</td><td>' + costEsc(costDuration(r.p50)) + '</td><td>' + costEsc(costDuration(r.p95)) + '</td></tr>';
+  });
+  html += '</tbody></table><p class="mg-cost__hint">' + costEsc(T("speed.hint")) + '</p>';
+  return html;
+}
+
 // ---- Archive tier (lib/archive.js): dormant sections ----
 
 // Label of the default AI, for "Do it with <provider>" (set by the page).
@@ -503,12 +594,16 @@ function costRender(c, colors, T) {
   html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.organisation")) + '</figcaption>' + costOrganisation(c.organisation, colors, T) + '</figure>';
   html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.alwaysLoaded")) + '</figcaption>' + costAlwaysLoaded(c.alwaysLoaded, T) + '</figure>';
   html += '</div>';
+  html += '<div class="mg-cost__grid mg-cost__grid--two">';
+  html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.findTime")) + '</figcaption>' + costFindTime(c.findTime, T) + '</figure>';
+  html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.engineSpeed")) + '</figcaption>' + costEngineSpeed(c.engineSpeed, T) + '</figure>';
+  html += '</div>';
   if (c.archive) html += '<figure class="mg-cost__block mg-arch" id="mg-arch"><figcaption>' + costEsc(T("cost.archive", { n: costNumber(c.archive.afterDays) })) + '</figcaption>' + costArchive(c.archive, colors, T) + '</figure>';
   return html;
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costPercent: costPercent, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT, mgBannerKind: mgBannerKind, mgErrorBanner: mgErrorBanner, mgClearBanner: mgClearBanner };
+  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costPercent: costPercent, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, costDuration: costDuration, costFindTime: costFindTime, costEngineSpeed: costEngineSpeed, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT, mgBannerKind: mgBannerKind, mgErrorBanner: mgErrorBanner, mgClearBanner: mgClearBanner };
 }
 
 (function () {

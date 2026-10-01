@@ -8,7 +8,8 @@
  *
  * It watches the traffic: for each `tools/call` it matches the request with its response and
  * reports read / search / write + note ids (never content) to memglow, through lib/agent-core.js
- * (detached, 3 s timeout, silent).
+ * (detached, 3 s timeout, silent), with the memory server's response time (`durationMs`, shown as
+ * "Memory engine speed" in memglow's Memory cost panel).
  *
  * v0.4 levers (lib/proxy-levers.js; switches in memglow.config.json → "proxy", or MEMGLOW_PROXY_*):
  * size warning, richer search results and related-note suggestions (ON by default) only ADD a text
@@ -50,11 +51,15 @@ function userMap() {
   try { const m = JSON.parse(process.env.MEMGLOW_PROXY_MAP || "{}"); return m && typeof m === "object" ? m : {}; } catch { return {}; }
 }
 
+/** Monotonic milliseconds (a wall-clock change never makes a duration negative). */
+function monoMs() { return Number(process.hrtime.bigint() / 1000n) / 1000; }
+
 /**
  * Watches JSON-RPC messages: remembers tools/call requests, reports when the matching response
- * arrives. Messages it cannot parse are ignored (they are relayed anyway).
+ * arrives, with the time the server took (`durationMs`). Messages it cannot parse are ignored
+ * (they are relayed anyway).
  */
-function createWatcher({ server, source = "mcp", onReport = (evt) => core.report(evt, source, { channel: "mcp-proxy" }) }) {
+function createWatcher({ server, source = "mcp", onReport = (evt) => core.report(evt, source, { channel: "mcp-proxy" }), clock = monoMs }) {
   const pending = new Map();
   const map = userMap();
   function each(msg, fn) { if (Array.isArray(msg)) msg.forEach(fn); else if (msg && typeof msg === "object") fn(msg); }
@@ -62,7 +67,10 @@ function createWatcher({ server, source = "mcp", onReport = (evt) => core.report
     fromClient(msg) {
       each(msg, (m) => {
         if (m.method === "tools/call" && m.id != null && m.params && typeof m.params.name === "string") {
-          pending.set(String(m.id), { tool: m.params.name, args: m.params.arguments || {} });
+          // Engine speed: the clock starts when the request leaves the client side of the proxy and
+          // stops when the matching response comes back from the server (durationMs, reported with
+          // the activity; validated and bounded again by memglow — lib/engine-speed.js).
+          pending.set(String(m.id), { tool: m.params.name, args: m.params.arguments || {}, t0: clock() });
           if (pending.size > 1000) pending.delete(pending.keys().next().value);
         }
       });
@@ -76,7 +84,8 @@ function createWatcher({ server, source = "mcp", onReport = (evt) => core.report
         const forced = map[call.tool];
         if (forced === "ignore") return;
         const tool = ["read", "search", "write"].includes(forced) ? forced : call.tool;
-        onReport({ kind: "mcp", trusted: true, server, tool, args: call.args, result: m.result });
+        const durationMs = Math.max(0, Math.round(clock() - call.t0));
+        onReport({ kind: "mcp", trusted: true, server, tool, args: call.args, result: m.result, durationMs });
       });
     },
   };

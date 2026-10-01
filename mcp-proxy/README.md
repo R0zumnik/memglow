@@ -7,7 +7,10 @@ Continue, Roo Code, or any other client, including the ones without a hook syste
 It *watches* the traffic: when a `tools/call` succeeds, it reports `read`, `search` or `write`
 with **note names only** (from the call's arguments and from note references in the result —
 never the content) to [`POST /api/activity`](../docs/api.md). Failed calls (`error` or `isError`)
-are not reported. It can also make the assistant faster and cheaper with a few
+are not reported. Each report carries the memory server's **response time** for that call
+(`durationMs`, from the request forwarded to the response back), which memglow shows as
+*Memory engine speed* (p50/p95 per tool type, slow-search alert); a search that found nothing is
+reported too, without ids, so *Time to find a note* can count it as missed. It can also make the assistant faster and cheaper with a few
 [levers](#token-saving-and-speed-levers-v04) that annotate the memory server's answers — never
 the notes themselves.
 

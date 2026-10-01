@@ -33,6 +33,7 @@ Content-Type: application/json
 | `source` | no | the **tool** shown in the live journal: `a-z`, `0-9`, `-`, 1 to 20 characters (else `agent`) |
 | `channel` | no | how the event reached memglow: `hook`, `mcp-proxy`, `file` or `api` (any other value, or none, is just left out) |
 | `machine` | no | a short label for the sending machine, e.g. `laptop`: `A-Za-z0-9`, `_`, `-`, 1 to 32 characters, must start with a letter or digit (else left out — never an IP, never a path) |
+| `durationMs` | no | v0.4: the memory server's response time for this call, in milliseconds (the MCP proxy sends it) — kept for *Memory engine speed* only if it is a number from 0 to 600,000, else ignored (the event itself still counts) |
 | `demo` | no | `true`: animate the page but keep the event out of the history and out of the Memory cost counts |
 
 **The journal line.** Each line reads *action · group · note · machine · channel · source*, e.g.

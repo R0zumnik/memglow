@@ -22,6 +22,8 @@ const zonesLib = require("./lib/zones");
 const organise = require("./lib/organise");
 const { measureFiles, alwaysLoadedCost } = require("./lib/always-loaded");
 const archive = require("./lib/archive");
+const { createFindTime } = require("./lib/find-time");
+const { createEngineSpeed, cleanDuration } = require("./lib/engine-speed");
 
 const PUBLIC = path.join(__dirname, "public");
 // Interface languages shipped (public/i18n/<code>.json); must match lib/view.js SETTINGS.language
@@ -58,7 +60,7 @@ function isInside(child, parent) {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-function createServer(config, memory, { counters, views, zones, assistantEnv } = {}) {
+function createServer(config, memory, { counters, views, zones, assistantEnv, findTime, engineSpeed } = {}) {
   // memglow's own files (counters, saved view) live in its data folder, NEVER in the notes folder:
   // if the data folder is inside the notes folder, nothing is written (kept in memory only).
   let dataDir = config.dataDir || null;
@@ -71,6 +73,10 @@ function createServer(config, memory, { counters, views, zones, assistantEnv } =
   // A write seen on disk (body changed, new note) counts as a write, unless a reported write on the
   // same note within ±15 s was already counted (and the other way round). See createWriteDedup.
   const dedup = createWriteDedup(15000);
+  // Time to find a note (search → first read by the same actor, lib/find-time.js) and the memory
+  // engine's response times measured by the MCP proxy (lib/engine-speed.js): ids, times, numbers.
+  findTime = findTime || createFindTime({ dir: dataDir });
+  engineSpeed = engineSpeed || createEngineSpeed({ dir: dataDir });
   // Archive tier: the first day each section's exact text was seen (section-level "modified").
   const sectionLog = archive.createSectionLog({ dir: dataDir });
   let sectionsObserved = false;
@@ -285,6 +291,11 @@ function createServer(config, memory, { counters, views, zones, assistantEnv } =
     }));
   }
   let archiveCache = null, archiveKey = "";
+  // Titles only (never note content): the label of a note id, or null if it is gone.
+  function findTimeNow() {
+    const labels = new Map((memory.costNotes() || []).map((n) => [n.id, n.label]));
+    return findTime.summary(Date.now(), (id) => labels.get(id) || null);
+  }
 
   return http.createServer((req, res) => {
     const url = new URL(req.url, "http://localhost");
@@ -311,6 +322,14 @@ function createServer(config, memory, { counters, views, zones, assistantEnv } =
           const t = Date.now();
           const ids = body.type === "write" ? dedup.reported(r.ids, t) : r.ids;
           if (ids.length) counters.add({ type: body.type, ids, t });
+        }
+        // Time to find a note: accepted searches and reads, plus a search that found no known note
+        // (a "missed" search is exactly what this measures). Engine speed: the proxy's durationMs,
+        // validated and bounded (lib/engine-speed.js cleanDuration) — a bad value is just dropped.
+        if (r.who && body.demo !== true && (r.ok || r.reason === "unknown")) {
+          if (r.ok || r.who.type === "search") findTime.add({ ...r.who, ids: r.ok ? r.ids : [] });
+          const ms = cleanDuration(body.durationMs);
+          if (ms != null) engineSpeed.add({ type: r.who.type, ms, t: r.who.t });
         }
         headers(res);
         res.statusCode = r.ok ? 204 : r.reason === "rate" ? 429 : 202;
@@ -463,7 +482,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv } =
       return;
     }
     if (p === "/api/graph") return json(res, 200, memory.graph());
-    if (p === "/api/cost") return json(res, 200, { ...cost(), alwaysLoaded: alwaysLoaded() });
+    if (p === "/api/cost") return json(res, 200, { ...cost(), alwaysLoaded: alwaysLoaded(), findTime: findTimeNow(), engineSpeed: engineSpeed.summary() });
     if (p === "/api/zones") {
       const z = zones.read();
       return json(res, 200, { ...z, themes: zonesLib.overview(config, memory.costNotes(), z.labels) });
