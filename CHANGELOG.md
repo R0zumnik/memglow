@@ -73,7 +73,6 @@ Memory cost: see which notes cost your assistant the most tokens, and which ones
   to the spread and the collision is firmer, so spacing wins over gravity.
 - Hidden themes (legend) were dropped on reload with custom themes.
 - A masked secret-looking heading now stays a heading, so a note keeps its sections.
-- Release workflow: GitHub Actions moved to their Node 24 majors.
 
 ### Security
 

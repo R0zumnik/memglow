@@ -5,9 +5,6 @@
 #   4. GitHub release, with the matching CHANGELOG.md section as notes
 # To release: bump "version" in package.json, add a "## X.Y.Z — date" CHANGELOG entry, commit,
 # then `git tag vX.Y.Z && git push origin main vX.Y.Z`.
-# Actions are on their Node 24 majors (runner ≥ 2.327.1). Nothing here depends on the Ubuntu
-# release behind ubuntu-latest: Node comes from setup-node, Docker from buildx/QEMU, and only
-# preinstalled tools are used (npm, awk, gh).
 name: release
 
 on:
@@ -27,8 +24,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
       - name: Tag matches package.json
@@ -45,8 +42,8 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -67,23 +64,23 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@v5
         with:
           images: ghcr.io/r0zumnik/memglow
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') || github.ref_name == github.event.repository.default_branch }}
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -98,7 +95,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - name: Create the release from the CHANGELOG entry
         env:
           GH_TOKEN: ${{ github.token }}
