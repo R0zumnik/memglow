@@ -54,7 +54,7 @@ function userMap() {
  * Watches JSON-RPC messages: remembers tools/call requests, reports when the matching response
  * arrives. Messages it cannot parse are ignored (they are relayed anyway).
  */
-function createWatcher({ server, source = "mcp", onReport = (evt) => core.report(evt, source) }) {
+function createWatcher({ server, source = "mcp", onReport = (evt) => core.report(evt, source, { channel: "mcp-proxy" }) }) {
   const pending = new Map();
   const map = userMap();
   function each(msg, fn) { if (Array.isArray(msg)) msg.forEach(fn); else if (msg && typeof msg === "object") fn(msg); }

@@ -72,16 +72,54 @@ test("bubble size: factor, size by links or tokens, index is the sun", () => {
   assert.ok(close(M.rayonRelais(3), 3.4 * 2) && close(M.rayonRelais(1), 3.4));
 });
 
-test("backgrounds: very dark tints (below the glow threshold), deep by default", () => {
-  const lum = (hex) => {
-    const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((u) => (u <= 0.04045 ? u / 12.92 : Math.pow((u + 0.055) / 1.055, 2.4)));
-    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-  };
+const lum = (hex) => {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((u) => (u <= 0.04045 ? u / 12.92 : Math.pow((u + 0.055) / 1.055, 2.4)));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+};
+
+test("backgrounds: dark presets stay very dark (below the glow threshold), deep by default", () => {
   const tints = [];
-  Object.values(M.FONDS).forEach((f) => ["uni", "centre", "milieu", "bord"].forEach((k) => f[k] && tints.push(lum(f[k]))));
+  Object.entries(M.FONDS).filter(([id]) => id !== "clair").forEach(([, f]) => ["uni", "centre", "milieu", "bord"].forEach((k) => f[k] && tints.push(lum(f[k]))));
   assert.ok(Math.max(...tints) < 0.03);
-  assert.deepStrictEqual([M.fondValide("nuit"), M.fondValide("clair"), M.fondValide("__proto__")], ["nuit", "profond", "profond"]);
+  assert.deepStrictEqual([M.fondValide("nuit"), M.fondValide("clair"), M.fondValide("__inconnu__")], ["nuit", "clair", "profond"]);
   assert.strictEqual(M.FONDS.uni.uni, "#04120F");
+});
+
+test("background Light: a bright, flagged exception — glow raised above it and cut to a trace", () => {
+  const c = M.FONDS.clair;
+  assert.strictEqual(c.clair, true);
+  ["uni", "centre", "milieu", "bord"].forEach((k) => assert.ok(lum(c[k]) > 0.7, k + " is a light tint"));
+  assert.strictEqual(c.etoiles, 0, "no star dust against a bright sky");
+  assert.ok(c.seuilLueur > Math.max(lum(c.uni), lum(c.centre), lum(c.milieu), lum(c.bord)), "bloom threshold stays above the background's own luminance");
+  assert.ok(c.coefLueur < 0.5, "glow cut to a trace");
+  // Every other preset is untouched.
+  ["profond", "uni", "nuit"].forEach((id) => assert.ok(!M.FONDS[id].clair));
+});
+
+test("teinteLisible: darkens a colour for Light, same hue, leaves everything else alone", () => {
+  assert.strictEqual(M.teinteLisible("#2EE89B", false), "#2EE89B", "unchanged outside clair mode");
+  assert.strictEqual(M.teinteLisible("not-a-color", true), "not-a-color", "unparsable hex left alone");
+  const already = "#123456";
+  assert.strictEqual(M.teinteLisible(already, true, 0.9), already, "already dark enough: unchanged");
+  const d = M.teinteLisible("#2EE89B", true, 0.24);
+  assert.ok(lum(d) <= 0.24 + 0.01, "darkened at or under the target luminance (within hex rounding)");
+  assert.ok(lum(d) < lum("#2EE89B"), "actually darker");
+  // Same hue: uniform RGB scaling keeps the ratio between channels (within rounding).
+  const r = parseInt(d.slice(1, 3), 16), g = parseInt(d.slice(3, 5), 16), b = parseInt(d.slice(5, 7), 16);
+  assert.ok(Math.abs(r / g - 0x2e / 0xe8) < 0.02, "hue preserved (r/g ratio)");
+  // The default threshold (0.24) keeps a healthy contrast against Light's brightest tint.
+  const contrast = (l1, l2) => (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+  const bg = lum(M.FONDS.clair.centre);
+  [M.teinteLisible("#2EE89B", true), M.teinteLisible("#8FA8FF", true), M.teinteLisible("#A9C9BF", true)]
+    .forEach((hex) => assert.ok(contrast(lum(hex), bg) >= 3, hex + " reads against the Light background"));
+});
+
+test("CIBLE_COULEUR_CLAIR and COULEUR_CLAIR_INDEX: same hue family as the dark presets, dark enough to read", () => {
+  const contrast = (l1, l2) => (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+  const bg = lum(M.FONDS.clair.centre);
+  assert.deepStrictEqual(Object.keys(M.CIBLE_COULEUR_CLAIR).sort(), Object.keys(M.CIBLE_COULEUR).sort());
+  Object.values(M.CIBLE_COULEUR_CLAIR).forEach((hex) => assert.ok(contrast(lum(hex), bg) >= 3, hex));
+  assert.ok(contrast(lum(M.COULEUR_CLAIR_INDEX), bg) >= 3);
 });
 
 test("name distance: full up to the threshold, gone at 1.35×", () => {

@@ -4,6 +4,25 @@
 
 ### Added
 
+- **Journal: machine and channel.** Each line now reads *action · group · note · machine ·
+  channel · tool*, e.g. *Write · Projects · Smart home · laptop · hook · Claude Code* (was
+  *action · group · note · source*). `channel` is a closed list — `hook` (the bundled adapters and
+  the legacy `hooks/memglow-activity.js`), `mcp-proxy`, `file` (a note changed on disk, no hook
+  involved) or `api` (a direct call to the activity API) — and `machine` a short per-sender label
+  (`MEMGLOW_MACHINE`, or `machine` in `~/.memglow/memglow.config.json`; default: short hostname),
+  validated server-side (closed charset, 32 characters at most, never a path or an IP). Both are
+  optional and purely additive: an activity sent without them (every pre-v0.4 sender, any direct
+  `POST /api/activity` that does not set them) displays exactly as before. `POST /api/activity`
+  accepts the two new optional fields; see [docs/api.md](docs/api.md).
+
+- **Background: Light preset.** A fourth option next to Deep / Plain / Night blue: a near-white,
+  mint-tinted scene, in the spirit of the project's own light charte. The glow is cut to a trace
+  (threshold raised above the background itself); notes, links, names, sub-theme bubbles, the 3D
+  legend and the read/search/write highlight colours (comets, target rings) are all darkened —
+  same hue, just dark enough to read against white — instead of the near-white tones used on the
+  three dark presets. Nothing changes for Deep, Plain or Night blue. Saved like every other
+  setting (`lib/view.js` → `background`, now `"deep" | "plain" | "night" | "light"`).
+
 - **Assistant (optional, off by default)**: a *Do it with Claude* button next to *Copy prompt for
   your AI* on each large or costly note, and an *Assistant* panel below Memory cost. **The AI only
   proposes; memglow only writes what you approved in a diff, with a backup and Undo.** The user's

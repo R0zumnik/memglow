@@ -23,15 +23,26 @@ POST /api/activity
 Authorization: Bearer <MEMGLOW_TOKEN>
 Content-Type: application/json
 
-{ "type": "read", "ids": ["alice", "people/bob.md"], "source": "my-agent" }
+{ "type": "read", "ids": ["alice", "people/bob.md"], "source": "my-agent", "channel": "api", "machine": "laptop" }
 ```
 
 | Field | Required | Meaning |
 |---|---|---|
 | `type` | yes | `read`, `search` or `write` — the colour of the flash (cyan, violet, red-orange) |
 | `ids` | yes | note references (also accepted as `slugs`); see below |
-| `source` | no | label shown in the live journal: `a-z`, `0-9`, `-`, 1 to 20 characters (else `agent`) |
+| `source` | no | the **tool** shown in the live journal: `a-z`, `0-9`, `-`, 1 to 20 characters (else `agent`) |
+| `channel` | no | how the event reached memglow: `hook`, `mcp-proxy`, `file` or `api` (any other value, or none, is just left out) |
+| `machine` | no | a short label for the sending machine, e.g. `laptop`: `A-Za-z0-9`, `_`, `-`, 1 to 32 characters, must start with a letter or digit (else left out — never an IP, never a path) |
 | `demo` | no | `true`: animate the page but keep the event out of the history and out of the Memory cost counts |
+
+**The journal line.** Each line reads *action · group · note · machine · channel · source*, e.g.
+*Write · Projects · Release notes · laptop · hook · my-agent*. `channel` and `machine` are both
+optional and purely additive (added in v0.4): an event that sends neither — exactly what every
+sender before v0.4 does, and what a plain `curl` or script still does unless it chooses to set
+them — displays precisely as it always has: *action · group · note · source*. `channel` is a
+closed list; sending your own value outside it (or none at all) is fine, it is simply left out of
+the line. `file` is reserved for the note changes memglow finds on disk itself (see below) — a
+sender that calls this endpoint normally has no reason to send it.
 
 **Note references.** Each id is reduced to a note name: the last path segment, without `.md`
 (`people/bob.md`, `memory://people/bob` and `bob` all mean the note `bob.md`). `snake_case` and
@@ -60,7 +71,7 @@ or a tool result.
 curl -s -o /dev/null -w '%{http_code}\n' \
   -H "Authorization: Bearer $(cat ~/.memglow/token)" \
   -H 'Content-Type: application/json' \
-  -d '{"type":"write","ids":["project-roadmap"],"source":"curl"}' \
+  -d '{"type":"write","ids":["project-roadmap"],"source":"curl","channel":"api","machine":"laptop"}' \
   http://127.0.0.1:4747/api/activity
 ```
 

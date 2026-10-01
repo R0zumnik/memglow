@@ -15,6 +15,7 @@
  *   MEMGLOW_MEMORY_DIR   folder whose .md files count for Read/Write/Edit (optional)
  *   MEMGLOW_MCP_PREFIX   MCP tool prefix of the memory server (default mcp__basic-memory__)
  *   MEMGLOW_SOURCE       label shown in the journal         (default "claude")
+ *   MEMGLOW_MACHINE      short label for this machine in the journal (default: short hostname)
  */
 const fs = require("fs");
 const os = require("os");
@@ -26,6 +27,16 @@ const TOKEN_FILE = process.env.MEMGLOW_TOKEN_FILE || path.join(os.homedir(), ".m
 const MEMORY_DIR = process.env.MEMGLOW_MEMORY_DIR ? path.resolve(process.env.MEMGLOW_MEMORY_DIR) + path.sep : null;
 const PREFIX = process.env.MEMGLOW_MCP_PREFIX || "mcp__basic-memory__";
 const SOURCE = /^[a-z0-9-]{1,20}$/.test(process.env.MEMGLOW_SOURCE || "") ? process.env.MEMGLOW_SOURCE : "claude";
+
+// Same rule the server validates again (lib/memory.js): closed charset, 32 characters at most,
+// never a path. Falls back to "host" when even the short hostname cannot be made to fit.
+const MACHINE_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+function machineName() {
+  const raw = process.env.MEMGLOW_MACHINE || (() => { try { return os.hostname().split(".")[0]; } catch { return ""; } })();
+  if (MACHINE_RE.test(raw)) return raw;
+  const cleaned = String(raw).replace(/[^A-Za-z0-9_-]/g, "-").replace(/^-+/, "").replace(/-+$/, "").slice(0, 32).replace(/-+$/, "");
+  return MACHINE_RE.test(cleaned) ? cleaned : "host";
+}
 
 const READ = new Set(["read_note", "view_note", "build_context", "fetch", "read_content"]);
 const SEARCH = new Set(["search_notes", "search", "recent_activity"]);
@@ -89,10 +100,10 @@ if (require.main === module) {
       if (!a) return;
       const ids = [...new Set(a.ids.map((s) => String(s).split("/").pop().replace(/\.md$/i, "")).filter(Boolean))].slice(0, 50);
       if (!ids.length || !token()) return;
-      const payload = Buffer.from(JSON.stringify({ type: a.type, ids, source: SOURCE })).toString("base64");
+      const payload = Buffer.from(JSON.stringify({ type: a.type, ids, source: SOURCE, channel: "hook", machine: machineName() })).toString("base64");
       spawn(process.execPath, [__filename, "--send", payload], { detached: true, stdio: "ignore" }).unref();
     } catch { /* never an error in the session */ }
   });
 }
 
-module.exports = { analyse, idsInText };
+module.exports = { analyse, idsInText, machineName };

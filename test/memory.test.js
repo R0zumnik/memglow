@@ -82,6 +82,35 @@ test("activity: types, id resolution, unknown ids, rate limit", () => {
   assert.ok(limited, "rate limit reached");
 });
 
+test("activity: machine and channel are validated, optional, additive", () => {
+  const dir = tmpMemory({ "a.md": "x" });
+  const m = createMemory({ dir, config });
+  m.scan();
+  // Valid: kept on the event.
+  let r = m.activity({ type: "read", ids: ["a"], machine: "laptop-2", channel: "hook" });
+  assert.strictEqual(r.ok, true);
+  let evt = m.graph().activities.at(-1);
+  assert.strictEqual(evt.machine, "laptop-2");
+  assert.strictEqual(evt.channel, "hook");
+  // Unknown channel, hostile machine (a path, an IP, too long, bad characters): dropped, never
+  // reject the whole event — the ids still count and the activity is still shown.
+  r = m.activity({ type: "read", ids: ["a"], machine: "../etc/passwd", channel: "ssh" });
+  assert.strictEqual(r.ok, true);
+  evt = m.graph().activities.at(-1);
+  assert.strictEqual(evt.machine, undefined);
+  assert.strictEqual(evt.channel, undefined);
+  r = m.activity({ type: "read", ids: ["a"], machine: "192.168.1.5" });
+  evt = m.graph().activities.at(-1);
+  assert.strictEqual(evt.machine, undefined, "an IP is never accepted as a machine label");
+  r = m.activity({ type: "read", ids: ["a"], machine: "x".repeat(40) });
+  evt = m.graph().activities.at(-1);
+  assert.strictEqual(evt.machine, undefined, "over the length limit");
+  // An activity sent without them at all (every sender before v0.4) gets neither key.
+  r = m.activity({ type: "read", ids: ["a"] });
+  evt = m.graph().activities.at(-1);
+  assert.ok(!("machine" in evt) && !("channel" in evt));
+});
+
 test("recent activity kept for the graph, demo activity is not", () => {
   const dir = tmpMemory({ "a.md": "x" });
   const m = createMemory({ dir, config });
