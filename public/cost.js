@@ -292,7 +292,7 @@ function costAlwaysLoaded(a, T) {
     return '<li><div class="mg-cost__row mg-cost__row--simple"><span class="mg-cost__name"><span class="mg-cost__label">' + costEsc(f.name) + '</span></span><span class="mg-cost__det">' + (f.found ? costTokens(f.tokens) : costEsc(T("always.notFound"))) + '</span></div></li>';
   }));
   var html = '<p class="mg-cost__share-text">' + costFill(T, "always.perDay", {
-    perSession: '<strong>' + costTokens(a.perSession) + '</strong>', sessions: '<strong>' + costNumber(a.sessionsPerDay) + '</strong>', perDay: '<strong>' + costTokens(a.perDay) + '</strong>',
+    perSession: '<strong>' + costTokens(a.perSession) + '</strong>', sessions: '<strong>' + costNumber(a.sessionsPerDay) + '</strong>', perDay: '<strong>' + costNumber(a.perDay) + '</strong>',
   }) + '</p>' +
     '<p class="mg-cost__empty">' + costEsc(T(a.sessionsSource === "index reads" ? "always.sessionsFromIndex" : "always.sessionsFromSetting")) + '</p>';
   html += rows.length ? '<ul class="mg-cost__list mg-cost__list--compact">' + rows.join("") + '</ul>' : '<p class="mg-cost__empty">' + costEsc(T("always.noIndex")) + '</p>';
