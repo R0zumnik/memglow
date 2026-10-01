@@ -22,5 +22,6 @@
   "showBodies": true,
   "largeNoteTokens": 5000,
   "splitChunkTokens": 2000,
+  "proxy": { "sizeWarning": true, "searchDetails": true, "suggestions": true, "dedupe": false, "toc": false },
   "pollMs": 2000
 }
