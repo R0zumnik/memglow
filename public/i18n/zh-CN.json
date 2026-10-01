@@ -5,6 +5,7 @@
   "header.subtitle": "每个光点代表助手记住的一条笔记；每条线代表两条笔记之间的链接。当助手读取、搜索或写入一条笔记时，它会实时点亮。",
   "graph.ariaLabel": "记忆图谱",
   "legend.ariaLabel": "显示或隐藏某个主题",
+  "legend.toggle": "主题",
 
   "theme.index": "索引",
   "theme.other": "其他",
@@ -18,6 +19,7 @@
   "search.noMatch": "没有匹配的笔记。",
 
   "settings.summary": "设置",
+  "settings.close": "关闭设置",
   "settings.display": "显示",
   "settings.glow": "发光强度",
   "settings.names": "名称",

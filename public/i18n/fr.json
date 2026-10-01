@@ -5,6 +5,7 @@
   "header.subtitle": "Chaque point est une note dont votre assistant se souvient ; chaque trait, un lien entre deux notes. Quand un assistant lit, cherche ou écrit une note, elle s’allume — en direct.",
   "graph.ariaLabel": "Graphe de la mémoire",
   "legend.ariaLabel": "Afficher ou masquer un thème",
+  "legend.toggle": "Thèmes",
 
   "theme.index": "Index",
   "theme.other": "Autre",
@@ -18,6 +19,7 @@
   "search.noMatch": "Aucune note correspondante.",
 
   "settings.summary": "Réglages",
+  "settings.close": "Fermer les réglages",
   "settings.display": "Affichage",
   "settings.glow": "Lueur",
   "settings.names": "Noms",

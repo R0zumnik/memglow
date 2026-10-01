@@ -376,6 +376,15 @@ back to the overview. **Rearrange** starts again from a fresh layout (your setti
 added later appears next to its sub-theme bubble, without shaking the saved layout. With
 *reduced motion* on, a saved layout is restored without animation.
 
+**On a phone** (under 640 px wide, or a phone held sideways), the controls stop covering the
+graph: the legend folds behind a **Themes** chip (folded the first time; your choice is then
+remembered in this browser), *Find a note* behind a magnifier, and **Settings** behind a gear that
+opens a bottom sheet — close it with *Close settings*, a tap on the dimmed background, a swipe down
+on its handle, or Escape; the focus goes back to the gear. The activity journal shows each entry
+on two lines (action · group, then **note** · source), Memory cost names wrap instead of being
+cut, and the Assistant, Protected groups and Archive blocks get full-width rows and larger
+buttons. Nothing changes on a larger screen.
+
 <a id="languages"></a>
 ## 🌐 Languages
 
@@ -388,6 +397,12 @@ Product names (Claude Code, Codex, Cursor, Ollama…) and the word "token" are n
 design. Prompts memglow builds for your AI (the *Copy prompt for your AI* text, and what the
 optional assistant sends) always stay in English, whatever the interface language — the AI reads
 them, not you.
+
+Numbers and dates follow the interface language too (`Intl`, with the language you chose, not the
+browser's locale): "≈ 1 234 tokens" and "30 sept." in French, "1.234" and "30. Sept." in German,
+"9月30日" in Japanese. The two exceptions keep fixed English formats on purpose: the prompts for
+your AI, and the lines memglow writes into the archive summary (an ISO day and "≈ 1,234 tokens",
+read back by memglow itself).
 
 Zero runtime dependency, no build step: each language is one JSON file in `public/i18n/`, loaded
 by the small `public/i18n.js` on demand. **To add a language**:

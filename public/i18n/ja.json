@@ -5,6 +5,7 @@
   "header.subtitle": "点はそれぞれ、アシスタントが記憶しているノート。線はそれぞれ、2つのノートの間のリンクです。アシスタントがノートを読む・検索する・書き込むと、リアルタイムで light up します。",
   "graph.ariaLabel": "メモリーグラフ",
   "legend.ariaLabel": "テーマの表示・非表示を切り替える",
+  "legend.toggle": "テーマ",
 
   "theme.index": "インデックス",
   "theme.other": "その他",
@@ -18,6 +19,7 @@
   "search.noMatch": "一致するノートがありません。",
 
   "settings.summary": "設定",
+  "settings.close": "設定を閉じる",
   "settings.display": "表示",
   "settings.glow": "発光",
   "settings.names": "名前",

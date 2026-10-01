@@ -344,6 +344,109 @@ function creerCometes(o) {
 function hauteurPanneau(basScene, hautPanneau, marge, mini) {
   return Math.max(mini || 140, Math.floor(basScene - hautPanneau - (marge || 16)));
 }
+
+/* ---- Phone layout (COMPACT block of app.css) ----
+   Portrait under 640 px, or a phone on its side (little height, whatever the width). The CSS and
+   these helpers share this query: change one, change the other. Above it, the chip, magnifier and
+   sheet parts are hidden by CSS and the page is exactly as before. The three helpers below only
+   touch the elements they are given (testable with a fake DOM, see test/page-smoke.test.js). */
+var COMPACT_QUERY = "(max-width: 640px), (max-height: 500px) and (orientation: landscape)";
+
+function estEchap(e) { return !!e && (e.key === "Escape" || e.key === "Esc"); }
+
+/** Settings as a bottom sheet: o = { details, closeButton, scrim, handle, compact() }.
+    Opened on a phone: focus to the close button. Closed by that button, the dimmed background, a
+    swipe of more than 50 px down from the handle, or close() (Escape, wired by the page); the
+    focus goes back to the gear (the <summary>). → { isOpen(), close() }, or null without details. */
+function setupSheet(o) {
+  var d = o && o.details;
+  if (!d || !d.addEventListener) return null;
+  var resume = d.querySelector ? d.querySelector("summary") : null;
+  function isOpen() { return !!d.open; }
+  function close() {
+    if (!d.open) return;
+    d.open = false;
+    if (d.removeAttribute) d.removeAttribute("open");
+    if (resume && resume.focus) resume.focus();
+  }
+  d.addEventListener("toggle", function() {
+    if (d.open && o.compact() && o.closeButton && o.closeButton.focus) o.closeButton.focus();
+  });
+  if (o.closeButton) o.closeButton.addEventListener("click", close);
+  if (o.scrim) o.scrim.addEventListener("click", close);
+  var h = o.handle, depart = null;
+  if (h && h.addEventListener) {
+    h.addEventListener("touchstart", function(e) {
+      if (!o.compact() || !e.touches || !e.touches.length) return;
+      depart = e.touches[0].clientY;
+      if (e.stopPropagation) e.stopPropagation();
+    }, { passive: true });
+    h.addEventListener("touchmove", function(e) { if (e.stopPropagation) e.stopPropagation(); }, { passive: true });
+    h.addEventListener("touchend", function(e) {
+      if (depart === null) return;
+      var fin = e.changedTouches && e.changedTouches.length ? e.changedTouches[0].clientY : depart;
+      var glisse = fin - depart;
+      depart = null;
+      if (glisse > 50) close();
+    });
+  }
+  return { isOpen: isOpen, close: close };
+}
+
+/** Legend behind the "Themes" chip: o = { details, compact(), read(k), write(k, v) }.
+    Always unfolded outside the phone layout. On a phone: folded the first time, unless the viewer
+    unfolded it before (key memglow.legendOpen, this browser only); then left as the viewer sets it.
+    → apply(), to call again on resize / orientation change. */
+function setupLegendFold(o) {
+  var d = o && o.details;
+  if (!d || !d.addEventListener) return null;
+  var KEY = "memglow.legendOpen", fait = false;
+  function apply() {
+    if (!o.compact()) { d.open = true; fait = false; return; }
+    if (fait) return;
+    fait = true;
+    d.open = o.read(KEY) === "1";
+  }
+  d.addEventListener("toggle", function() {
+    if (o.compact() && fait) o.write(KEY, d.open ? "1" : "0");
+  });
+  apply();
+  return apply;
+}
+
+/** Search behind the magnifier: o = { button, form, field, compact(), later(fn, ms), active() }.
+    The button opens the field (focus in it) and folds it again; Escape or leaving the field folds
+    it, and the focus returns to the button on Escape. → { open(), close(focusButton) }. */
+function setupSearchFold(o) {
+  var b = o && o.button, f = o && o.form, c = o && o.field;
+  if (!b || !f || !c || !b.addEventListener) return null;
+  var CLASSE = "mem-cherche--ouverte";
+  function estOuvert() { return f.classList.contains(CLASSE); }
+  function open() {
+    f.classList.add(CLASSE);
+    b.setAttribute("aria-expanded", "true");
+    if (c.focus) c.focus();
+  }
+  function close(rendre) {
+    if (!estOuvert()) return;
+    f.classList.remove(CLASSE);
+    b.setAttribute("aria-expanded", "false");
+    if (rendre && b.focus) b.focus();
+  }
+  b.addEventListener("click", function() { if (estOuvert()) close(true); else open(); });
+  c.addEventListener("keydown", function(e) {
+    if (estEchap(e) && o.compact() && estOuvert()) {
+      close(true);
+      if (e.stopPropagation) e.stopPropagation();
+    }
+  });
+  c.addEventListener("blur", function() {
+    if (!o.compact()) return;
+    // A short delay: picking a suggestion of the datalist blurs and refocuses the field.
+    o.later(function() { if (o.active() !== c) close(false); }, 180);
+  });
+  return { open: open, close: close, isOpen: estOuvert };
+}
 var CIBLE_COULEUR = { read: "#4DEBFF", write: "#FF4D2E", search: "#C9A6FF" };
 // Same hue family as CIBLE_COULEUR, darkened for contrast on the "Light" background (≥3:1 against
 // its brightest tint, ≈0.93 relative luminance — see FONDS.clair and teinteLisible below).
@@ -840,6 +943,7 @@ function layoutOf(nodes, max) {
 
 if (typeof module !== "undefined" && module.exports) module.exports = {
   creerSuiviCamera, creerEnveloppe, creerCometes, hauteurPanneau, creerCible, CIBLE_COULEUR,
+  COMPACT_QUERY, setupSheet, setupLegendFold, setupSearchFold,
   CIBLE_COULEUR_CLAIR, COULEUR_CLAIR_INDEX,
   rayonNote, rayonRelais, facteurTaille, plancherRayon, dureeComete, niveauLien, creerCollision,
   margeEffective, FONDS, fondValide, luminanceRelative, teinteLisible, opaciteNom, masquesValides, RAYON_INDEX,
@@ -1506,11 +1610,16 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       mat.visible = mat.opacity > 4e-3;
     }
   }
+  // ---- Phone: portrait under 640 px AND landscape phone (little height, whatever the width). Same
+  // query as the COMPACT block of app.css: change one, change the other. Above that, nothing below
+  // changes anything visible (the chip, magnifier and sheet parts stay hidden by CSS).
+  var mqlCompact = window.matchMedia ? window.matchMedia(COMPACT_QUERY) : null;
+  function compact() { return !!(mqlCompact && mqlCompact.matches); }
   var panneauOptions = document.getElementById("mem-options");
   var corpsOptions = document.getElementById("mem-options-corps");
   function bornerPanneau() {
     if (!panneauOptions || !corpsOptions || !panneauOptions.open) return;
-    if (window.matchMedia && window.matchMedia("(max-width: 640px)").matches) {
+    if (compact()) {
       corpsOptions.style.removeProperty("--mem-corps-max");
       return;
     }
@@ -1526,6 +1635,22 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       }, { passive: true });
     });
   }
+  // Settings sheet (phone): opened, the focus goes to "Close settings"; closed by that button,
+  // Escape, a tap on the dimmed background or a swipe down from the handle — and the focus comes
+  // back to the gear (setupSheet, top of this file).
+  var feuille = setupSheet({
+    details: panneauOptions,
+    closeButton: document.getElementById("mem-options-fermer"),
+    scrim: document.getElementById("mem-options-scrim"),
+    handle: document.getElementById("mem-options-poignee"),
+    compact: compact,
+  });
+  // Escape: closes the Settings sheet first, else the note card.
+  document.addEventListener("keydown", function(e) {
+    if (e.key !== "Escape" && e.key !== "Esc") return;
+    if (feuille && feuille.isOpen()) { feuille.close(); return; }
+    if (panneau && !panneau.hidden) panneau.hidden = true;
+  });
   var choixLiens = document.getElementById("mem-liens");
   if (choixLiens) {
     choixLiens.value = modeLiens;
@@ -2417,8 +2542,23 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     });
   });
   majFiltres();
+  // Legend behind the "Themes" chip on a phone (setupLegendFold, top of this file).
+  var plierLegende = setupLegendFold({
+    details: document.getElementById("mem-legende-dd"), compact: compact,
+    read: lireLocal, write: ecrireLocal,
+  });
+  if (plierLegende) {
+    if (mqlCompact && mqlCompact.addEventListener) mqlCompact.addEventListener("change", plierLegende);
+    else if (window.addEventListener) window.addEventListener("resize", plierLegende);
+  }
   var formCherche = document.getElementById("mem-cherche");
   var champCherche = document.getElementById("mem-cherche-champ");
+  // Search behind the magnifier on a phone (setupSearchFold); folded again after a choice.
+  var plierCherche = setupSearchFold({
+    button: document.getElementById("mem-cherche-ouvrir"), form: formCherche, field: champCherche, compact: compact,
+    later: function(fn, ms) { return setTimeout(fn, ms); },
+    active: function() { return document.activeElement; },
+  });
   function remplirListe() {
     var dl = document.getElementById("mem-cherche-liste");
     if (!dl) return;
@@ -2460,6 +2600,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       }
       activer(n.id, 1);
       ouvrir(n.id, true);
+      if (plierCherche && compact()) plierCherche.close(false);
     });
     champCherche.addEventListener("input", function() {
       champCherche.setCustomValidity("");

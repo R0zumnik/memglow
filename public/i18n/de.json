@@ -5,6 +5,7 @@
   "header.subtitle": "Jeder Punkt ist eine Notiz, an die sich Ihr Assistent erinnert; jede Linie ein Verweis zwischen zwei Notizen. Wenn ein Assistent eine Notiz liest, durchsucht oder schreibt, leuchtet sie auf — in Echtzeit.",
   "graph.ariaLabel": "Gedächtnisgraph",
   "legend.ariaLabel": "Thema ein- oder ausblenden",
+  "legend.toggle": "Themen",
 
   "theme.index": "Index",
   "theme.other": "Sonstiges",
@@ -18,6 +19,7 @@
   "search.noMatch": "Keine passende Notiz.",
 
   "settings.summary": "Einstellungen",
+  "settings.close": "Einstellungen schließen",
   "settings.display": "Anzeige",
   "settings.glow": "Leuchten",
   "settings.names": "Namen",

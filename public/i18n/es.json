@@ -5,6 +5,7 @@
   "header.subtitle": "Cada punto es una nota que su asistente recuerda; cada línea, un enlace entre dos notas. Cuando un asistente lee, busca o escribe una nota, esta se ilumina — en vivo.",
   "graph.ariaLabel": "Grafo de la memoria",
   "legend.ariaLabel": "Mostrar u ocultar un tema",
+  "legend.toggle": "Temas",
 
   "theme.index": "Índice",
   "theme.other": "Otro",
@@ -18,6 +19,7 @@
   "search.noMatch": "Ninguna nota coincide.",
 
   "settings.summary": "Ajustes",
+  "settings.close": "Cerrar ajustes",
   "settings.display": "Visualización",
   "settings.glow": "Brillo",
   "settings.names": "Nombres",

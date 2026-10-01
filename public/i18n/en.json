@@ -5,6 +5,7 @@
   "header.subtitle": "Every dot is a note your assistant remembers; every line, a link between two notes. When an assistant reads, searches or writes a note, it lights up — live.",
   "graph.ariaLabel": "Memory graph",
   "legend.ariaLabel": "Show or hide a theme",
+  "legend.toggle": "Themes",
 
   "theme.index": "Index",
   "theme.other": "Other",
@@ -18,6 +19,7 @@
   "search.noMatch": "No matching note.",
 
   "settings.summary": "Settings",
+  "settings.close": "Close settings",
   "settings.display": "Display",
   "settings.glow": "Glow",
   "settings.names": "Names",

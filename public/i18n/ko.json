@@ -5,6 +5,7 @@
   "header.subtitle": "각 점은 어시스턴트가 기억하는 노트이고, 각 선은 두 노트 사이의 링크입니다. 어시스턴트가 노트를 읽거나, 검색하거나, 쓸 때마다 실시간으로 밝아집니다.",
   "graph.ariaLabel": "메모리 그래프",
   "legend.ariaLabel": "테마 표시/숨기기",
+  "legend.toggle": "테마",
 
   "theme.index": "인덱스",
   "theme.other": "기타",
@@ -18,6 +19,7 @@
   "search.noMatch": "일치하는 노트가 없습니다.",
 
   "settings.summary": "설정",
+  "settings.close": "설정 닫기",
   "settings.display": "표시",
   "settings.glow": "발광",
   "settings.names": "이름",

@@ -87,6 +87,54 @@ a { color: var(--bn-accent-teal); }
 .mem-legende li { display: inline-flex; align-items: center; gap: 6px; }
 
 .mem-legende li { pointer-events: auto; }
+
+/* Legend, search and Settings: a column above 640 px (as before); a compact row of chips and icons on
+   a phone — see the COMPACT block further down, which holds every phone-only rule. */
+.mem-hud__outils { display: flex; flex-direction: column; gap: var(--bn-space-2); }
+/* "Themes" chip: hidden above 640 px, where the legend is always open (`open` set in the HTML and
+   kept by app.js), so the legend looks exactly as before. Folded by default on a phone. */
+.mem-legende-dd { pointer-events: auto; }
+.mem-legende-dd > summary { display: none; list-style: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.mem-legende-dd > summary::-webkit-details-marker { display: none; }
+.mem-legende-dd > summary:focus-visible { outline: none; }
+.mem-legende-dd > summary:focus-visible .mem-chip { outline: 2px solid #7EE0B8; outline-offset: 2px; }
+.mem-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 2px 12px;
+  border: 1px solid rgba(234, 244, 240, 0.28);
+  border-radius: 999px;
+  background: rgba(4, 18, 15, 0.55);
+  color: #EAF4F0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.mem-chip::before { content: "▸"; font-size: 11px; transition: transform 0.2s ease; }
+.mem-chip::after { content: ""; position: absolute; inset: -8px -2px; }
+.mem-legende-dd[open] > summary .mem-chip::before { transform: rotate(90deg); }
+.mem-cherche-dd { pointer-events: auto; }
+/* Magnifier (phone): opens "Find a note". Hidden above 640 px, where the field shows as it is. */
+.mem-icon-btn {
+  position: relative;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(234, 244, 240, 0.28);
+  border-radius: 999px;
+  background: rgba(4, 18, 15, 0.55);
+  color: #EAF4F0;
+  cursor: pointer;
+}
+.mem-icon-btn::after { content: ""; position: absolute; inset: -6px; }
+.mem-icon-btn svg { width: 16px; height: 16px; flex: none; }
+.mem-icon-btn:hover { border-color: rgba(234, 244, 240, 0.5); }
+.mem-icon-btn:focus-visible { outline: 2px solid #7EE0B8; outline-offset: 2px; }
 .mem-filtre {
   position: relative;
   display: inline-flex;
@@ -143,6 +191,11 @@ a { color: var(--bn-accent-teal); }
   cursor: pointer;
   list-style: none;
 }
+.mem-options > summary { gap: 6px; }
+/* Gear: hidden above 640 px (the text label is enough, as before). */
+.mem-options__ic { display: none; width: 16px; height: 16px; flex: none; }
+/* Bottom-sheet parts (handle, "Close settings", dimmed background): phone only, see COMPACT. */
+.mem-options__poignee, .mem-options__fermer, .mem-options-scrim { display: none; }
 .mem-options > summary::-webkit-details-marker { display: none; }
 .mem-options > summary::after { content: "▾"; margin-left: 8px; transition: transform 0.2s ease; }
 .mem-options[open] > summary::after { transform: rotate(180deg); }
@@ -334,32 +387,172 @@ a { color: var(--bn-accent-teal); }
 }
 .mem-journal__groupe.mem-grp--index { --c: #C9B98F; }
 
-@media (max-width: 640px) {
+/* ==========================================================================
+   COMPACT — phone in portrait (under 640 px) AND phone in landscape (little height, whatever the
+   width: a phone on its side is wider than 640 px). Same query as COMPACT_QUERY in app.js: change
+   one, change the other. Nothing here applies above 640 px on a computer.
+   ========================================================================== */
+@media (max-width: 640px), (max-height: 500px) and (orientation: landscape) {
   .mem-canvas { height: 62vh; min-height: 360px; }
   .mem-stage { min-height: 360px; }
-  .mem-legende { max-width: 220px; }
-  
+  .mem-hud { top: var(--bn-space-3); left: var(--bn-space-3); right: var(--bn-space-3); }
+
+  /* Legend, search and Settings: one row of chips and icons instead of three stacked blocks over
+     the graph. */
+  .mem-hud__outils { position: relative; flex-direction: row; flex-wrap: wrap; align-items: center; }
+  /* Unfolded, the legend drops below the row (the chips never move); a tap on a theme still
+     shows or hides it. */
+  .mem-legende-dd > summary { display: inline-flex; }
+  .mem-legende-dd[open] > .mem-legende {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + var(--bn-space-2));
+    padding: 6px 8px;
+    border-radius: 14px;
+    background: rgba(4, 18, 15, 0.8);
+  }
+
+  /* Search folded behind the magnifier; opened on tap (class set by app.js), folded again after a
+     choice, Escape, or leaving an empty field. */
+  .mem-icon-btn { display: inline-flex; }
+  .mem-cherche { display: none; }
+  /* Opened, the field lies over the row of chips, full width, inside the graph tile. */
+  .mem-cherche.mem-cherche--ouverte {
+    display: flex;
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    z-index: 7;
+  }
+  .mem-cherche.mem-cherche--ouverte input { width: 100%; }
+
+  /* Settings: gear only (the label stays in the DOM for screen readers: clipped, never
+     display:none), opened as a bottom sheet with a handle, a "Close settings" button and a dimmed
+     background — plus Escape (app.js). */
+  .mem-options__ic { display: inline-block; }
+  .mem-options > summary { padding: 4px 10px; }
+  .mem-options > summary::after { content: none; }
+  .mem-options > summary .mem-options__texte {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
   .mem-options[open] > .mem-options__corps {
     position: fixed;
-    left: var(--bn-space-2);
-    right: var(--bn-space-2);
-    bottom: var(--bn-space-2);
-    max-height: 60vh;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: 0;
+    max-height: 70vh;
+    padding: var(--bn-space-2) var(--bn-space-4) calc(var(--bn-space-4) + env(safe-area-inset-bottom, 0px));
+    border-radius: 20px 20px 0 0;
     overflow-y: auto;
     overscroll-behavior: contain;
     touch-action: pan-y;
-    z-index: 4;
+    z-index: 6;
+    animation: mem-sheet-in 0.22s ease-out;
   }
-  .mem-cherche input { width: min(200px, 100%); }
-  
+  .mem-options__poignee {
+    display: block;
+    flex: none;
+    width: 40px;
+    height: 5px;
+    margin: 4px auto var(--bn-space-2);
+    border-radius: 999px;
+    background: var(--bn-ink-dim);
+    opacity: 0.6;
+    touch-action: none;
+  }
+  .mem-options__fermer { display: inline-flex; flex: none; align-self: flex-end; min-height: 40px; }
+  .mem-options[open] ~ .mem-options-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(4, 18, 15, 0.55);
+    z-index: 5;
+    pointer-events: auto;
+    animation: mem-fade-in 0.22s ease-out;
+  }
+  .mem-reglage { min-height: 44px; }
+  .mem-reglage input[type="range"] { width: min(160px, 45vw); }
+
+  /* Note card: a bottom sheet over the lower part of the graph; one scroll only. */
   .mem-panneau {
     top: auto;
     left: var(--bn-space-2);
     right: var(--bn-space-2);
     bottom: var(--bn-space-2);
     width: auto;
+    max-width: none;
     max-height: 58%;
+    padding: var(--bn-space-4);
   }
+}
+@keyframes mem-sheet-in { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes mem-fade-in { from { opacity: 0; } to { opacity: 1; } }
+/* Phone in landscape: little height — a smaller floor for the graph, so the rest of the page is
+   not pushed out of view. */
+@media (max-height: 500px) and (orientation: landscape) {
+  .mem-canvas { height: 68vh; min-height: 220px; }
+  .mem-stage { min-height: 220px; }
+  .mem-options[open] > .mem-options__corps { max-height: 85vh; }
+}
+
+/* ==========================================================================
+   DENSITY — portrait phone only (under 640 px): the journal and the panels breathe. No colour,
+   block or order changes; only line breaks, spacing and hierarchy. In landscape a journal line
+   fits on one row: nothing to do.
+   ========================================================================== */
+@media (max-width: 640px) {
+  /* Journal: every entry on two regular lines — "action · group" then "note · machine · channel ·
+     tool" (the separator after the group tag becomes the line break: empty, zero height). Clock and
+     dot sit on the FIRST line, a hairline between entries. */
+  .mem-journal__liste { gap: 0; }
+  .mem-journal__liste li { align-items: flex-start; gap: var(--bn-space-2); padding: var(--bn-space-2) var(--bn-space-1); line-height: 1.5; }
+  .mem-journal__liste li + li { border-top: 1px solid var(--bn-line); }
+  .mem-journal__h { font-size: 12px; line-height: 21px; }
+  .mem-journal__liste .mem-dot { margin-top: 6px; }
+  .mem-journal__groupe + .mem-journal__sep { display: block; height: 0; overflow: hidden; }
+  .mem-journal__groupe + .mem-journal__sep + span { font-weight: 600; }
+  .mem-journal__txt > span:first-child, .mem-journal__sep { color: var(--bn-ink-dim); }
+  .mem-journal__txt > span:first-child { display: inline-block; }
+
+  /* Memory cost: names are no longer cut — they wrap instead of ending in "…". */
+  .mg-cost__name { align-items: flex-start; }
+  .mg-cost__label { white-space: normal; overflow-wrap: anywhere; }
+  .mg-cost__dot { margin-top: 5px; }
+  .mg-cost__sections { line-height: 1.45; }
+  .mg-cost__sections li { margin: 4px 0; }
+  .mg-cost__org-msg, .mg-cost__tips { line-height: 1.45; }
+  .mg-cost__row { padding-block: 8px; }
+
+  /* Buttons: a 40 px row on touch screens. */
+  .bn-btn { min-height: 40px; }
+  .mg-cost__copy { min-height: 36px; }
+
+  /* Assistant: the diff scrolls with the page (one scroll for the thumb), long paths wrap. */
+  .mg-ai__hunk { max-height: none; overflow: visible; }
+  .mg-ai__file summary { line-height: 1.5; }
+  .mg-ai__recent li { flex-wrap: wrap; }
+  .mg-ai__btns .bn-btn, .mg-zones__btns .bn-btn { flex: 1 1 auto; }
+  .mg-ai__extra select { width: 100%; }
+
+  /* Protected groups: the display name takes the whole row under its checkbox. */
+  .mg-zones__label { flex-basis: 100%; max-width: none; min-height: 40px; font-size: 16px; }
+  .mg-zones__check { min-height: 40px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mem-options[open] > .mem-options__corps, .mem-options[open] ~ .mem-options-scrim { animation: none; }
+  .mem-chip::before, .mem-options > summary::after { transition: none; }
 }
 
 /* Memory cost (public/cost.js, GET /api/cost) */

@@ -30,15 +30,34 @@
       <div class="mem-canvas" id="mem-graphe" data-graphe="/api/graph" data-flux="/api/stream" data-note="/api/note/" data-vue="/api/view"></div>
       <div class="mem-hud">
         <p class="mem-hud__stat"><span class="mem-hud__n" id="mem-nb-notes">0</span> <span id="mem-mot-notes" data-i18n="stats.notesWord">notes</span> · <span class="mem-hud__n" id="mem-nb-liens">0</span> <span id="mem-mot-liens" data-i18n="stats.linksWord">links</span></p>
-        <ul class="mem-legende" data-i18n-attr="aria-label:legend.ariaLabel" aria-label="Show or hide a theme">{{legend}}</ul>
-        <form class="mem-cherche" id="mem-cherche" role="search">
-          <label class="mem-cherche__label" for="mem-cherche-champ" data-i18n="search.label">Find a note</label>
-          <input type="search" id="mem-cherche-champ" list="mem-cherche-liste" placeholder="Find a note…" data-i18n-attr="placeholder:search.placeholder" autocomplete="off">
-          <datalist id="mem-cherche-liste"></datalist>
-        </form>
+        <!-- Legend, search and the options menu. Above 640 px: stacked as they always were. On a phone (and a
+             phone in landscape: same query as COMPACT_QUERY in app.js), a compact row — legend behind a
+             "Themes" chip, search behind a magnifier, the options behind a gear that opens a bottom sheet. -->
+        <div class="mem-hud__outils">
+          <details class="mem-legende-dd" id="mem-legende-dd" open>
+            <summary class="mem-legende-dd__bouton"><span class="mem-chip" data-i18n="legend.toggle">Themes</span></summary>
+            <ul class="mem-legende" data-i18n-attr="aria-label:legend.ariaLabel" aria-label="Show or hide a theme">{{legend}}</ul>
+          </details>
+          <div class="mem-cherche-dd">
+            <button type="button" class="mem-icon-btn" id="mem-cherche-ouvrir" aria-expanded="false" aria-controls="mem-cherche" data-i18n-attr="aria-label:search.label" aria-label="Find a note">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>
+            </button>
+            <form class="mem-cherche" id="mem-cherche" role="search">
+              <label class="mem-cherche__label" for="mem-cherche-champ" data-i18n="search.label">Find a note</label>
+              <input type="search" id="mem-cherche-champ" list="mem-cherche-liste" placeholder="Find a note…" data-i18n-attr="placeholder:search.placeholder" autocomplete="off">
+              <datalist id="mem-cherche-liste"></datalist>
+            </form>
+          </div>
         <details class="mem-options" id="mem-options">
-          <summary data-i18n="settings.summary">Settings</summary>
-          <div class="mem-options__corps" id="mem-options-corps">
+          <summary>
+            <svg class="mem-options__ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z"></path></svg>
+            <span class="mem-options__texte" data-i18n="settings.summary">Settings</span>
+          </summary>
+          <div class="mem-options__corps" id="mem-options-corps" role="group" data-i18n-attr="aria-label:settings.summary" aria-label="Settings">
+            <!-- Bottom sheet (phone only, hidden by CSS above 640 px): drag handle and an explicit
+                 close button, besides Escape and a tap on the dimmed background. -->
+            <div class="mem-options__poignee" id="mem-options-poignee" aria-hidden="true"></div>
+            <button type="button" class="bn-btn mem-options__fermer" id="mem-options-fermer" data-i18n="settings.close">Close settings</button>
             <fieldset class="mem-options__section">
               <legend data-i18n="settings.display">Display</legend>
               <label class="mem-reglage"><span data-i18n="settings.glow">Glow</span>
@@ -124,6 +143,9 @@
             <p class="mem-options__aide" data-i18n="settings.help">Drag a bubble to move it; double-click it to release it, double-click the background to recenter. The view (settings, layout, camera) is saved on this memglow instance: every browser and device that opens it gets the same view. “Rearrange” starts again from a fresh layout and keeps the settings.</p>
           </div>
         </details>
+        <!-- Dimmed background behind the options sheet (phone only, CSS): a tap closes the sheet. -->
+        <div class="mem-options-scrim" id="mem-options-scrim" aria-hidden="true"></div>
+        </div>
       </div>
       <p class="mem-etat" id="mem-etat" role="status" data-i18n="status.loading">Loading the graph…</p>
       <aside class="mem-panneau" id="mem-panneau" hidden aria-live="polite">
