@@ -349,7 +349,8 @@ e.g. *Write · Projects · Release notes · my-agent*). Full reference with Pyth
 ## 🔌 MCP proxy
 
 For MCP clients without hooks (Claude Desktop, Continue, Roo Code…), put the proxy in front of
-the memory server. It relays every byte unchanged and reports note names only:
+the memory server. It reports note names only, and relays the server's answers — with, if you
+want, a few levers that make the assistant find faster and read less:
 
 ```json
 "basic-memory": {
@@ -360,6 +361,23 @@ the memory server. It relays every byte unchanged and reports note names only:
 
 Streamable HTTP servers too: `memglow-mcp-proxy --upstream http://127.0.0.1:8000/mcp --listen 127.0.0.1:8765`.
 Tool-name mapping is configurable. Details: [mcp-proxy/README.md](mcp-proxy/README.md).
+
+**Token-saving and speed levers (v0.4).** The proxy annotates the memory server's *answers* —
+never your notes, which it only reads. Levers 1-3 only add a short block before or after the
+server's own content; 4 and 5 may replace a read answer, so they are off by default.
+
+| # | Lever (`proxy` key / variable) | Default | Effect |
+|---|---|---|---|
+| 1 | `sizeWarning` / `MEMGLOW_PROXY_SIZE_WARNING` | on | `⚠ memglow: this note is ≈N tokens (threshold T)…` before a large note, or after a write that makes it large — suggests a split within the same theme. Once per note and session. |
+| 2 | `searchDetails` / `MEMGLOW_PROXY_SEARCH_DETAILS` | on | After search results: title · theme · ≈tokens · description of each note found. |
+| 3 | `suggestions` / `MEMGLOW_PROXY_SUGGESTIONS` | on | After a read: up to 3-5 related notes (links, sub-theme, co-usage), names and sizes only. |
+| 4 | `dedupe` / `MEMGLOW_PROXY_DEDUPE` | off | An unchanged note re-read in the same session → a short "unchanged, ≈N tokens saved" notice. |
+| 5 | `toc` / `MEMGLOW_PROXY_TOC` | off | A large note → its outline with ≈tokens per section first; then one section on demand. |
+
+Levers 4 and 5 change what the assistant receives: **measure answer quality before enabling
+them**. Repeating the same read, or adding `"memglow_fresh": true`, always brings the full note
+back. Configuration (`memglow.config.json` → `"proxy": {…}`), examples and the exact rules:
+[mcp-proxy/README.md](mcp-proxy/README.md#token-saving-and-speed-levers-v04).
 
 <a id="mcp-server"></a>
 ## 🧠 MCP server (read-only)

@@ -124,7 +124,7 @@ test("HTTP proxy: JSON and SSE responses relayed, headers and query forwarded, 5
   });
   await new Promise((ok) => upstream.listen(0, "127.0.0.1", ok));
   const reports = [];
-  const proxy = createHttpProxy({ upstream: `http://127.0.0.1:${upstream.address().port}/mcp`, name: "notes", source: "t", onReport: (e) => reports.push(e) });
+  const proxy = createHttpProxy({ upstream: `http://127.0.0.1:${upstream.address().port}/mcp`, name: "notes", source: "t", onReport: (e) => reports.push(e), levers: null });
   await new Promise((ok) => proxy.listen(0, "127.0.0.1", ok));
   const base = `http://127.0.0.1:${proxy.address().port}`;
   const call = (id, name) => fetch(base + "/mcp?x=1", { method: "POST", headers: { "content-type": "application/json", "mcp-session-id": "s1" },

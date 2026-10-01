@@ -44,6 +44,7 @@ test("init: token, config, hooks merged, foreign entries kept, broken file untou
     assert.strictEqual(read(path.join(h.home, ".memglow/memglow.config.json")).memoryDir, h.vault);
     assert.ok(fs.existsSync(path.join(h.home, ".memglow/app/adapters/claude-code/hook.js")));
     assert.ok(fs.existsSync(path.join(h.home, ".memglow/app/lib/agent-core.js")));
+    for (const f of ["proxy-levers.js", "memory.js", "cost.js", "counters.js", "related.js"]) assert.ok(fs.existsSync(path.join(h.home, ".memglow/app/lib", f)), f);
 
     const c = read(h.claude);
     assert.strictEqual(c.model, "x");

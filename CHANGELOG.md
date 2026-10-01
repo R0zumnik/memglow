@@ -21,6 +21,28 @@
   same access rule as the page, CSRF header + same origin, rate limited, one job at a time.
   Providers are adapters (`lib/assistant/providers/`): `claude-code` today; HTTP APIs and the
   Codex, Gemini and Cursor CLIs are listed as not supported yet.
+
+- **MCP proxy levers** (`lib/proxy-levers.js`): the proxy can now annotate the memory server's
+  answers to save tokens and round trips — never the notes, which it only reads (cached: one folder
+  scan per poll interval, plus one after each write). Each lever has a switch in
+  `memglow.config.json` → `"proxy"` and a `MEMGLOW_PROXY_*` variable. On by default, and only
+  ever *adding* a text block before or after the server's untouched content: (1) **size warning**
+  when a note over `largeNoteTokens` is read, or written past it, suggesting a split within the
+  same theme (once per note and session); (2) **richer search results** — title, theme, ≈tokens
+  and description of each note found; (3) **context suggestions** — up to 3-5 related notes after
+  a read (links, sub-theme, co-usage), names and sizes only. Off by default, because they change
+  what the assistant receives (measure answer quality first): (4) **session read de-duplication**
+  — an unchanged note re-read in the same session gets a short notice instead of its content;
+  (5) **table of contents first** — a large note comes back as its outline with ≈tokens per
+  section, then one section on demand, cut verbatim from the server's answer (basic-memory's
+  `read_note` has no section parameter). For 4 and 5, an optional `memglow_fresh` argument (added
+  to the read tools in `tools/list`, stripped before the server) or simply repeating the read
+  returns the full note. Tokens saved are logged on stderr and summed per day in
+  `proxy-savings.json` in memglow's data folder. Works in stdio and Streamable HTTP (JSON and SSE)
+  modes; with every lever off the proxy is the same pure byte relay as before. Readers of
+  frontmatter, sections and related notes are shared with the viewer and `memglow-mcp`
+  (`lib/related.js`, `sectionSpans()` in `lib/cost.js`).
+
 - **MCP server** (`memglow-mcp`, `mcp-server/memglow-mcp.js`, bin `memglow-mcp`): a second,
   standalone, read-only MCP server, separate from the MCP proxy. It starts entirely on its own —
   no viewer, no network, no notes folder even required — and lets an assistant query its own
