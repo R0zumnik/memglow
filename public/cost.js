@@ -22,20 +22,56 @@ function costEsc(s) {
    English unless a T is explicitly given (only the UI renderers below pass one). */
 var EN_COST = {
   "cost.tokensToday": "Tokens read today", "cost.tokensRead7": "Tokens read · 7 days",
-  "cost.tokensWritten7": "Tokens written · 7 days", "cost.wholeMemory": "Whole memory", "cost.indexNote": "Index note",
-  "cost.eachRead": "each time it is read", "cost.noIndexNote": "no index note",
-  "cost.notesCount": { one: "{n} note", other: "{n} notes" }, "cost.readsCount": { one: "{n} read", other: "{n} reads" },
+  "cost.tokensWritten7": "Tokens written · 7 days", "cost.wholeMemory": "Whole memory",
+  "cost.indexNote": "Index note", "cost.eachRead": "each time it is read", "cost.noIndexNote": "no index note",
+  "cost.notesCount": { one: "{n} note", other: "{n} notes" },
+  "cost.readsCount": { one: "{n} read", other: "{n} reads" },
   "cost.noReadYet": "No read counted in the last 7 days yet.", "cost.ofTokensRead7": "of tokens read (7 days)",
-  "cost.percentAria": "{n} percent", "cost.copyPrompt": "Copy prompt for your AI", "cost.doWithClaude": "Do it with Claude",
-  "cost.introduction": "(introduction)", "cost.splitInto": { one: "Split into {n} note:", other: "Split into {n} notes:" },
-  "cost.singleSection": "A single section: no split to suggest from headings.", "cost.sectionsCount": "Sections ({n})",
-  "cost.noLargeNotes": "No note above {tokens} tokens.",
-  "cost.dataSince": "Data since {date} — less than 30 days of counting so far.", "cost.noDataYet": "No data yet.",
-  "cost.allRead30": "Every note was read at least once in 30 days.", "cost.moreCount": "+ {n} more.",
-  "cost.notAvailable": "Memory cost is not available.", "cost.mostExpensive": "Most expensive to read · 7 days",
-  "cost.tooLarge": "Too large (&gt; {tokens} tokens)", "cost.neverRead30": "Never read in 30 days",
-  "cost.loadFailed": "Could not load Memory cost.", "cost.copied": "Copied ✓",
-  "cost.selectManually": "Select and copy the text below", "cost.promptToCopy": "Prompt to copy"
+  "cost.percentAria": "{n} percent", "cost.copyPrompt": "Copy prompt for your AI",
+  "cost.introduction": "(introduction)",
+  "cost.splitInto": { one: "Split into {n} note:", other: "Split into {n} notes:" },
+  "cost.singleSection": "A single section: no split to suggest from headings.",
+  "cost.sectionsCount": "Sections ({n})", "cost.noLargeNotes": "No note above {tokens} tokens.",
+  "cost.dataSince": "Data since {date} — less than 30 days of counting so far.",
+  "cost.noDataYet": "No data yet.", "cost.allRead30": "Every note was read at least once in 30 days.",
+  "cost.moreCount": "+ {n} more.", "cost.notAvailable": "Memory cost is not available.",
+  "cost.mostExpensive": "Most expensive to read · 7 days", "cost.tooLarge": "Too large (&gt; {tokens} tokens)",
+  "cost.neverRead30": "Never read in 30 days", "cost.loadFailed": "Could not load Memory cost.",
+  "cost.copied": "Copied ✓", "cost.selectManually": "Select and copy the text below",
+  "cost.promptToCopy": "Prompt to copy", "cost.doWith": "Do it with {name}", "cost.organisation": "Organisation",
+  "cost.alwaysLoaded": "Always loaded · every session", "cost.archive": "Archive · sections unused for {n} days",
+  "org.none": "No scattered notes found: every subject sits in one sub-theme.", "org.why": "Why",
+  "org.scattered": "{n} notes about “{topic}” are spread across {k} sub-themes of {group} — group them under “{target}”?",
+  "org.alone": "“{label}” is alone in the sub-theme “{from}” — move it to “{target}”?",
+  "org.reasonShared": "{n} notes of the group “{group}” share the word “{topic}”",
+  "org.reasonLinks": { one: " and {n} link between them", other: " and {n} links between them" },
+  "org.reasonSubthemes": "they sit in {n} sub-themes: {list}",
+  "org.reasonTargetHolds": "“{target}” already holds {n} of them",
+  "org.reasonAlone": "“{label}” is the only note of the sub-theme “{from}”",
+  "org.reasonTied": { one: "it is tied to {n} note of “{target}” ({how})", other: "it is tied to {n} notes of “{target}” ({how})" },
+  "org.sharedWords": "shared words: {list}", "org.byLinks": "links", "always.notAvailable": "Not available.",
+  "always.index": "Index · {label}", "always.notFound": "not found",
+  "always.perDay": "{perSession} tokens per session × {sessions} sessions per day ≈ {perDay} tokens per day",
+  "always.sessionsFromIndex": "Sessions per day estimated from the reads of the index note (last 7 days).",
+  "always.sessionsFromSetting": "Sessions per day: the sessionsPerDay setting (no read of the index counted yet).",
+  "always.noIndex": "No index note.",
+  "always.addFiles": "Add your instruction files (CLAUDE.md, AGENTS.md…) to {setting} in memglow.config.json to count them too — only their size is read.",
+  "always.tipIndex": "Trim the index: ≈ {tokens} tokens are loaded at every session (tip threshold {threshold}). Keep one short line per note and move details into the notes.",
+  "always.tipFile": "Trim {name}: ≈ {tokens} tokens at every session. Move rarely needed instructions into notes the assistant reads on demand.",
+  "always.small": "Small enough: nothing to trim.",
+  "arch.notEnough": "Not enough data yet{since} — a section is suggested only after {days} days of counted activity{from}.",
+  "arch.since": " since {date}", "arch.from": " (from {date})",
+  "arch.none": "No dormant section: every note was read, found or edited in the last {days} days.",
+  "arch.hint": "Their notes were not read nor found by a search for {days} days, and the sections were not edited ({basis}). memglow only sees whole-note reads, so a note read once keeps all its sections live.",
+  "arch.basisSection": "checked per section", "arch.basisNote": "checked per note",
+  "arch.hiddenTitles": "{count}, {tokens} tokens. Section titles are hidden (MEMGLOW_SHOW_BODIES is off).",
+  "arch.dormantCount": { one: "{n} dormant section", other: "{n} dormant sections" },
+  "arch.lastRead": "last read {date}", "arch.notReadSince": "not read since counting began",
+  "arch.more": { one: "+ {n} more section (the biggest are listed).", other: "+ {n} more sections (the biggest are listed)." },
+  "arch.prepare": "Prepare without AI", "arch.yourAi": "your AI", "arch.noneSelected": "No section selected.",
+  "arch.gain": "{sections} · live memory {saved} tokens smaller (each section leaves a one-line link) · archive summary + {line} tokens",
+  "arch.sectionCount": { one: "{n} section", other: "{n} sections" },
+  "arch.copyFailed": "Copy failed: select the sections again"
 };
 function resolveTextCost(dict, key, params) {
   var entry = dict ? dict[key] : undefined;
@@ -177,7 +213,42 @@ var costAssistant = false;
 var costAssistantLabel = "Claude";
 function costCopyButton(n, T) {
   return '<button type="button" class="bn-btn mg-cost__copy" data-copy="' + costEsc(n.id) + '">' + costEsc(T("cost.copyPrompt")) + '</button>' +
-    (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-assist="' + costEsc(n.id) + '">Do it with ' + costEsc(costAssistantLabel) + '</button>' : "");
+    (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-assist="' + costEsc(n.id) + '">' + costEsc(T("cost.doWith", { name: costAssistantLabel })) + '</button>' : "");
+}
+
+/**
+ * `key`'s translation with some {placeholders} replaced by ready-made HTML (a <strong> figure, a
+ * <code> name): the translated text itself is escaped first, then only the `html` pieces are put
+ * in — so a translation can move a bold figure wherever its word order needs it.
+ */
+function costFill(T, key, html, params) {
+  return costEsc(T(key, params)).replace(/\{(\w+)\}/g, function (m, k) {
+    return Object.prototype.hasOwnProperty.call(html, k) ? html[k] : m;
+  });
+}
+
+/** One organisation suggestion as text: from its `facts` (translated), else the server's English. */
+function costOrgMessage(s, T) {
+  var f = s.facts;
+  if (!f) return s.message || "";
+  return f.kind === "alone"
+    ? T("org.alone", { label: f.label, from: f.from, target: f.target })
+    : T("org.scattered", { n: f.notes, topic: f.topic, k: f.subthemes.length, group: f.group, target: f.target });
+}
+function costOrgReasons(s, T) {
+  var f = s.facts;
+  if (!f) return s.reasons || [];
+  if (f.kind === "alone") {
+    return [
+      T("org.reasonAlone", { label: f.label, from: f.from }),
+      T("org.reasonTied", { n: f.tied, target: f.target, how: f.words && f.words.length ? T("org.sharedWords", { list: f.words.join(", ") }) : T("org.byLinks") }),
+    ];
+  }
+  return [
+    T("org.reasonShared", { n: f.notes, group: f.group, topic: f.topic }) + (f.links ? T("org.reasonLinks", { n: f.links }) : ""),
+    T("org.reasonSubthemes", { n: f.subthemes.length, list: f.subthemes.join(", ") }),
+    T("org.reasonTargetHolds", { target: f.target, n: f.targetCount }),
+  ];
 }
 
 /**
@@ -186,36 +257,48 @@ function costCopyButton(n, T) {
  */
 function costOrganisation(list, colors, T) {
   T = T || defaultCostT;
-  if (!list || !list.length) return '<p class="mg-cost__empty">No scattered notes found: every subject sits in one sub-theme.</p>';
+  if (!list || !list.length) return '<p class="mg-cost__empty">' + costEsc(T("org.none")) + '</p>';
   return '<ul class="mg-cost__list mg-cost__org">' + list.map(function (s) {
+    var subName = (s.facts && s.facts.subthemeNames) || {};
+    var sub = function (x) { return Object.prototype.hasOwnProperty.call(subName, x) ? subName[x] : x; };
     var notes = (s.notes || []).map(function (n) {
       var moving = (s.move || []).indexOf(n.id) >= 0;
       return '<li><div class="mg-cost__row mg-cost__row--simple" data-note="' + costEsc(n.id) + '" tabindex="0" role="button">' +
-        costName({ label: n.label, theme: s.theme }, colors) + '<span class="mg-cost__det">' + costEsc(n.subtheme || "general") + (moving ? " → " + costEsc(s.target) : "") + '</span></div></li>';
+        costName({ label: n.label, theme: s.theme }, colors) + '<span class="mg-cost__det">' + costEsc(sub(n.subtheme || "general")) + (moving ? " → " + costEsc(sub(s.target)) : "") + '</span></div></li>';
     }).join("");
-    return '<li class="mg-cost__item mg-cost__org-item"><p class="mg-cost__org-msg">' + costEsc(s.message) + '</p>' +
+    return '<li class="mg-cost__item mg-cost__org-item"><p class="mg-cost__org-msg">' + costEsc(costOrgMessage(s, T)) + '</p>' +
       '<ul class="mg-cost__list mg-cost__list--compact">' + notes + '</ul>' +
-      '<details class="mg-cost__sections"><summary>Why</summary><ul>' + (s.reasons || []).map(function (r) { return '<li>' + costEsc(r) + '</li>'; }).join("") + '</ul></details>' +
+      '<details class="mg-cost__sections"><summary>' + costEsc(T("org.why")) + '</summary><ul>' + costOrgReasons(s, T).map(function (r) { return '<li>' + costEsc(r) + '</li>'; }).join("") + '</ul></details>' +
       '<button type="button" class="bn-btn mg-cost__copy" data-copy-org="' + costEsc(s.id) + '">' + costEsc(T("cost.copyPrompt")) + '</button>' +
-      (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-assist-org="' + costEsc(s.id) + '">Do it with ' + costEsc(costAssistantLabel) + '</button>' : "") +
+      (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-assist-org="' + costEsc(s.id) + '">' + costEsc(T("cost.doWith", { name: costAssistantLabel })) + '</button>' : "") +
       '</li>';
   }).join("") + '</ul>';
 }
 
+/** A trimming tip: from its figures (translated), else the server's English text. */
+function costTip(t, T) {
+  if (t && t.kind === "index" && typeof t.tokens === "number") return T("always.tipIndex", { tokens: costNumber(t.tokens), threshold: costNumber(t.threshold) });
+  if (t && t.kind === "file" && typeof t.tokens === "number" && t.name) return T("always.tipFile", { name: t.name, tokens: costNumber(t.tokens) });
+  return (t && t.text) || "";
+}
+
 /** "Always loaded": index + instruction files read at every session, × sessions per day. */
-function costAlwaysLoaded(a) {
-  if (!a) return '<p class="mg-cost__empty">Not available.</p>';
+function costAlwaysLoaded(a, T) {
+  T = T || defaultCostT;
+  if (!a) return '<p class="mg-cost__empty">' + costEsc(T("always.notAvailable")) + '</p>';
   var rows = (a.index || []).map(function (n) {
-    return '<li><div class="mg-cost__row mg-cost__row--simple" data-note="' + costEsc(n.id) + '" tabindex="0" role="button"><span class="mg-cost__name"><span class="mg-cost__label">Index · ' + costEsc(n.label) + '</span></span><span class="mg-cost__det">' + costTokens(n.tokens) + '</span></div></li>';
+    return '<li><div class="mg-cost__row mg-cost__row--simple" data-note="' + costEsc(n.id) + '" tabindex="0" role="button"><span class="mg-cost__name"><span class="mg-cost__label">' + costEsc(T("always.index", { label: n.label })) + '</span></span><span class="mg-cost__det">' + costTokens(n.tokens) + '</span></div></li>';
   }).concat((a.files || []).map(function (f) {
-    return '<li><div class="mg-cost__row mg-cost__row--simple"><span class="mg-cost__name"><span class="mg-cost__label">' + costEsc(f.name) + '</span></span><span class="mg-cost__det">' + (f.found ? costTokens(f.tokens) : "not found") + '</span></div></li>';
+    return '<li><div class="mg-cost__row mg-cost__row--simple"><span class="mg-cost__name"><span class="mg-cost__label">' + costEsc(f.name) + '</span></span><span class="mg-cost__det">' + (f.found ? costTokens(f.tokens) : costEsc(T("always.notFound"))) + '</span></div></li>';
   }));
-  var html = '<p class="mg-cost__share-text"><strong>' + costTokens(a.perSession) + '</strong> tokens per session × <strong>' + costNumber(a.sessionsPerDay) + '</strong> sessions per day ≈ <strong>' + costTokens(a.perDay) + '</strong> tokens per day</p>' +
-    '<p class="mg-cost__empty">' + (a.sessionsSource === "index reads" ? "Sessions per day estimated from the reads of the index note (last 7 days)." : "Sessions per day: the sessionsPerDay setting (no read of the index counted yet).") + '</p>';
-  html += rows.length ? '<ul class="mg-cost__list mg-cost__list--compact">' + rows.join("") + '</ul>' : '<p class="mg-cost__empty">No index note.</p>';
-  if (!(a.files || []).length) html += '<p class="mg-cost__empty">Add your instruction files (CLAUDE.md, AGENTS.md…) to <code>alwaysLoaded</code> in memglow.config.json to count them too — only their size is read.</p>';
-  if (a.tips && a.tips.length) html += '<ul class="mg-cost__tips">' + a.tips.map(function (t) { return '<li>' + costEsc(t.text) + '</li>'; }).join("") + '</ul>';
-  else html += '<p class="mg-cost__empty">Small enough: nothing to trim.</p>';
+  var html = '<p class="mg-cost__share-text">' + costFill(T, "always.perDay", {
+    perSession: '<strong>' + costTokens(a.perSession) + '</strong>', sessions: '<strong>' + costNumber(a.sessionsPerDay) + '</strong>', perDay: '<strong>' + costTokens(a.perDay) + '</strong>',
+  }) + '</p>' +
+    '<p class="mg-cost__empty">' + costEsc(T(a.sessionsSource === "index reads" ? "always.sessionsFromIndex" : "always.sessionsFromSetting")) + '</p>';
+  html += rows.length ? '<ul class="mg-cost__list mg-cost__list--compact">' + rows.join("") + '</ul>' : '<p class="mg-cost__empty">' + costEsc(T("always.noIndex")) + '</p>';
+  if (!(a.files || []).length) html += '<p class="mg-cost__empty">' + costFill(T, "always.addFiles", { setting: '<code>alwaysLoaded</code>' }) + '</p>';
+  if (a.tips && a.tips.length) html += '<ul class="mg-cost__tips">' + a.tips.map(function (t) { return '<li>' + costEsc(costTip(t, T)) + '</li>'; }).join("") + '</ul>';
+  else html += '<p class="mg-cost__empty">' + costEsc(T("always.small")) + '</p>';
   return html;
 }
 
@@ -306,37 +389,42 @@ function costArchivePrompt(a, list, names, today, protectedGroups) {
 }
 
 /** Archive block: dormant sections with checkboxes, the estimated gain, and the actions. */
-function costArchive(a, colors) {
+function costArchive(a, colors, T) {
+  T = T || defaultCostT;
   if (!a) return "";
   if (!a.available) {
-    return '<p class="mg-cost__empty">Not enough data yet' + (a.since ? ' since ' + costEsc(costDay(a.since)) : '') + ' — a section is suggested only after ' +
-      costNumber(a.afterDays) + ' days of counted activity' + (a.readyOn ? ' (from ' + costEsc(costDay(a.readyOn)) + ')' : '') + '.</p>';
+    return '<p class="mg-cost__empty">' + costEsc(T("arch.notEnough", {
+      since: a.since ? T("arch.since", { date: costDay(a.since) }) : "", days: costNumber(a.afterDays),
+      from: a.readyOn ? T("arch.from", { date: costDay(a.readyOn) }) : "",
+    })) + '</p>';
   }
-  if (!a.sections.length) return '<p class="mg-cost__empty">No dormant section: every note was read, found or edited in the last ' + costNumber(a.afterDays) + ' days.</p>';
+  if (!a.sections.length) return '<p class="mg-cost__empty">' + costEsc(T("arch.none", { days: costNumber(a.afterDays) })) + '</p>';
   var more = a.total - a.sections.length;
-  var hint = '<p class="mg-arch__hint">Their notes were not read nor found by a search for ' + costNumber(a.afterDays) + ' days, and the sections were not edited (' +
-    (a.basis === "section" ? "checked per section" : "checked per note") + '). memglow only sees whole-note reads, so a note read once keeps all its sections live.</p>';
+  var hint = '<p class="mg-arch__hint">' + costEsc(T("arch.hint", { days: costNumber(a.afterDays), basis: T(a.basis === "section" ? "arch.basisSection" : "arch.basisNote") })) + '</p>';
   if (!a.withTitles) {
-    return '<p class="mg-cost__empty">' + costPlural(a.total, "dormant section") + ', ' + costTokens(a.totalTokens) + ' tokens. Section titles are hidden (MEMGLOW_SHOW_BODIES is off).</p>' + hint;
+    return '<p class="mg-cost__empty">' + costEsc(T("arch.hiddenTitles", { count: T("arch.dormantCount", { n: a.total }), tokens: costTokens(a.totalTokens) })) + '</p>' + hint;
   }
   var list = '<ul class="mg-cost__list mg-arch__list">' + a.sections.map(function (s) {
     return '<li class="mg-arch__item"><label class="mg-arch__row"><input type="checkbox" data-archive-key="' + costEsc(s.key) + '" checked>' +
       costName(s, colors) + '<span class="mg-arch__title">§ ' + costEsc(s.title) + '</span>' +
       '<strong class="mg-cost__num">' + costTokens(s.tokens) + '</strong>' +
-      '<span class="mg-cost__det">' + (s.lastRead ? 'last read ' + costEsc(costDay(s.lastRead)) : 'not read since counting began') + '</span></label></li>';
-  }).join("") + '</ul>' + (more > 0 ? '<p class="mg-cost__empty">+ ' + costPlural(more, "more section") + ' (the biggest are listed).</p>' : '');
-  var btns = '<div class="mg-arch__btns"><button type="button" class="bn-btn mg-cost__copy" data-archive-copy="1">' + costEsc(defaultCostT("cost.copyPrompt")) + '</button>' +
-    (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-archive-ai="1">Do it with ' + costEsc(costProvider || "your AI") + '</button>' +
-      '<button type="button" class="bn-btn mg-cost__copy" data-archive-plain="1">Prepare without AI</button>' : '') + '</div>';
-  return hint + list + '<p class="mg-arch__gain" id="mg-arch-gain">' + costArchiveGain(a.sections) + '</p>' + btns;
+      '<span class="mg-cost__det">' + costEsc(s.lastRead ? T("arch.lastRead", { date: costDay(s.lastRead) }) : T("arch.notReadSince")) + '</span></label></li>';
+  }).join("") + '</ul>' + (more > 0 ? '<p class="mg-cost__empty">' + costEsc(T("arch.more", { n: more })) + '</p>' : '');
+  var btns = '<div class="mg-arch__btns"><button type="button" class="bn-btn mg-cost__copy" data-archive-copy="1">' + costEsc(T("cost.copyPrompt")) + '</button>' +
+    (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-archive-ai="1">' + costEsc(T("cost.doWith", { name: costProvider || T("arch.yourAi") })) + '</button>' +
+      '<button type="button" class="bn-btn mg-cost__copy" data-archive-plain="1">' + costEsc(T("arch.prepare")) + '</button>' : '') + '</div>';
+  return hint + list + '<p class="mg-arch__gain" id="mg-arch-gain">' + costArchiveGain(a.sections, T) + '</p>' + btns;
 }
 
 /** "3 sections · live memory ≈ 1,200 tokens smaller · archive summary + ≈ 75 tokens" for the chosen ones. */
-function costArchiveGain(chosen) {
-  if (!chosen.length) return "No section selected.";
+function costArchiveGain(chosen, T) {
+  T = T || defaultCostT;
+  if (!chosen.length) return costEsc(T("arch.noneSelected"));
   var saved = 0, line = 0;
   chosen.forEach(function (s) { saved += Math.max(0, s.tokens - (s.stubTokens || 0)); line += s.lineTokens || 0; });
-  return '<strong>' + costPlural(chosen.length, "section") + '</strong> · live memory <strong>' + costTokens(saved) + '</strong> tokens smaller (each section leaves a one-line link) · archive summary + ' + costTokens(line) + ' tokens';
+  return costFill(T, "arch.gain", {
+    sections: '<strong>' + costEsc(T("arch.sectionCount", { n: chosen.length })) + '</strong>', saved: '<strong>' + costTokens(saved) + '</strong>',
+  }, { line: costTokens(line) });
 }
 
 /** The whole panel body, or a short message when there is nothing to show. `T` defaults to the
@@ -352,10 +440,10 @@ function costRender(c, colors, T) {
   html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.neverRead30")) + '</figcaption>' + costNeverRead(c.neverRead, colors, T) + '</figure>';
   html += '</div>';
   html += '<div class="mg-cost__grid mg-cost__grid--two">';
-  html += '<figure class="mg-cost__block"><figcaption>Organisation</figcaption>' + costOrganisation(c.organisation, colors, T) + '</figure>';
-  html += '<figure class="mg-cost__block"><figcaption>Always loaded · every session</figcaption>' + costAlwaysLoaded(c.alwaysLoaded) + '</figure>';
+  html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.organisation")) + '</figcaption>' + costOrganisation(c.organisation, colors, T) + '</figure>';
+  html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.alwaysLoaded")) + '</figcaption>' + costAlwaysLoaded(c.alwaysLoaded, T) + '</figure>';
   html += '</div>';
-  if (c.archive) html += '<figure class="mg-cost__block mg-arch" id="mg-arch"><figcaption>Archive · sections unused for ' + costNumber(c.archive.afterDays) + ' days</figcaption>' + costArchive(c.archive, colors) + '</figure>';
+  if (c.archive) html += '<figure class="mg-cost__block mg-arch" id="mg-arch"><figcaption>' + costEsc(T("cost.archive", { n: costNumber(c.archive.afterDays) })) + '</figcaption>' + costArchive(c.archive, colors, T) + '</figure>';
   return html;
 }
 
@@ -389,7 +477,7 @@ if (typeof module !== "undefined" && module.exports) {
   function archSync() {
     Array.prototype.forEach.call(body.querySelectorAll("[data-archive-key]"), function (cb) { cb.checked = !archOff[cb.getAttribute("data-archive-key")]; });
     var g = document.getElementById("mg-arch-gain");
-    if (g) g.innerHTML = costArchiveGain(archChosen());
+    if (g) g.innerHTML = costArchiveGain(archChosen(), T);
   }
 
   function load() {
@@ -522,7 +610,7 @@ if (typeof module !== "undefined" && module.exports) {
       if (!chosen.length) return;
       if (arch.hasAttribute("data-archive-copy")) {
         var text = costArchivePrompt(last.archive, chosen, names, undefined, last.protectedGroups);
-        copyText(text).then(function () { copied(arch, T("cost.copyPrompt")); }).catch(function () { arch.textContent = "Copy failed: select the sections again"; });
+        copyText(text).then(function () { copied(arch, T("cost.copyPrompt")); }).catch(function () { arch.textContent = T("arch.copyFailed"); });
         return;
       }
       var keys = chosen.map(function (s) { return s.key; });

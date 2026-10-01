@@ -585,6 +585,7 @@ var EN_APP = {
   "journal.actionAdded": "New note", "journal.actionChanged": "Note changed", "journal.actionRemoved": "Note removed",
   "journal.actionGeneric": "Activity",
   "journal.sourceAgent": "Agent", "journal.sourceDemo": "Demo", "journal.sourceFile": "File",
+  "journal.channelFile": "file", "journal.channelDemo": "demo",
   "journal.diffBadge": "± view",
   "diff.notFound": "Change not found.", "diff.lineWord": { one: "line", other: "lines" },
   "panel.written": "Written {when}",
@@ -645,9 +646,12 @@ var SOURCE_LABELS = {
   copilot: "Copilot", windsurf: "Windsurf", cline: "Cline", mcp: "MCP"
 };
 // "channel": how the event reached memglow (see docs/api.md). Unknown values are shown as sent.
+// "hook", "MCP proxy" and "API" are technical names, the same in every language; "file" and "demo"
+// are words, translated (CHANNEL_TRANSLATED_KEYS, English in CHANNEL_LABELS for reference).
 var CHANNEL_LABELS = {
   hook: "hook", "mcp-proxy": "MCP proxy", file: "file", api: "API", demo: "demo"
 };
+var CHANNEL_TRANSLATED_KEYS = { file: "journal.channelFile", demo: "journal.channelDemo" };
 function formatJournalLine(o, names, T) {
   T = T || defaultT;
   o = o || {};
@@ -665,7 +669,8 @@ function formatJournalLine(o, names, T) {
     group: group,
     note: String(o.label == null ? "" : o.label) + (more ? " +" + more : ""),
     machine: mach,
-    channel: Object.prototype.hasOwnProperty.call(CHANNEL_LABELS, chan) ? CHANNEL_LABELS[chan] : chan,
+    channel: Object.prototype.hasOwnProperty.call(CHANNEL_TRANSLATED_KEYS, chan) ? T(CHANNEL_TRANSLATED_KEYS[chan])
+      : Object.prototype.hasOwnProperty.call(CHANNEL_LABELS, chan) ? CHANNEL_LABELS[chan] : chan,
     source: Object.prototype.hasOwnProperty.call(SOURCE_LABELS, src) ? SOURCE_LABELS[src]
       : Object.prototype.hasOwnProperty.call(SOURCE_TRANSLATED_KEYS, src) ? T(SOURCE_TRANSLATED_KEYS[src]) : src
   };
@@ -798,7 +803,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   CIBLE_COULEUR_CLAIR, COULEUR_CLAIR_INDEX,
   rayonNote, rayonRelais, facteurTaille, plancherRayon, dureeComete, niveauLien, creerCollision,
   margeEffective, FONDS, fondValide, luminanceRelative, teinteLisible, opaciteNom, masquesValides, RAYON_INDEX,
-  JOURNAL_ACTION_KEYS, SOURCE_LABELS, SOURCE_TRANSLATED_KEYS, CHANNEL_LABELS, formatJournalLine, VIEW_SETTINGS, settingsToLocal, settingsFromLocal,
+  JOURNAL_ACTION_KEYS, SOURCE_LABELS, SOURCE_TRANSLATED_KEYS, CHANNEL_LABELS, CHANNEL_TRANSLATED_KEYS, formatJournalLine, VIEW_SETTINGS, settingsToLocal, settingsFromLocal,
   offsetFor, seedPositions, layoutOf, EN_APP, resolveTextApp, defaultT
 };
 (function() {

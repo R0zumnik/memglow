@@ -176,6 +176,31 @@ test("i18n: defaultT helpers resolve English outside a browser (Node require, no
   assert.strictEqual(zonesPage.defaultZonesT("zones.notesCount", { n: 1 }), "1 note");
 });
 
+test("i18n: v0.4 texts go through keys — journal channel, organisation facts, always-loaded tips, archive block, zones rows", () => {
+  const T = (k, p) => "[" + k + (p && typeof p.n === "number" ? ":" + p.n : "") + "]";
+  // Journal: the "file" and "demo" channels are words (translated); hook / MCP proxy / API are names.
+  assert.strictEqual(appPage.formatJournalLine({ type: "changed", theme: "x", label: "Y", channel: "file" }, { x: "X" }, T).text, "[journal.actionChanged] · X · Y · [journal.channelFile]");
+  assert.strictEqual(appPage.formatJournalLine({ type: "read", theme: "x", label: "Y", channel: "mcp-proxy" }, { x: "X" }, T).text, "[journal.actionRead] · X · Y · MCP proxy");
+  // Memory cost: organisation sentences from the server's facts, tips from their figures, block titles.
+  const c = { read: { today: 0, days7: 0 }, written: { days7: 0 }, totals: { tokens: 1, notes: 1 }, index: null, share: null, top: [], largeNoteTokens: 200, chunkTokens: 100, tooLarge: [], neverRead: { available: false },
+    organisation: [{ id: "rg-0123456789ab", theme: "w", target: "ops", move: ["a"], message: "EN", reasons: ["EN"], notes: [{ id: "a", label: "A", subtheme: "web" }],
+      facts: { kind: "scattered", notes: 3, topic: "docker", group: "Work", subthemes: ["Web", "Ops"], target: "Ops", targetCount: 2, links: 1, subthemeNames: { web: "Web", ops: "Ops" } } }],
+    alwaysLoaded: { index: [], files: [], perSession: 15, sessionsPerDay: 2, perDay: 30, sessionsSource: "setting", tips: [{ kind: "index", tokens: 3000, threshold: 2000, text: "EN" }] },
+    archive: { available: false, afterDays: 105 } };
+  const html = costPage.costRender(c, {}, T);
+  for (const k of ["cost.organisation", "org.scattered", "org.why", "org.reasonShared", "org.reasonLinks:1", "org.reasonSubthemes", "org.reasonTargetHolds", "cost.alwaysLoaded", "always.perDay", "always.tipIndex", "cost.archive", "arch.notEnough"]) {
+    assert.ok(html.includes("[" + k), k);
+  }
+  assert.ok(!html.includes(">EN<"), "facts win over the server's English text");
+  assert.ok(html.includes("Web → Ops"), "sub-theme display names");
+  // Zones rows.
+  const z = zonesPage.zonesRender({ defined: false, themes: [{ id: "w", label: "W", defaultLabel: "W", notes: 2, folders: ["f"] }] }, T);
+  assert.ok(z.includes("[zones.protect]") && z.includes("[zones.notesCount:2]") && z.includes("[zones.folders]") && z.includes("[zones.labelAria]"));
+  // Assistant: regroup and archive jobs.
+  assert.ok(aiPage.aiRenderJob({ id: "j", kind: "archive", state: "running", note: { label: "L" }, chars: 3 }, "X", T).includes("[ai.askingArchive]"));
+  assert.ok(aiPage.aiAskForm("rg-1", "L", [], "", "regroup", T).includes("[ai.regroupAskMsg]"));
+});
+
 // ---- no English left hardcoded where a translation key should be ----
 
 test("i18n: no hardcoded English UI text remains outside the English fallback blocks", () => {
@@ -190,6 +215,12 @@ test("i18n: no hardcoded English UI text remains outside the English fallback bl
     "Most expensive to read · 7 days", "Copy prompt for your AI", "Do it with Claude",
     "Never read in 30 days", "Memory cost is not available.",
     "memglow refused this proposal", "The assistant is not available.", "Ready — provider: \" +",
+    // v0.4: protected groups, organisation, always loaded, archive tier, journal channel
+    "Do it with ' +", "No scattered notes found", ">Why<", "Always loaded · every session", "tokens per session",
+    "Small enough: nothing to trim", "Prepare without AI", "Not enough data yet", "No dormant section",
+    "No section selected", "Copy failed: select", "Kept live by the AI", "which sections to archive",
+    "sub-theme changed", "archive summary\"", "Regroup: <strong>", "> Protect<", "Display name of the group",
+    "Nothing protected yet", "Saved. Reloading", "No group is configured",
   ];
   const files = {
     "public/app.js": stripBlock(read("public/app.js"), "var EN_APP = {", "};"),
