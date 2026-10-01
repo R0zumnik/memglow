@@ -15,10 +15,11 @@ function aiEsc(s) {
 }
 function aiNum(n) { return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
 
-var AI_ROLE = { original: "original note → summary", part: "new note", link: "link updated" };
+var AI_ROLE = { original: "original note → summary", part: "new note", link: "link updated", subtheme: "sub-theme changed", moved: "note at its new place", "moved-from": "old place (moved)" };
+var AI_KIND = { create: "new", modify: "changed", "delete": "moved away" };
 
 function aiDiff(f) {
-  var head = '<summary><span class="mg-ai__kind mg-ai__kind--' + aiEsc(f.kind) + '">' + (f.kind === "create" ? "new" : "changed") + '</span> ' +
+  var head = '<summary><span class="mg-ai__kind mg-ai__kind--' + aiEsc(f.kind) + '">' + aiEsc(AI_KIND[f.kind] || "changed") + '</span> ' +
     '<code>' + aiEsc(f.rel) + '</code> <span class="mg-ai__role">' + aiEsc(AI_ROLE[f.role] || "") + '</span> ' +
     '<span class="mg-ai__counts"><span class="mg-ai__plus">+' + aiNum(f.added) + '</span> <span class="mg-ai__minus">−' + aiNum(f.removed) + '</span></span></summary>';
   var body = (f.hunks || []).map(function (h) {
@@ -46,7 +47,8 @@ function aiList(items, cls) {
 function aiRenderJob(j, providerLabel) {
   if (!j || j.state === "discarded") return "";
   var who = aiEsc(providerLabel || "the AI");
-  var title = '<p class="mg-ai__title">Split <strong>' + aiEsc(j.note && j.note.label) + '</strong></p>';
+  var regroup = j.kind === "regroup";
+  var title = '<p class="mg-ai__title">' + (regroup ? "Regroup" : "Split") + ' <strong>' + aiEsc(j.note && j.note.label) + '</strong></p>';
   if (j.state === "running") {
     return title + '<p class="mg-ai__msg">Asking ' + who + ' for a proposal… <span class="mg-ai__chars" id="mg-ai-chars">' + aiNum(j.chars) + '</span> characters received. It has no tool and writes nothing.</p>' +
       '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="cancel">Cancel</button></div>';
@@ -62,7 +64,9 @@ function aiRenderJob(j, providerLabel) {
   if (j.state === "proposed") {
     return title + (j.notes ? '<p class="mg-ai__notes">' + who + ': “' + aiEsc(j.notes) + '”</p>' : '') + aiGain(j.gain) +
       aiList(j.warnings, "mg-ai__warnings") +
-      '<p class="mg-ai__msg">memglow checked it: nothing lost, same folder and group, no note replaced or deleted. Exact changes:</p>' +
+      '<p class="mg-ai__msg">' + (regroup
+        ? "memglow checked it: same group, note texts unchanged (only the sub-theme line), no note replaced or deleted, protected groups respected. Exact changes:"
+        : "memglow checked it: nothing lost, same folder and group, no note replaced or deleted, protected groups respected. Exact changes:") + '</p>' +
       (j.files || []).map(aiDiff).join("") +
       '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="apply">Apply this plan</button><button type="button" class="bn-btn" data-ai="cancel">Discard</button></div>' +
       '<p class="mg-ai__hint">Apply backs up the notes first (git snapshot if your memory is a git repository, otherwise a copy in memglow\'s data folder); if the backup fails, nothing is written.</p>';
@@ -113,8 +117,9 @@ function aiDestination(p) {
   return '<p class="mg-ai__dest" id="mg-ai-dest">Your note will be sent through your ' + aiEsc(p.label) + ' (to Anthropic, or wherever your CLI is set up to send it).</p>';
 }
 
-/** `providers` = the status list, `current` = the default provider id. */
-function aiAskForm(noteId, label, providers, current) {
+/** `providers` = the status list, `current` = the default provider id, `kind` = "split" (default) or "regroup". */
+function aiAskForm(noteId, label, providers, current, kind) {
+  var regroup = kind === "regroup";
   var ready = (providers || []).filter(function (p) { return p.implemented && p.available; });
   var sel = ready.filter(function (p) { return p.id === current; })[0] || ready[0] || null;
   var picker = ready.length > 1
@@ -122,11 +127,14 @@ function aiAskForm(noteId, label, providers, current) {
       return '<option value="' + aiEsc(p.id) + '"' + (p === sel ? " selected" : "") + '>' + aiEsc(p.label) + '</option>';
     }).join("") + '</select></label>'
     : "";
-  return '<p class="mg-ai__title">Split <strong>' + aiEsc(label || noteId) + '</strong>?</p>' +
-    '<p class="mg-ai__msg">The note is sent to the AI, which answers with a proposal. Nothing is written until you approve the exact changes. Lines that look like secrets are replaced by placeholders first.</p>' +
+  return (regroup
+    ? '<p class="mg-ai__title">Regroup: <strong>' + aiEsc(label || noteId) + '</strong></p>' +
+      '<p class="mg-ai__msg">Only the titles, descriptions, sub-themes and folders of these notes are sent to the AI — never their text. It answers with a proposal; memglow only changes sub-theme lines (or moves a file inside the same group), and nothing is written until you approve the exact changes.</p>'
+    : '<p class="mg-ai__title">Split <strong>' + aiEsc(label || noteId) + '</strong>?</p>' +
+      '<p class="mg-ai__msg">The note is sent to the AI, which answers with a proposal. Nothing is written until you approve the exact changes. Lines that look like secrets are replaced by placeholders first.</p>') +
     picker + aiDestination(sel) +
     '<label class="mg-ai__extra">Extra instructions (optional)<textarea id="mg-ai-extra" maxlength="1000" rows="2"></textarea></label>' +
-    '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="propose" data-note="' + aiEsc(noteId) + '"' + (sel ? ' data-provider="' + aiEsc(sel.id) + '"' : '') + '>Propose</button><button type="button" class="bn-btn" data-ai="close">Not now</button></div>';
+    '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="propose" data-kind="' + (regroup ? "regroup" : "split") + '" data-note="' + aiEsc(noteId) + '"' + (sel ? ' data-provider="' + aiEsc(sel.id) + '"' : '') + '>Propose</button><button type="button" class="bn-btn" data-ai="close">Not now</button></div>';
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -143,7 +151,7 @@ if (typeof module !== "undefined" && module.exports) {
   var elJob = document.getElementById("mg-ai-job");
   var elHist = document.getElementById("mg-ai-history");
   var elProv = document.getElementById("mg-ai-providers");
-  var st = null, asking = null, lastNote = null, lastExtra = "", lastProvider = "";
+  var st = null, asking = null, lastNote = null, lastExtra = "", lastProvider = "", lastKind = "split";
 
   function post(action, body) {
     return fetch(api + "/" + action, {
@@ -165,7 +173,7 @@ if (typeof module !== "undefined" && module.exports) {
     if (!st) return;
     if (!st.available) say(st.reason || "The assistant is not available.", true);
     else say("Ready — provider: " + st.provider.label + ".", false);
-    if (asking && !(st.job && (st.job.state === "running" || st.job.state === "applying"))) elJob.innerHTML = aiAskForm(asking.id, asking.label, st.providers, st.provider && st.provider.id);
+    if (asking && !(st.job && (st.job.state === "running" || st.job.state === "applying"))) elJob.innerHTML = aiAskForm(asking.id, asking.label, st.providers, st.provider && st.provider.id, asking.kind);
     else elJob.innerHTML = aiRenderJob(st.job, labelOfProvider(st.job && st.job.provider));
     elHist.innerHTML = aiRenderHistory(st.history, st.job && st.job.id);
     elProv.innerHTML = aiRenderProviders(st.providers, st.provider && st.provider.id);
@@ -201,7 +209,11 @@ if (typeof module !== "undefined" && module.exports) {
   }
 
   document.addEventListener("memglow:assistant", function (e) {
-    asking = { id: String(e.detail || ""), label: labelOf(e.detail) };
+    var d = e.detail;
+    // A note to split (its id), or { kind: "regroup", id, label } for an organisation suggestion.
+    asking = d && typeof d === "object"
+      ? { kind: d.kind === "regroup" ? "regroup" : "split", id: String(d.id || ""), label: String(d.label || d.id || "") }
+      : { kind: "split", id: String(d || ""), label: labelOf(d) };
     render();
     if (root.scrollIntoView) root.scrollIntoView({ behavior: "smooth", block: "start" });
   });
@@ -214,12 +226,14 @@ if (typeof module !== "undefined" && module.exports) {
     if (what === "close") { asking = null; render(); return; }
     b.disabled = true;
     if (what === "propose" || what === "retry") {
-      var note = what === "propose" ? b.getAttribute("data-note") : (st && st.job && st.job.note && st.job.note.id) || lastNote;
+      var note = what === "propose" ? b.getAttribute("data-note") : (st && st.job && st.job.target) || (st && st.job && st.job.note && st.job.note.id) || lastNote;
+      var kind = what === "propose" ? (b.getAttribute("data-kind") || "split") : (st && st.job && st.job.kind) || lastKind;
       var ta = document.getElementById("mg-ai-extra");
       var extra = what === "propose" ? (ta ? ta.value : "") : lastExtra;
       var prov = what === "propose" ? (b.getAttribute("data-provider") || "") : (st && st.job && st.job.provider) || lastProvider;
-      lastNote = note; lastExtra = extra; lastProvider = prov; asking = null;
-      post("propose", { note: note, extra: extra, provider: prov }).then(function (o) { st.job = o.job; render(); }).catch(fail);
+      lastNote = note; lastExtra = extra; lastProvider = prov; lastKind = kind; asking = null;
+      var req = kind === "regroup" ? { kind: "regroup", suggestion: note, extra: extra, provider: prov } : { note: note, extra: extra, provider: prov };
+      post("propose", req).then(function (o) { st.job = o.job; render(); }).catch(fail);
     } else if (what === "apply") {
       // Two steps, one click: a one-time server token, then apply with it.
       post("confirm", { job: job }).then(function (o) { return post("apply", { job: job, token: o.token }); }).then(load).catch(fail);

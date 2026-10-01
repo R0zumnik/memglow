@@ -15,6 +15,17 @@
     <p>Every dot is a note your assistant remembers; every line, a link between two notes. When an assistant reads, searches or writes a note, it lights up — live.</p>
   </header>
   <div class="bn-grid">
+    <section class="bn-tile mg-zones" id="mg-zones" data-api="/api/zones" hidden aria-labelledby="mg-zones-title">
+      <div class="mg-cost__head">
+        <h2 class="bn-label" id="mg-zones-title">What are your big themes?</h2>
+        <p class="mg-cost__sub">These are the big groups of your memory, found in your folders and <code>theme:</code> keys. Tick the ones to protect: memglow's assistant will never move a note into or out of a protected group, never create a note in another group and never change their <code>theme</code>. You can also rename how a group is shown — your notes are not changed. Change this later in Settings → Protected groups.</p>
+      </div>
+      <form id="mg-zones-form">
+        <div id="mg-zones-body"><p class="mg-cost__empty">Loading…</p></div>
+        <div class="mg-zones__btns"><button type="submit" class="bn-btn mg-zones__save">Save</button><button type="button" class="bn-btn" id="mg-zones-later">Not now</button></div>
+        <p class="mg-zones__status" id="mg-zones-status" role="status"></p>
+      </form>
+    </section>
     <section class="bn-tile bn-tile--deep mem-stage" aria-label="Memory graph">
       <div class="mem-canvas" id="mem-graphe" data-graphe="/api/graph" data-flux="/api/stream" data-note="/api/note/" data-vue="/api/view"></div>
       <div class="mem-hud">
@@ -95,6 +106,7 @@
               <button type="button" class="bn-btn" id="mem-liberer">Release all bubbles</button>
               <button type="button" class="bn-btn" id="mem-recentrer">Recenter</button>
               <button type="button" class="bn-btn" id="mem-reorganiser">Rearrange</button>
+              <button type="button" class="bn-btn" id="mem-zones">Protected groups</button>
             </div>
             <p class="mem-options__aide">Drag a bubble to move it; double-click it to release it, double-click the background to recenter. The view (settings, layout, camera) is saved on this memglow instance: every browser and device that opens it gets the same view. “Rearrange” starts again from a fresh layout and keeps the settings.</p>
           </div>
@@ -130,6 +142,7 @@
 <script src="/vendor/memglow-graph.js?v={{v:vendor/memglow-graph.js}}"></script>
 <script src="/app.js?v={{v:app.js}}"></script>
 <script src="/cost.js?v={{v:cost.js}}"></script>
+<script src="/zones.js?v={{v:zones.js}}"></script>
 {{assistantScript}}
 </body>
 </html>
