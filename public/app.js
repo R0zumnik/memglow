@@ -1480,6 +1480,16 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     garderReglage("masquesThemes", JSON.stringify(masques));
   }
   var dernierClic = { id: null, t: 0 }, dernierClicFond = 0;
+  // Bubble under the pointer (null = empty background): only used by the background double-click;
+  // hovering lights nothing up.
+  var survol = null, dernierRecentrage = 0;
+  function recentrerDepuisFond() {
+    var t = Date.now();
+    if (t - dernierRecentrage < 600) return; // native dblclick + own detection: once only
+    dernierRecentrage = t;
+    dernierClicFond = 0;
+    recentrer();
+  }
   var tics = 0;
   function liberer(n) {
     n.fx = n.fy = n.fz = void 0;
@@ -1518,7 +1528,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       placerNomsThemes();
       if (reduit) majLiens(performance.now());
       finSimulation();
-    }).onNodeHover(function() {
+    }).onNodeHover(function(n) {
+      survol = n || null;
     }).onNodeClick(function(n) {
       if (n.__relais) {
         viserRelais(n);
@@ -1535,12 +1546,12 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       allumerLiens(n.id, 0.9, MAINTIEN_NOTE);
       ouvrir(n.id, true);
     }).onBackgroundClick(function() {
-      // Double-click on empty background: back to the overview (like "Recenter"). The library
-      // sends no click after a drag; a click on a bubble resets the count.
+      // Double-click on empty background: back to the overview (like "Recenter"). Two paths: the
+      // native `dblclick` event (wired below; follows the system double-click speed and tolerates a
+      // slight trackpad movement), and this own detection (500 ms) for touch screens.
       var t = Date.now();
-      if (dernierClicFond && t - dernierClicFond < 380) {
-        dernierClicFond = 0;
-        recentrer();
+      if (dernierClicFond && t - dernierClicFond < 500) {
+        recentrerDepuisFond();
         return;
       }
       dernierClicFond = t;
@@ -1893,6 +1904,11 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       appliquerRotation();
     });
   }
+  // Native double-click: empty background only (a bubble under the pointer has its own
+  // double-click, which releases it).
+  el.addEventListener("dblclick", function() {
+    if (!survol) recentrerDepuisFond();
+  });
   var repos;
   el.addEventListener("pointerdown", function() {
     if (suivi) suivi.interaction();
