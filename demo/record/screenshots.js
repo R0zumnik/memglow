@@ -129,7 +129,8 @@ function startServer() {
     await wait(1500);
 
     await post("write", ["project-smart-home"]);
-    await series("write", [500, 1100, 1700, 2600]);
+    // the flash blinks 3 × 550 ms: sample densely to catch a peak
+    await series("write", [100, 200, 300, 400, 650, 750, 850, 950, 1200, 1300, 1400, 1500]);
     await wait(7500);
 
     await post("search", ["project-home-lab", "knowledge-mqtt", "project-smart-home", "reference-docker-pitfalls", "reference-backups"]);

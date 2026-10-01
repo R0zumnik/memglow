@@ -6,6 +6,8 @@
 
 - Double-click on the background (recenter / overview) now works with Mac trackpads: the native
   `dblclick` event is used, small pointer moves between the two clicks no longer cancel it.
+- Memory cost: the "N notes = X %" line now uses the smallest set of notes covering 80 % of the
+  reading (it said "8 notes = 100 %" when only 8 notes had been read).
 
 ### Changed
 
