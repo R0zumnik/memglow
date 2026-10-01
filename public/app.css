@@ -28,6 +28,31 @@ a { color: var(--bn-accent-teal); }
 .bn-btn:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--bn-focus); outline-offset: 2px; }
 .mg-foot { margin: var(--bn-space-4) 0; color: var(--bn-ink-dim); font-size: 12px; text-align: center; }
 
+/* Error banner (connection lost / unauthorized / server error — no failed load or action fails
+   silently): one set of elements, shared by app.js/cost.js/zones.js/assistant.js, fixed to the
+   bottom of the viewport so it stays visible whatever is scrolled. Hidden by default (the `hidden`
+   attribute in index.html); a script shows it again through mgErrorBanner(). */
+.mg-banner {
+  position: fixed;
+  left: 50%;
+  bottom: var(--bn-space-4);
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--bn-space-3);
+  flex-wrap: wrap;
+  max-width: calc(100% - 32px);
+  padding: var(--bn-space-3) var(--bn-space-4);
+  background: #2A1E0E;
+  border: 1px solid #FFB86B;
+  border-radius: 14px;
+  color: var(--bn-ink);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.mg-banner__msg { margin: 0; font-size: 13px; font-weight: 600; }
+.mg-banner__btn { flex: none; }
+
 .mem-head__row {
   display: flex;
   flex-wrap: wrap;

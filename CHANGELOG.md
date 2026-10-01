@@ -4,6 +4,23 @@
 
 ### Added
 
+- **Settings → Forces** (Repulsion, Link force, Link distance, 0.2×–3×, a "Reset forces" button)
+  and **Settings → Links → Link opacity** (0×–3×): multipliers around the values already set by
+  Spread/Gravity/Minimum spacing and the "Links at rest" preset — default 1× is today's look,
+  unchanged (`chargeStrength`/`linkRestDistance`/`linkRestStrength`/`linkRestOpacity` in
+  `public/app.js`, tested). Saved with the rest of the view (`lib/view.js`), same device-to-device
+  sync, same strict server-side bounds. On a phone, the new sliders live in the same Settings
+  sheet as everything else. Link curvature was tried and dropped: comets travel in a straight
+  line between the two nodes, and a curved link would no longer match — left for a larger change.
+- **No failed request fails silently**: every page script (graph, note, Memory cost, Protected
+  groups, Assistant, the saved view, and both live streams) now shows a visible, translated
+  banner — connection lost, unauthorized, or server error — with a "Reload" or "Retry" button,
+  instead of swallowing the failure. `MEMGLOW_PASSWORD`'s stateless HTTP Basic auth means a `401`
+  always offers "Reload" (there is no session to resume, only a fresh request to be asked for
+  credentials again). A handful of catches stay intentionally silent (a 404 for a note that
+  vanished between a click and the fetch, a malformed SSE event, a cosmetic background redraw) —
+  each says why, right there in the code.
+
 - **MCP server** (`memglow-mcp`, `mcp-server/memglow-mcp.js`, bin `memglow-mcp`): a second,
   standalone, read-only MCP server, separate from the MCP proxy. It starts entirely on its own —
   no viewer, no network, no notes folder even required — and lets an assistant query its own

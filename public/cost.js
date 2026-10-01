@@ -71,7 +71,11 @@ var EN_COST = {
   "arch.prepare": "Prepare without AI", "arch.yourAi": "your AI", "arch.noneSelected": "No section selected.",
   "arch.gain": "{sections} · live memory {saved} tokens smaller (each section leaves a one-line link) · archive summary + {line} tokens",
   "arch.sectionCount": { one: "{n} section", other: "{n} sections" },
-  "arch.copyFailed": "Copy failed: select the sections again"
+  "arch.copyFailed": "Copy failed: select the sections again",
+  "common.reload": "Reload", "common.retry": "Retry",
+  "error.connectionLost": "Connection lost. Check your network and retry.",
+  "error.unauthorized": "Unauthorized. Reload the page to sign in again.",
+  "error.serverError": "Server error. Please retry."
 };
 function resolveTextCost(dict, key, params) {
   var entry = dict ? dict[key] : undefined;
@@ -93,6 +97,28 @@ function defaultCostT(key, params) {
   var M = typeof window !== "undefined" && window.MemglowI18n;
   if (M && M.dict && Object.prototype.hasOwnProperty.call(M.dict, key)) return M.t(key, params);
   return resolveTextCost(EN_COST, key, params);
+}
+
+/* Shared error banner: same trio as public/app.js (see its longer comment for the full rule),
+   duplicated here — this file is an independent <script>, not a module. */
+function mgBannerKind(err) {
+  if (err && (err.mgStatus === 401 || err.mgStatus === 403)) return "auth";
+  if (err && err.mgStatus) return "server";
+  return "network";
+}
+function mgErrorBanner(els, kind, T, retry) {
+  if (!els || !els.root || !els.msg || !els.btn) return;
+  var key = kind === "auth" ? "error.unauthorized" : kind === "server" ? "error.serverError" : "error.connectionLost";
+  els.msg.textContent = T(key);
+  var canRetry = kind !== "auth" && typeof retry === "function";
+  els.btn.textContent = T(canRetry ? "common.retry" : "common.reload");
+  els.btn.onclick = canRetry ? retry : function () {
+    if (typeof window !== "undefined" && window.location) window.location.reload();
+  };
+  els.root.hidden = false;
+}
+function mgClearBanner(els) {
+  if (els && els.root) els.root.hidden = true;
 }
 
 /* ---- Numbers and dates ----
@@ -482,7 +508,7 @@ function costRender(c, colors, T) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costPercent: costPercent, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT };
+  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costPercent: costPercent, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT, mgBannerKind: mgBannerKind, mgErrorBanner: mgErrorBanner, mgClearBanner: mgClearBanner };
 }
 
 (function () {
@@ -493,6 +519,8 @@ if (typeof module !== "undefined" && module.exports) {
   if (!root || !body) return;
   var url = root.getAttribute("data-cost");
   var T = defaultCostT;
+  // Shared with app.js/zones.js/assistant.js — same three elements in index.html.
+  var banner = { root: document.getElementById("mg-banner"), msg: document.getElementById("mg-banner-msg"), btn: document.getElementById("mg-banner-btn") };
   var colors = {}, names = { index: "Index" }; // "Index" here: the AI prompt (costSplitPrompt) stays English
   try {
     var cfg = JSON.parse(document.getElementById("memglow-config").textContent || "{}");
@@ -519,7 +547,8 @@ if (typeof module !== "undefined" && module.exports) {
     again = false;
     loading = true;
     fetch(url, { credentials: "same-origin" }).then(function (r) {
-      if (!r.ok) throw new Error(r.status);
+      if (!r.ok) { var e = new Error(String(r.status)); e.mgStatus = r.status; throw e; }
+      mgClearBanner(banner);
       return r.json();
     }).then(function (c) {
       last = c;
@@ -542,8 +571,12 @@ if (typeof module !== "undefined" && module.exports) {
         var again2 = body.querySelector('[data-copy="' + focused.replace(/["\\]/g, "") + '"]');
         if (again2 && again2.focus) again2.focus();
       }
-    }).catch(function () {
+    }).catch(function (e) {
       if (!last) body.innerHTML = '<p class="mg-cost__empty">' + costEsc(T("cost.loadFailed")) + '</p>';
+      // A later refresh failing (the panel already has figures) used to stay fully quiet, leaving
+      // possibly stale numbers looking current forever: the banner now says so, with a Retry that
+      // simply loads again.
+      mgErrorBanner(banner, mgBannerKind(e), T, load);
     }).then(function () { loading = false; if (again) soon(); });
   }
   // Refresh ≈ 1.5 s after an activity or a note change, grouped: the timer is NOT restarted by each

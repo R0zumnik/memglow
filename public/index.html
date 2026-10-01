@@ -10,6 +10,10 @@
 </head>
 <body>
 <div class="mg-wrap">
+  <div class="mg-banner" id="mg-banner" role="alert" hidden>
+    <p class="mg-banner__msg" id="mg-banner-msg"></p>
+    <button type="button" class="bn-btn mg-banner__btn" id="mg-banner-btn"></button>
+  </div>
   <header class="mg-head">
     <h1>{{title}} <span>·</span> <span data-i18n="header.liveMemory">live memory</span></h1>
     <p data-i18n="header.subtitle">Every dot is a note your assistant remembers; every line, a link between two notes. When an assistant reads, searches or writes a note, it lights up — live.</p>
@@ -124,6 +128,21 @@
               <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-fixer" checked> <span data-i18n="settings.keepDragged">Dragged bubbles stay put</span></label>
             </fieldset>
             <fieldset class="mem-options__section">
+              <legend data-i18n="settings.forcesLegend">Forces</legend>
+              <label class="mem-reglage"><span data-i18n="settings.repulsion">Repulsion</span>
+                <input type="range" id="mem-repulsion" min="0.3" max="3" step="0.1" value="1">
+              </label>
+              <label class="mem-reglage"><span data-i18n="settings.linkForce">Link force</span>
+                <input type="range" id="mem-force-liens" min="0.2" max="3" step="0.1" value="1">
+              </label>
+              <label class="mem-reglage"><span data-i18n="settings.linkDistance">Link distance</span>
+                <input type="range" id="mem-distance-liens" min="0.3" max="3" step="0.1" value="1">
+              </label>
+              <div class="mem-options__boutons">
+                <button type="button" class="bn-btn" id="mem-reinit-forces" data-i18n="settings.resetForces">Reset forces</button>
+              </div>
+            </fieldset>
+            <fieldset class="mem-options__section">
               <legend data-i18n="settings.linksLegend">Links</legend>
               <label class="mem-reglage"><span data-i18n="settings.linksAtRest">Links at rest</span>
                 <select id="mem-liens">
@@ -131,6 +150,9 @@
                   <option value="discrets" selected data-i18n="settings.linksSubtle">Subtle</option>
                   <option value="visibles" data-i18n="settings.linksVisible">Visible</option>
                 </select>
+              </label>
+              <label class="mem-reglage"><span data-i18n="settings.linkOpacity">Link opacity</span>
+                <input type="range" id="mem-opacite-liens" min="0" max="3" step="0.1" value="1">
               </label>
               <label class="mem-reglage mem-reglage--case"><input type="checkbox" id="mem-influx"> <span data-i18n="settings.ambientFlow">Ambient flow</span></label>
             </fieldset>

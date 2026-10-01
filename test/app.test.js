@@ -164,3 +164,57 @@ test("hidden themes: only themes of this configuration are kept", () => {
   assert.deepStrictEqual(M.masquesValides({ people: true, famille: true, index: true, other: true, x: false }, ["people", "projects"]), { people: true, index: true, other: true });
   assert.deepStrictEqual(M.masquesValides(null, ["a"]), {});
 });
+
+// ---- Forces (Settings → Forces, 2026-10-01): default 1 = today's behaviour, unchanged ----
+
+test("forces: default (1×) matches the formulas from before this setting existed, exactly", () => {
+  // Charge: was -30 * spread. Link distance: was (relay ? 9 : 18) * spread. Link strength: was
+  // 0.06 * gravity for a relay thread, the degree factor alone otherwise.
+  for (const spread of [1, 7, 30]) {
+    assert.strictEqual(M.chargeStrength(spread, 1), -30 * spread);
+    assert.strictEqual(M.chargeStrength(spread), -30 * spread, "no repulsion given: same as 1×");
+    assert.strictEqual(M.linkRestDistance(true, spread, 1), 9 * spread);
+    assert.strictEqual(M.linkRestDistance(false, spread, 1), 18 * spread);
+    assert.strictEqual(M.linkRestDistance(true, spread), 9 * spread, "no linkDistance given: same as 1×");
+  }
+  for (const gravity of [0, 6, 10]) {
+    assert.strictEqual(M.linkRestStrength(true, gravity, 0.5, 1), 0.06 * gravity);
+    assert.strictEqual(M.linkRestStrength(true, gravity, 0.5), 0.06 * gravity, "no linkForce given: same as 1×");
+  }
+  for (const degreeFactor of [1, 0.5, 0.2]) {
+    assert.strictEqual(M.linkRestStrength(false, 6, degreeFactor, 1), degreeFactor);
+    assert.strictEqual(M.linkRestStrength(false, 6, degreeFactor), degreeFactor, "no linkForce given: same as 1×");
+  }
+});
+
+test("forces: each multiplier scales only what it claims to, nothing else", () => {
+  assert.strictEqual(M.chargeStrength(7, 2), -420, "repulsion doubles the charge, spread unchanged");
+  assert.strictEqual(M.linkRestDistance(false, 7, 0.5), 63, "linkDistance alone halves the resting length");
+  assert.strictEqual(M.linkRestDistance(false, 7, 1), 126, "...independently of repulsion (not passed here)");
+  assert.strictEqual(M.linkRestStrength(true, 6, 0.3, 3), 0.06 * 6 * 3, "linkForce multiplies the relay thread's tension");
+  assert.ok(close(M.linkRestStrength(false, 6, 0.3, 3), 0.9), "...and a plain note↔note link's, via the degree factor");
+  assert.strictEqual(M.linkRestStrength(false, 6, 0.3, 1), 0.3, "gravity plays no part in a plain link");
+});
+
+test("forces: link opacity multiplies the resting level, capped at 1", () => {
+  assert.strictEqual(M.linkRestOpacity(0.1, 1), 0.1, "default: unchanged");
+  assert.strictEqual(M.linkRestOpacity(0.1), 0.1, "no linkOpacity given: same as 1×");
+  assert.strictEqual(M.linkRestOpacity(0.1, 0), 0, "0: invisible even on the Visible preset");
+  assert.ok(Math.abs(M.linkRestOpacity(0.1, 3) - 0.3) < 1e-9);
+  assert.strictEqual(M.linkRestOpacity(0.5, 3), 1, "capped: never brighter than fully opaque");
+});
+
+test("forces: lib/view.js accepts the same bounds the page's sliders declare", () => {
+  const view = require("../lib/view");
+  const rules = view.createRules({ themeIds: [], noteExists: () => false });
+  for (const [key, min, max] of [["repulsion", 0.3, 3], ["linkForce", 0.2, 3], ["linkDistance", 0.3, 3], ["linkOpacity", 0, 3]]) {
+    assert.deepStrictEqual(view.validateSettings({ [key]: min }, rules), { [key]: min }, key + " min");
+    assert.deepStrictEqual(view.validateSettings({ [key]: max }, rules), { [key]: max }, key + " max");
+    assert.deepStrictEqual(view.validateSettings({ [key]: min - 0.01 }, rules), {}, key + " just under min: rejected");
+    assert.deepStrictEqual(view.validateSettings({ [key]: max + 0.01 }, rules), {}, key + " just over max: rejected");
+  }
+  // And the page's own local↔typed round trip (VIEW_SETTINGS) matches those same bounds.
+  const typed = M.settingsFromLocal((k) => ({ repulsion: "3.5", forceLiens: "1.2", distanceLiens: "0.1", opaciteLiens: "2" }[k] ?? null));
+  assert.deepStrictEqual(typed, { linkForce: 1.2, linkOpacity: 2 }, "out-of-bounds values dropped, in-bounds kept");
+  assert.deepStrictEqual(M.settingsToLocal({ repulsion: 2, linkForce: 1.2, linkDistance: 0.6, linkOpacity: 0 }), { repulsion: "2", forceLiens: "1.2", distanceLiens: "0.6", opaciteLiens: "0" });
+});

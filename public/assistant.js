@@ -72,7 +72,11 @@ var EN_AI = {
   "ai.regroupAskMsg": "Only the titles, descriptions, sub-themes and folders of these notes are sent to the AI — never their text. It answers with a proposal; memglow only changes sub-theme lines (or moves a file inside the same group), and nothing is written until you approve the exact changes.",
   "ai.extraLabel": "Extra instructions (optional)", "ai.propose": "Propose", "ai.notNow": "Not now",
   "ai.unavailable": "The assistant is not available.", "ai.readyProvider": "Ready — provider: {label}.",
-  "ai.unreachable": "Could not reach memglow: reload the page."
+  "ai.unreachable": "Could not reach memglow: reload the page.",
+  "common.reload": "Reload", "common.retry": "Retry",
+  "error.connectionLost": "Connection lost. Check your network and retry.",
+  "error.unauthorized": "Unauthorized. Reload the page to sign in again.",
+  "error.serverError": "Server error. Please retry."
 };
 function resolveTextAi(dict, key, params) {
   var entry = dict ? dict[key] : undefined;
@@ -94,6 +98,28 @@ function defaultAiT(key, params) {
   var M = typeof window !== "undefined" && window.MemglowI18n;
   if (M && M.dict && Object.prototype.hasOwnProperty.call(M.dict, key)) return M.t(key, params);
   return resolveTextAi(EN_AI, key, params);
+}
+
+/* Shared error banner: same trio as public/app.js (see its longer comment for the full rule),
+   duplicated here — this file is an independent <script>, not a module. */
+function mgBannerKind(err) {
+  if (err && (err.mgStatus === 401 || err.mgStatus === 403)) return "auth";
+  if (err && err.mgStatus) return "server";
+  return "network";
+}
+function mgErrorBanner(els, kind, T, retry) {
+  if (!els || !els.root || !els.msg || !els.btn) return;
+  var key = kind === "auth" ? "error.unauthorized" : kind === "server" ? "error.serverError" : "error.connectionLost";
+  els.msg.textContent = T(key);
+  var canRetry = kind !== "auth" && typeof retry === "function";
+  els.btn.textContent = T(canRetry ? "common.retry" : "common.reload");
+  els.btn.onclick = canRetry ? retry : function () {
+    if (typeof window !== "undefined" && window.location) window.location.reload();
+  };
+  els.root.hidden = false;
+}
+function mgClearBanner(els) {
+  if (els && els.root) els.root.hidden = true;
 }
 
 var AI_ROLE_KEYS = {
@@ -268,7 +294,8 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     aiArchiveGain: aiArchiveGain, aiEsc: aiEsc, aiRenderJob: aiRenderJob, aiRenderHistory: aiRenderHistory, aiRenderProviders: aiRenderProviders,
     aiAskForm: aiAskForm, aiDiff: aiDiff, aiDestination: aiDestination, aiNum: aiNum,
-    EN_AI: EN_AI, resolveTextAi: resolveTextAi, defaultAiT: defaultAiT
+    EN_AI: EN_AI, resolveTextAi: resolveTextAi, defaultAiT: defaultAiT,
+    mgBannerKind: mgBannerKind, mgErrorBanner: mgErrorBanner, mgClearBanner: mgClearBanner
   };
 }
 
@@ -283,6 +310,8 @@ if (typeof module !== "undefined" && module.exports) {
   var elHist = document.getElementById("mg-ai-history");
   var elProv = document.getElementById("mg-ai-providers");
   var T = defaultAiT;
+  // Shared with app.js/cost.js/zones.js — same three elements in index.html.
+  var banner = { root: document.getElementById("mg-banner"), msg: document.getElementById("mg-banner-msg"), btn: document.getElementById("mg-banner-btn") };
   var st = null, asking = null, lastNote = null, lastExtra = "", lastProvider = "", lastKind = "split";
 
   function post(action, body) {
@@ -292,7 +321,8 @@ if (typeof module !== "undefined" && module.exports) {
       body: JSON.stringify(body || {}),
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (o) {
-        if (!r.ok) throw new Error(o.error || ("HTTP " + r.status));
+        if (!r.ok) { var e = new Error(o.error || ("HTTP " + r.status)); e.mgStatus = r.status; throw e; }
+        mgClearBanner(banner);
         return o;
       });
     });
@@ -312,11 +342,22 @@ if (typeof module !== "undefined" && module.exports) {
   }
   function load() {
     return fetch(api, { credentials: "same-origin" }).then(function (r) {
-      if (!r.ok) throw new Error(r.status);
+      if (!r.ok) { var e = new Error(String(r.status)); e.mgStatus = r.status; throw e; }
+      mgClearBanner(banner);
       return r.json();
-    }).then(function (s) { st = s; render(); }).catch(function () { say(T("ai.unreachable"), true); });
+    }).then(function (s) { st = s; render(); }).catch(function (e) {
+      say(T("ai.unreachable"), true);
+      mgErrorBanner(banner, mgBannerKind(e), T, load);
+    });
   }
-  function fail(e) { say(e.message || String(e), true); load(); }
+  function fail(e) {
+    say(e.message || String(e), true);
+    // A confirmed auth failure also blocks every other request on the page: the panel's own
+    // status line already named it (e.message, above), the banner adds the "Reload" everyone else
+    // gets too.
+    if (mgBannerKind(e) === "auth") mgErrorBanner(banner, "auth", T);
+    load();
+  }
 
   function providerOf(id) {
     return ((st && st.providers) || []).filter(function (p) { return p.id === id; })[0] || null;
@@ -407,6 +448,13 @@ if (typeof module !== "undefined" && module.exports) {
         if (st && st.job && st.job.id === o.id) { st.job.chars = o.chars; var c = document.getElementById("mg-ai-chars"); if (c) c.textContent = aiNum(o.chars); }
       } catch (x) { /* ignore */ }
     });
+    es.onopen = function () { mgClearBanner(banner); };
+    // Same rule as app.js's own stream: a transient drop reconnects by itself (readyState
+    // CONNECTING) and stays quiet; only a non-retryable failure that CLOSEs the connection for
+    // good gets a visible banner.
+    es.onerror = function () {
+      if (es.readyState === EventSource.CLOSED) mgErrorBanner(banner, "network", T);
+    };
   }
   document.addEventListener("memglow:language", render); // T() reads window.MemglowI18n live
   load();

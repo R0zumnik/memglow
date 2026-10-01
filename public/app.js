@@ -561,6 +561,37 @@ var COLLISION_FORCE = 0.5, COLLISION_PASSES = 2;
 function margeEffective(marge, ecart) {
   return Math.max(0, marge) * Math.max(0.5, ecart) * 0.75;
 }
+
+/* Forces (Settings → Forces, multipliers around spread/gravity, default 1 = today's behaviour, at
+   the identical value — checked by a test). Pure, so the default can be asserted without d3/three.
+   - Repulsion multiplies the charge (-30 × spread) that pushes every bubble away from every other.
+   - Link force multiplies the tension of EVERY link — notes↔notes (d3's own default strength,
+     passed in as `degreeFactor`) AND the threads to sub-theme bubbles (0.06 × gravity). Different
+     from Gravity, which only tunes the sub-theme threads; Link force applies on top, to all links.
+   - Link distance multiplies the RESTING length of links alone (9×spread for a sub-theme thread,
+     18×spread otherwise), without touching repulsion. Not a duplicate of Spread: Spread changes
+     charge AND distance together (the scene's overall "zoom"); Link distance only stretches or
+     tightens the links, at a fixed spread and repulsion — handy to loosen a dense graph without
+     resizing the whole thing.
+   Link curvature was looked at and dropped: comets interpolate LINEARLY between the two nodes
+   (see the `tic`-like per-frame position below), so a curved link would no longer match the
+   comet travelling along it — a bigger rewrite than a settings slider, left for another time. */
+function chargeStrength(spread, repulsion) {
+  return -30 * spread * (repulsion == null ? 1 : repulsion);
+}
+function linkRestDistance(relay, spread, linkDistance) {
+  return (relay ? 9 : 18) * spread * (linkDistance == null ? 1 : linkDistance);
+}
+function linkRestStrength(relay, gravity, degreeFactor, linkForce) {
+  var lf = linkForce == null ? 1 : linkForce;
+  return (relay ? 0.06 * gravity : degreeFactor) * lf;
+}
+/* Opacity of the links at rest (Settings → Links): multiplies whichever of the three "Links at
+   rest" presets (hidden/subtle/visible) applies — not a fourth preset, an intensifier of it. */
+function linkRestOpacity(base, linkOpacity) {
+  return Math.min(1, base * (linkOpacity == null ? 1 : linkOpacity));
+}
+
 function creerCollision(rayonDe, margeCourante) {
   var noeuds = [], rayons = [];
   function force() {
@@ -697,11 +728,15 @@ var EN_APP = {
   "panel.incoming": "{n} incoming",
   "common.today": "today", "common.yesterday": "yesterday",
   "common.daysAgo": { one: "{n} day ago", other: "{n} days ago" },
+  "common.reload": "Reload", "common.retry": "Retry",
   "search.noMatch": "No matching note.",
   "status.loading": "Loading the graph…", "status.noNotes": "No notes yet.",
   "error.libraryFailed": "The graph library could not load.",
   "error.loadFailed": "Could not load the memory. Reload the page.",
   "error.webgl": "Your browser cannot display 3D here (WebGL unavailable).",
+  "error.connectionLost": "Connection lost. Check your network and retry.",
+  "error.unauthorized": "Unauthorized. Reload the page to sign in again.",
+  "error.serverError": "Server error. Please retry.",
   "stats.notesWord": { one: "note", other: "notes" }, "stats.linksWord": { one: "link", other: "links" }
 };
 /** Same interpolation/plural rule as public/i18n.js (resolveText), duplicated on purpose: every
@@ -845,7 +880,14 @@ var VIEW_SETTINGS = {
   fixer: ["keepDragged", "bool"],
   suivre: ["followActivity", "bool"],
   masquesThemes: ["hiddenThemes", "themes"],
-  langue: ["language", "choice", { en: "en", fr: "fr", de: "de", es: "es", "pt-BR": "pt-BR", ja: "ja", ko: "ko", "zh-CN": "zh-CN" }]
+  langue: ["language", "choice", { en: "en", fr: "fr", de: "de", es: "es", "pt-BR": "pt-BR", ja: "ja", ko: "ko", "zh-CN": "zh-CN" }],
+  // Forces (Settings → Forces, 2026-10-01): see chargeStrength/linkRestDistance/linkRestStrength
+  // above for what each one multiplies. "liens" (plural, "Links at rest") stays the preset picker;
+  // "opaciteLiens" is its intensity, in the same Links section.
+  repulsion: ["repulsion", "number", 0.3, 3],
+  forceLiens: ["linkForce", "number", 0.2, 3],
+  distanceLiens: ["linkDistance", "number", 0.3, 3],
+  opaciteLiens: ["linkOpacity", "number", 0, 3]
 };
 /** Typed settings (server) → { localKey: string } (localStorage form). Unknown keys ignored. */
 function settingsToLocal(s) {
@@ -941,14 +983,50 @@ function layoutOf(nodes, max) {
   return { positions: positions, pinned: pinned };
 }
 
+/* No failed load or action fails silently (graph, note, saved view, SSE — cost.js/zones.js/
+   assistant.js duplicate this same trio, each self-contained like the rest of this file).
+   `mgBannerKind(err)`: classifies a fetch failure from the Error thrown when `!r.ok` (with
+   `.mgStatus` set to the HTTP status by the caller, see below) or a plain rejected fetch (offline,
+   DNS, CORS — no response, no status at all): "auth" (401/403), "server" (any other non-2xx) or
+   "network" (no response reached the page).
+   `mgErrorBanner(els, kind, T, retry)`: fills and shows a banner `{ root, msg, btn }` — three
+   already-existing elements (public/index.html's #mg-banner/#mg-banner-msg/#mg-banner-btn), shared
+   by every page script, rather than each creating its own (pure DOM, no document.getElementById
+   inside: testable with a tiny fake `els`, same approach as setupSheet above). "auth" always offers
+   "Reload" (memglow's HTTP Basic auth, MEMGLOW_PASSWORD, is stateless: a fresh request is the only
+   way to be asked for credentials again); any other kind offers "Retry" when the caller passes one
+   (it re-runs the failed action), "Reload" otherwise.
+   `mgClearBanner(els)`: hides it again once a request of that kind succeeds. */
+function mgBannerKind(err) {
+  if (err && (err.mgStatus === 401 || err.mgStatus === 403)) return "auth";
+  if (err && err.mgStatus) return "server";
+  return "network";
+}
+function mgErrorBanner(els, kind, T, retry) {
+  if (!els || !els.root || !els.msg || !els.btn) return;
+  var key = kind === "auth" ? "error.unauthorized" : kind === "server" ? "error.serverError" : "error.connectionLost";
+  els.msg.textContent = T(key);
+  var canRetry = kind !== "auth" && typeof retry === "function";
+  els.btn.textContent = T(canRetry ? "common.retry" : "common.reload");
+  els.btn.onclick = canRetry ? retry : function() {
+    if (typeof window !== "undefined" && window.location) window.location.reload();
+  };
+  els.root.hidden = false;
+}
+function mgClearBanner(els) {
+  if (els && els.root) els.root.hidden = true;
+}
+
 if (typeof module !== "undefined" && module.exports) module.exports = {
   creerSuiviCamera, creerEnveloppe, creerCometes, hauteurPanneau, creerCible, CIBLE_COULEUR,
   COMPACT_QUERY, setupSheet, setupLegendFold, setupSearchFold,
   CIBLE_COULEUR_CLAIR, COULEUR_CLAIR_INDEX,
   rayonNote, rayonRelais, facteurTaille, plancherRayon, dureeComete, niveauLien, creerCollision,
   margeEffective, FONDS, fondValide, luminanceRelative, teinteLisible, opaciteNom, masquesValides, RAYON_INDEX,
+  chargeStrength, linkRestDistance, linkRestStrength, linkRestOpacity,
   JOURNAL_ACTION_KEYS, SOURCE_LABELS, SOURCE_TRANSLATED_KEYS, CHANNEL_LABELS, CHANNEL_TRANSLATED_KEYS, formatJournalLine, VIEW_SETTINGS, settingsToLocal, settingsFromLocal,
-  offsetFor, seedPositions, layoutOf, EN_APP, resolveTextApp, defaultT, appNum, appTime, appDateTime
+  offsetFor, seedPositions, layoutOf, EN_APP, resolveTextApp, defaultT, appNum, appTime, appDateTime,
+  mgBannerKind, mgErrorBanner, mgClearBanner
 };
 (function() {
   "use strict";
@@ -967,6 +1045,9 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     dire(T("error.libraryFailed"));
     return;
   }
+  // Shared error banner (mgErrorBanner/mgClearBanner above): one set of elements in index.html,
+  // used by this file and by cost.js/zones.js/assistant.js alike.
+  var banner = { root: document.getElementById("mg-banner"), msg: document.getElementById("mg-banner-msg"), btn: document.getElementById("mg-banner-btn") };
   // ---- Saved view of this instance, server side (GET/PUT /api/view) ----
   // Read BEFORE settings and graph are set up: every browser and device that opens this instance
   // gets the same view (settings, bubble layout, pinned bubbles, camera). localStorage stays a
@@ -981,6 +1062,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       if (v === null) localStorage.removeItem(k);
       else localStorage.setItem(k, v);
     } catch (e) {
+      // Private browsing / storage disabled or full: nothing lost that matters here, the server's
+      // own saved view (chargerVue/envoyerVue below) is the real copy on every other device anyway.
     }
   }
   function dispoLocale() {
@@ -1005,9 +1088,15 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       finir(null);
     }, 2500);
     fetch(URL_VUE, { credentials: "same-origin", signal: ctrl ? ctrl.signal : void 0 }).then(function(r) {
-      if (!r.ok) throw new Error(r.status);
+      if (!r.ok) { var e = new Error(String(r.status)); e.mgStatus = r.status; throw e; }
+      mgClearBanner(banner);
       return r.json();
-    }).then(finir).catch(function() {
+    }).then(finir).catch(function(e) {
+      // Offline, slow or a transient server hiccup: the local cache (settings) already keeps the
+      // page usable without the server's view (see lib/view.js: "comfort, not access control"), and
+      // the graph fetch right after surfaces a real, ongoing outage with its own banner — so only a
+      // confirmed auth failure is flagged this early, since it would also block every other request.
+      if (mgBannerKind(e) === "auth") mgErrorBanner(banner, "auth", T);
       finir(null);
     });
   }
@@ -1060,7 +1149,15 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
         method: "PUT", credentials: "same-origin", keepalive: !!garder,
         headers: { "Content-Type": "application/json", "X-Memglow": "1" },
         body: JSON.stringify(corps)
-      }).catch(function() {
+      }).then(function(r) {
+        if (!r.ok) { var e = new Error(String(r.status)); e.mgStatus = r.status; throw e; }
+        mgClearBanner(banner);
+      }).catch(function(e) {
+        // A save that fails otherwise stays quiet: the local cache (already written before this
+        // call, see garderReglage/layoutOf callers) keeps the view for this browser even if the
+        // server never gets it. A confirmed auth failure is the exception — it would also block
+        // every other request, so it gets the same visible banner as everywhere else.
+        if (mgBannerKind(e) === "auth") mgErrorBanner(banner, "auth", T);
       });
     } catch (e) {
       // offline: the local cache keeps the view
@@ -1574,6 +1671,11 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   };
   var modeLiens = lireReglage("liens", "discrets");
   if (!REPOS_LIENS[modeLiens]) modeLiens = "discrets";
+  // Link opacity (Settings → Links, multiplier, default 1 = today's behaviour): see
+  // linkRestOpacity above for what it multiplies — not a fourth "Links at rest" preset, an
+  // intensifier of whichever of the three applies.
+  var opaciteLiens = parseFloat(lireReglage("opaciteLiens", "1"));
+  if (!(opaciteLiens >= 0 && opaciteLiens <= 3)) opaciteLiens = 1;
   var GRIS_LIEN = new THREE.Color(teinteLisible("#A9C9BF", estClair));
   function materiauLien(l) {
     if (!l.__mat) l.__mat = new THREE.LineBasicMaterial({ color: GRIS_LIEN.clone(), transparent: true, opacity: 0.1, depthWrite: false });
@@ -1594,7 +1696,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       if (!mat || !obj) continue;
       var a = noeudDe(l.source), b = noeudDe(l.target);
       if (!a || !b) continue;
-      var base = l.__relais ? repos2.relais : themeDe(a) === themeDe(b) ? repos2.intra : repos2.inter;
+      var base = linkRestOpacity(l.__relais ? repos2.relais : themeDe(a) === themeDe(b) ? repos2.intra : repos2.inter, opaciteLiens);
       var propre = l.__env ? enveloppe.niveau(l, t) : 0;
       if (l.__env && enveloppe.finie(l, t)) l.__env = null;
       var enVol = l.__volFin > t;
@@ -1657,6 +1759,21 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     choixLiens.addEventListener("change", function() {
       modeLiens = REPOS_LIENS[choixLiens.value] ? choixLiens.value : "discrets";
       garderReglage("liens", modeLiens);
+      donnees.links.concat(liensRelaisVue).forEach(function(l) {
+        l.__repos = -1;
+      });
+    });
+  }
+  // No "soft reheat" here: opacity does not touch the layout (same treatment as "Links at rest"
+  // above) — just invalidate every link's resting cache so majLiens() recomputes next frame.
+  var curseurOpaciteLiens = document.getElementById("mem-opacite-liens");
+  if (curseurOpaciteLiens) {
+    curseurOpaciteLiens.value = opaciteLiens;
+    curseurOpaciteLiens.addEventListener("input", function() {
+      var v = parseFloat(curseurOpaciteLiens.value);
+      if (!isFinite(v)) return;
+      opaciteLiens = Math.min(3, Math.max(0, v));
+      garderReglage("opaciteLiens", opaciteLiens);
       donnees.links.concat(liensRelaisVue).forEach(function(l) {
         l.__repos = -1;
       });
@@ -1889,14 +2006,24 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   if (!(gravite >= 0 && gravite <= 10)) gravite = 6;
   var marge = reglageDefaut("marge", 4, 8);
   if (!(marge >= 0 && marge <= 20)) marge = 8;
+  // ---- Forces (Settings → Forces): multipliers around spread/gravity, default 1 = today's
+  // behaviour, at the identical value (see chargeStrength/linkRestDistance/linkRestStrength, top
+  // of this file, for what each one multiplies and why none of them duplicates spread/gravity).
+  // Bounds are tight (like bubbleSize/signalSpeed): past them the simulation diverges or collapses.
+  var repulsion = parseFloat(lireReglage("repulsion", "1"));
+  if (!(repulsion >= 0.3 && repulsion <= 3)) repulsion = 1;
+  var forceLiens = parseFloat(lireReglage("forceLiens", "1"));
+  if (!(forceLiens >= 0.2 && forceLiens <= 3)) forceLiens = 1;
+  var distanceLiens = parseFloat(lireReglage("distanceLiens", "1"));
+  if (!(distanceLiens >= 0.3 && distanceLiens <= 3)) distanceLiens = 1;
   function ecarter(k) {
     ecart = k;
-    graphe.d3Force("charge").strength(-30 * k);
+    graphe.d3Force("charge").strength(chargeStrength(k, repulsion));
     graphe.d3Force("link").distance(function(l) {
-      return l.__relais ? 9 * k : 18 * k;
+      return linkRestDistance(l.__relais, k, distanceLiens);
     }).strength(function(l) {
-      if (l.__relais) return 0.06 * gravite;
-      return 1 / Math.max(1, Math.min(degreVue[idDe(l.source)] || 1, degreVue[idDe(l.target)] || 1));
+      var degreFacteur = 1 / Math.max(1, Math.min(degreVue[idDe(l.source)] || 1, degreVue[idDe(l.target)] || 1));
+      return linkRestStrength(l.__relais, gravite, degreFacteur, forceLiens);
     });
     graphe.d3ReheatSimulation();
   }
@@ -1973,7 +2100,38 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     facteur = facteurTaille(v);
     redimensionnerBulles();
   });
+  brancherCurseur("mem-repulsion", "repulsion", function() {
+    return repulsion;
+  }, function(v) {
+    repulsion = Math.min(3, Math.max(0.3, v));
+  });
+  brancherCurseur("mem-force-liens", "forceLiens", function() {
+    return forceLiens;
+  }, function(v) {
+    forceLiens = Math.min(3, Math.max(0.2, v));
+  });
+  brancherCurseur("mem-distance-liens", "distanceLiens", function() {
+    return distanceLiens;
+  }, function(v) {
+    distanceLiens = Math.min(3, Math.max(0.3, v));
+  });
   ecarter(ecart);
+  // "Reset forces": repulsion, link force and link distance back to 1 (today's behaviour) —
+  // spread/gravity/spacing and the current layout are left untouched.
+  var boutonReinitForces = document.getElementById("mem-reinit-forces");
+  if (boutonReinitForces) {
+    boutonReinitForces.addEventListener("click", function() {
+      repulsion = forceLiens = distanceLiens = 1;
+      garderReglage("repulsion", 1);
+      garderReglage("forceLiens", 1);
+      garderReglage("distanceLiens", 1);
+      [["mem-repulsion", 1], ["mem-force-liens", 1], ["mem-distance-liens", 1]].forEach(function(p) {
+        var c = document.getElementById(p[0]);
+        if (c) c.value = p[1];
+      });
+      ecarter(ecart);
+    });
+  }
   var nomsThemes = {};
   function spriteTheme(texte, couleur) {
     var c = document.createElement("canvas");
@@ -2147,6 +2305,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       try {
         dessinerFond();
       } catch (e) {
+        // Cosmetic only (a resize redrew the background texture): the scene keeps whatever
+        // background it already had, same fallback as the very first draw just below.
       }
     }, 250);
   }
@@ -2163,6 +2323,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       try {
         dessinerFond();
       } catch (e) {
+        // Cosmetic only: see planifierFond above, same fallback (keep the previous background).
       }
       appliquerLueur();
     });
@@ -2614,32 +2775,43 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   if (window.ResizeObserver) new ResizeObserver(dimensionner).observe(el);
   var donnees = { nodes: [], links: [] };
   var parId = {};
-  fetch(el.getAttribute("data-graphe"), { credentials: "same-origin" }).then(function(r) {
-    if (!r.ok) throw new Error(r.status);
-    return r.json();
-  }).then(function(g) {
-    donnees = { nodes: g.nodes, links: g.links };
-    g.nodes.forEach(function(n) {
-      parId[n.id] = n;
+  var graphePret = false; // true once the first successful load has set up vivre()/ecouter()
+  function chargerGraphe() {
+    fetch(el.getAttribute("data-graphe"), { credentials: "same-origin" }).then(function(r) {
+      if (!r.ok) { var e = new Error(String(r.status)); e.mgStatus = r.status; throw e; }
+      mgClearBanner(banner);
+      return r.json();
+    }).then(function(g) {
+      donnees = { nodes: g.nodes, links: g.links };
+      g.nodes.forEach(function(n) {
+        parId[n.id] = n;
+      });
+      recompterDegres(donnees);
+      var d = vue();
+      restaurerDisposition(d.nodes);
+      graphe.graphData(d);
+      restaurerCamera();
+      compter();
+      remplirListe();
+      historique(g.activities);
+      dire(g.nodes.length ? "" : T("status.noNotes"));
+      if (!graphePret) {
+        graphePret = true;
+        if (!reduit) requestAnimationFrame(vivre);
+        ecouter();
+      }
+      try {
+        document.dispatchEvent(new CustomEvent("memglow:pret"));
+      } catch (e) {
+        // Old browser without CustomEvent: cost.js/zones.js listen for it to refresh together,
+        // but each also loads on its own, so nothing is actually lost here.
+      }
+    }).catch(function(e) {
+      dire(T("error.loadFailed"));
+      mgErrorBanner(banner, mgBannerKind(e), T, graphePret ? chargerGraphe : null);
     });
-    recompterDegres(donnees);
-    var d = vue();
-    restaurerDisposition(d.nodes);
-    graphe.graphData(d);
-    restaurerCamera();
-    compter();
-    remplirListe();
-    historique(g.activities);
-    dire(g.nodes.length ? "" : T("status.noNotes"));
-    if (!reduit) requestAnimationFrame(vivre);
-    ecouter();
-    try {
-      document.dispatchEvent(new CustomEvent("memglow:pret"));
-    } catch (e) {
-    }
-  }).catch(function() {
-    dire(T("error.loadFailed"));
-  });
+  }
+  chargerGraphe();
   function compter() {
     var a = document.getElementById("mem-nb-notes"), b = document.getElementById("mem-nb-liens");
     var wa = document.getElementById("mem-mot-notes"), wb = document.getElementById("mem-mot-liens");
@@ -2881,23 +3053,36 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       try {
         appliquer(JSON.parse(m.data));
       } catch (e) {
+        // A malformed event is not actionable (nothing the viewer can retry): the stream itself
+        // is fine, so it stays quiet and waits for the next one.
       }
       // A note changed on disk counts as a write (server counters): Memory cost refreshes too.
       try {
         document.dispatchEvent(new CustomEvent("memglow:changement"));
       } catch (e) {
+        // Old browser without CustomEvent: cost.js polls on its own timer too, nothing lost.
       }
     });
     src.addEventListener("activity", function(m) {
       try {
         recevoirActivite(JSON.parse(m.data));
       } catch (e) {
+        // Same as above: a bad activity event is skipped, not reported.
       }
       try {
         document.dispatchEvent(new CustomEvent("memglow:activite"));
       } catch (e) {
+        // Old browser without CustomEvent: see above.
       }
     });
+    src.onopen = function() { mgClearBanner(banner); };
+    // EventSource reconnects by itself while CONNECTING (a transient drop heals on its own, no
+    // banner for that — it would just flicker on every hiccup). It only gives up and CLOSEs after a
+    // non-retryable failure (the server refused the request outright, e.g. 401): that is the one
+    // case worth a visible, actionable banner — reloading the page reopens the stream.
+    src.onerror = function() {
+      if (src.readyState === EventSource.CLOSED) mgErrorBanner(banner, "network", T);
+    };
   }
   document.addEventListener("memglow:ouvrir", function(e) {
     if (e.detail && parId[e.detail]) ouvrir(e.detail, true);
@@ -2937,9 +3122,15 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       if (controles) controles.autoRotate = false;
     }
     fetch(URL_NOTE + encodeURIComponent(id), { credentials: "same-origin" }).then(function(r2) {
-      if (!r2.ok) throw new Error(r2.status);
+      if (!r2.ok) { var e = new Error(String(r2.status)); e.mgStatus = r2.status; throw e; }
+      mgClearBanner(banner);
       return r2.json();
-    }).then(remplir).catch(function() {
+    }).then(remplir).catch(function(e) {
+      // A 404 here is expected and stays quiet on purpose — the note vanished between the click
+      // and the fetch (removed or archived by something else); the graph's own "removed" event
+      // drops it on its next SSE message. A confirmed auth failure is the one case that still
+      // deserves a visible banner — it would also block every other request.
+      if (mgBannerKind(e) === "auth") mgErrorBanner(banner, "auth", T);
     });
   }
   var URL_DIFF = el.getAttribute("data-diff");
@@ -2951,7 +3142,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     zone.hidden = true;
     if (!diffId || !URL_DIFF) return;
     fetch(URL_DIFF + encodeURIComponent(diffId), { credentials: "same-origin" }).then(function(r) {
-      if (!r.ok) throw new Error(r.status);
+      if (!r.ok) { var e = new Error(String(r.status)); e.mgStatus = r.status; throw e; }
+      mgClearBanner(banner);
       return r.json();
     }).then(function(d) {
       if (diffDemande !== diffId) return;
@@ -2965,9 +3157,13 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
         ol.appendChild(li);
       });
       zone.hidden = false;
-    }).catch(function() {
+    }).catch(function(e) {
+      var auth = mgBannerKind(e) === "auth";
+      if (auth) mgErrorBanner(banner, "auth", T);
       if (diffDemande !== diffId) return;
-      document.getElementById("mem-p-diff-meta").textContent = T("diff.notFound");
+      // "Change not found" is wrong and misleading for an auth failure (the banner already says
+      // what happened): leave the panel's own line blank rather than a confusing message.
+      document.getElementById("mem-p-diff-meta").textContent = auth ? "" : T("diff.notFound");
       document.getElementById("mem-p-diff-lignes").textContent = "";
       zone.hidden = false;
     });

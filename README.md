@@ -368,7 +368,12 @@ not answer within a few seconds.
 | | Minimum spacing | gap kept between bubbles; wins over gravity |
 | | Signal speed | how fast comets run along the links (default 1.8 s per link) |
 | | Auto-rotate, Follow activity, Dragged bubbles stay put | camera and dragging |
+| Forces | Repulsion | 0.3× to 3×; multiplies how strongly every bubble pushes every other one away |
+| | Link force | 0.2× to 3×; multiplies the tension of every link, on top of Gravity (which only tunes the sub-theme threads) |
+| | Link distance | 0.3× to 3×; multiplies the resting length of links alone, independently of Spread (which changes repulsion and distance together) |
+| | Reset forces | puts Repulsion, Link force and Link distance back to 1× (today's look); Spread/Gravity/Minimum spacing and the current layout are untouched |
 | Links | Links at rest | hidden, subtle or visible; comets light the way anyway |
+| | Link opacity | 0× to 3×; intensifies whichever "Links at rest" level is chosen, it is not a fourth level |
 | | Ambient flow | slow comets at rest |
 
 Drag a bubble to move it, double-click it to release it; double-click the background to go
@@ -748,6 +753,10 @@ container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same toke
   no redirect followed; answers capped in time and size.
 - By default it listens on `127.0.0.1` only. If you expose it, set `MEMGLOW_PASSWORD` and put it
   behind HTTPS.
+- No failed request fails silently: a lost connection, a `401`/`403` or a server error shows a
+  visible, translated banner with a "Reload" or "Retry" button instead. `MEMGLOW_PASSWORD` is
+  stateless HTTP Basic auth — there is no session to expire — so a `401` always means "reload the
+  page to be asked for credentials again", never a stale login.
 - Without a password, memglow only answers requests addressed to `localhost`, `127.0.0.1` or
   `[::1]` (plus any name you list in `MEMGLOW_ALLOWED_HOSTS`): this blocks DNS-rebinding, where a
   malicious web page points its own domain at your machine to read the viewer from your browser.

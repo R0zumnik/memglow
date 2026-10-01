@@ -29,7 +29,11 @@ var EN_ZONES = {
   "zones.statusSaved": "Saved on this memglow instance.", "zones.statusNone": "Nothing protected yet: choose and save.",
   "zones.unreachable": "Could not reach memglow: reload the page.", "zones.saving": "Saving…",
   "zones.refused": "memglow refused these values.", "zones.savedReload": "Saved. Reloading to show the new names…",
-  "zones.notSaved": "Not saved: {error}"
+  "zones.notSaved": "Not saved: {error}",
+  "common.reload": "Reload", "common.retry": "Retry",
+  "error.connectionLost": "Connection lost. Check your network and retry.",
+  "error.unauthorized": "Unauthorized. Reload the page to sign in again.",
+  "error.serverError": "Server error. Please retry."
 };
 function resolveTextZones(dict, key, params) {
   var entry = dict ? dict[key] : undefined;
@@ -51,6 +55,28 @@ function defaultZonesT(key, params) {
   var M = typeof window !== "undefined" && window.MemglowI18n;
   if (M && M.dict && Object.prototype.hasOwnProperty.call(M.dict, key)) return M.t(key, params);
   return resolveTextZones(EN_ZONES, key, params);
+}
+
+/* Shared error banner: same trio as public/app.js (see its longer comment for the full rule),
+   duplicated here — this file is an independent <script>, not a module. */
+function mgBannerKind(err) {
+  if (err && (err.mgStatus === 401 || err.mgStatus === 403)) return "auth";
+  if (err && err.mgStatus) return "server";
+  return "network";
+}
+function mgErrorBanner(els, kind, T, retry) {
+  if (!els || !els.root || !els.msg || !els.btn) return;
+  var key = kind === "auth" ? "error.unauthorized" : kind === "server" ? "error.serverError" : "error.connectionLost";
+  els.msg.textContent = T(key);
+  var canRetry = kind !== "auth" && typeof retry === "function";
+  els.btn.textContent = T(canRetry ? "common.retry" : "common.reload");
+  els.btn.onclick = canRetry ? retry : function () {
+    if (typeof window !== "undefined" && window.location) window.location.reload();
+  };
+  els.root.hidden = false;
+}
+function mgClearBanner(els) {
+  if (els && els.root) els.root.hidden = true;
 }
 
 /**
@@ -90,7 +116,7 @@ function zonesCollect(boxes, inputs) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { zEsc: zEsc, zonesRender: zonesRender, zonesCollect: zonesCollect, EN_ZONES: EN_ZONES, resolveTextZones: resolveTextZones, defaultZonesT: defaultZonesT };
+  module.exports = { zEsc: zEsc, zonesRender: zonesRender, zonesCollect: zonesCollect, EN_ZONES: EN_ZONES, resolveTextZones: resolveTextZones, defaultZonesT: defaultZonesT, mgBannerKind: mgBannerKind, mgErrorBanner: mgErrorBanner, mgClearBanner: mgClearBanner };
 }
 
 (function () {
@@ -106,6 +132,8 @@ if (typeof module !== "undefined" && module.exports) {
   var open = document.getElementById("mem-zones");
   var LATER_KEY = "memglow.zonesLater";
   var T = defaultZonesT;
+  // Shared with app.js/cost.js/assistant.js — same three elements in index.html.
+  var banner = { root: document.getElementById("mg-banner"), msg: document.getElementById("mg-banner-msg"), btn: document.getElementById("mg-banner-btn") };
   var last = null, lastStatus = null; // last GET /api/zones; last status line [key, params, bad]
 
   function say(key, params, bad) {
@@ -115,7 +143,8 @@ if (typeof module !== "undefined" && module.exports) {
   }
   function load(show) {
     return fetch(api, { credentials: "same-origin" }).then(function (r) {
-      if (!r.ok) throw new Error(r.status);
+      if (!r.ok) { var e = new Error(String(r.status)); e.mgStatus = r.status; throw e; }
+      mgClearBanner(banner);
       return r.json();
     }).then(function (z) {
       last = z;
@@ -126,7 +155,15 @@ if (typeof module !== "undefined" && module.exports) {
         root.hidden = false;
         say(z.defined ? (z.source === "config" ? "zones.statusConfig" : "zones.statusSaved") : "zones.statusNone", null, false);
       }
-    }).catch(function () { if (show) { root.hidden = false; say("zones.unreachable", null, true); } });
+    }).catch(function (e) {
+      if (show) { root.hidden = false; say("zones.unreachable", null, true); }
+      // A confirmed auth failure also blocks every other request on the page, so it gets the
+      // global banner even on the silent background check (show=false, the very first load before
+      // the user ever opens "Protected groups") — a plain network hiccup there stays quiet: nothing
+      // is lost (the first-run screen just does not pop up yet), and an explicit "Protected groups"
+      // click already shows zones.unreachable above.
+      if (mgBannerKind(e) === "auth") mgErrorBanner(banner, "auth", T);
+    });
   }
   /** What the form holds right now, as typed (for a redraw in another language). */
   function formState() {
@@ -145,10 +182,14 @@ if (typeof module !== "undefined" && module.exports) {
       headers: { "Content-Type": "application/json", "X-Memglow": "1" },
       body: JSON.stringify(data),
     }).then(function (r) {
-      if (!r.ok) throw new Error(r.status === 400 ? T("zones.refused") : "HTTP " + r.status);
+      if (!r.ok) { var e = new Error(r.status === 400 ? T("zones.refused") : "HTTP " + r.status); e.mgStatus = r.status; throw e; }
+      mgClearBanner(banner);
       say("zones.savedReload", null, false);
       setTimeout(function () { window.location.reload(); }, 600);
-    }).catch(function (err) { say("zones.notSaved", { error: (err && err.message) || String(err) }, true); });
+    }).catch(function (err) {
+      say("zones.notSaved", { error: (err && err.message) || String(err) }, true);
+      if (mgBannerKind(err) === "auth") mgErrorBanner(banner, "auth", T);
+    });
   });
   later.addEventListener("click", function () {
     try { window.sessionStorage.setItem(LATER_KEY, "1"); } catch (e) { /* private mode */ }
