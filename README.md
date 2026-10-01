@@ -23,6 +23,7 @@
   <a href="#quick-start">Quick start</a> ·
   <a href="#works-with">Works with</a> ·
   <a href="#memory-cost">Memory cost</a> ·
+  <a href="#assistant">Assistant</a> ·
   <a href="#install">Install</a> ·
   <a href="#activity-api">API</a> ·
   <a href="#mcp-proxy">MCP proxy</a> ·
@@ -46,7 +47,7 @@
 | 🪙 **Memory cost** | See roughly how many tokens your assistant spends reading its memory (≈ bytes ÷ 4): tokens read today and over 7 days, the notes that cost the most, notes too large to read comfortably, notes never read in 30 days. For each large note, a split along its `##` sections and a **Copy prompt for your AI** button. [More](#memory-cost) |
 | 🗂️ **Themes & sub-themes** | Notes cluster by theme with relay bubbles for sub-themes — from frontmatter or folder names. |
 | 🎛️ **Tune it live** | Background, glow, bubble size, size by links or token cost, names and name distance, spread, gravity, spacing, signal speed, links at rest, auto-rotate, find-a-note. Saved in your browser. [Settings](#settings) |
-| 🔒 **Private by design** | Localhost by default, read-only access to your notes, secret-looking lines masked. Hooks send note names only, never content. No CDN, no analytics. |
+| 🔒 **Private by design** | Localhost by default, read-only access to your notes (the optional assistant writes only what you approve), secret-looking lines masked. Hooks send note names only, never content. No CDN, no analytics. |
 | 📦 **Zero dependencies** | One command, Node 18+. No build step, no database. Or one Docker container. |
 
 <a id="screenshots"></a>
@@ -90,12 +91,78 @@ own memory, from the activity your hooks report:
   agent's memory tool is used, and the plan is shown before anything is written).
 
 Numbers are **estimates** (≈ bytes ÷ 4, not a tokenizer), meant to compare notes with each
-other — memglow promises no saving. memglow still never touches your notes: the counts (note
+other — memglow promises no saving. Memory cost never touches your notes: the counts (note
 ids and numbers only, 90 days) live in its own data folder, `~/.memglow` by default
 (`MEMGLOW_DATA_DIR`, `/data` in Docker). A note whose text changes on disk counts as a write even
 without a hook (an assistant without hooks, an edit by hand); when a hook reports the same write
 within 15 seconds, it is counted once. Activity sent with `"demo": true` is animated but not
 counted. The panel refreshes a second or two after each activity or note change. The bubble size can follow the token cost too: *Settings → Size by → Token cost*.
+
+<a id="assistant"></a>
+## 🤖 Assistant (optional, off by default)
+
+> **The AI only proposes. memglow only writes what you approved in a diff, with a backup and Undo.**
+
+Turn it on and every large or costly note in Memory cost gets a **Do it with Claude** button next
+to *Copy prompt for your AI*, and an **Assistant** panel appears below Memory cost:
+
+1. **Ask** — memglow sends the note (and its context: title, group, folder, sections, suggested
+   split, the lines of other notes that link to it) to the AI you chose. The AI gets **no tool at
+   all**: it cannot read, write, run or fetch anything. It answers with one JSON proposal:
+   a short summary for the original note, the new notes (title, file name, content), and optional
+   link updates in the notes that point to it.
+2. **Check** — memglow validates the proposal and refuses it, with the reasons, if anything is off:
+   a file name with a path or `..`, a new note that would replace an existing one, content missing
+   from the original note (every non-empty line must be found in a part or in the summary), a part
+   that brings its own frontmatter, a summary that does not link every part, a link update outside
+   the notes that link to the original. New notes get the original note's `theme` / `subtheme`
+   lines, so the group never changes; the original note keeps its frontmatter byte for byte.
+   Nothing is ever deleted, moved or renamed.
+3. **Review** — the panel shows the **exact changes, file by file** (added lines in green, removed
+   in red), the AI's short note, and the gain: tokens to read the note today vs the new summary.
+4. **Apply** — the *Apply this plan* button asks the server for a **one-time confirmation token**
+   (random, 2 minutes, single use, bound to this proposal; typing "yes" anywhere does nothing).
+   memglow then checks that no file changed since the proposal, **backs up** the notes it will
+   modify — a snapshot commit if your notes are a git repository (only those files, author
+   `memglow`, your hooks not run), otherwise a copy in `<dataDir>/backups/<time>-<job>/` — and
+   **if the backup fails, nothing is written**. Files are written atomically; a new note never
+   overwrites a file.
+5. **Undo** — restores the backup and removes the new notes, except files you changed since
+   (those are listed and left alone). The last 5 applied changes keep their Undo button; every
+   backup folder also has a `job.json` for a manual restore.
+
+Lines that look like secrets (API keys, tokens, `password: …`) **never leave your machine**: memglow
+replaces them with placeholders before sending the note, checks they all come back once, and puts
+the real lines back when writing. Everything else in the note **is sent to the AI** you chose.
+
+**Turn it on** — in `memglow.config.json`:
+
+```json
+{ "assistant": { "enabled": true, "provider": "claude-code" } }
+```
+
+or `MEMGLOW_ASSISTANT=1`. It needs `MEMGLOW_SHOW_BODIES` on (you must see what will be written)
+and a data folder outside your notes (for backups). Off, its routes answer `404` like any unknown
+route, and no button or panel is shown.
+
+**Providers** (`assistant.provider`):
+
+| Provider | Runs | Status |
+|---|---|---|
+| `claude-code` (default) | your own Claude Code CLI (`claude`), your subscription or key, on your machine | ✅ supported |
+| `anthropic`, `openai-compatible` (incl. local Ollama / LM Studio) | HTTP APIs | planned |
+| `codex`, `gemini`, `cursor` | their CLIs | not yet: memglow has not verified a way to run them with no tool at all |
+
+`claude-code` is run as `claude -p --tools "" --strict-mcp-config --restricted --permission-mode
+dontAsk` with a deny-all permission rule, no session saved, the prompt on stdin (never on the
+command line, never through a shell), in an empty folder of memglow's data folder. Options:
+`command` (path to `claude`), `model`, `maxBudgetUsd`, `timeoutMinutes` (default 10). Claude Code
+must be installed and signed in (run `claude` once in a terminal). The panel lists the providers it
+detects and says clearly when one is missing.
+
+With **basic-memory**, memglow writes the Markdown files directly; basic-memory re-indexes changed
+files on its own (its sync watches the folder). New notes have no `permalink` until basic-memory
+adds one.
 
 <a id="settings"></a>
 ## 🎛️ Settings
@@ -355,7 +422,7 @@ With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `MEMORY_DIR` | `./memory` | folder of notes (read-only access is enough) |
+| `MEMORY_DIR` | `./memory` | folder of notes (read-only access is enough, unless you use the assistant) |
 | `PORT` / `HOST` | `4747` / `127.0.0.1` | use `HOST=0.0.0.0` to expose it (then set a password) |
 | `MEMGLOW_TOKEN` | — | enables `POST /api/activity` for hooks (32+ chars) |
 | `MEMGLOW_PASSWORD` | — | HTTP Basic auth on the viewer (user `memglow`, 12+ chars) |
@@ -365,6 +432,13 @@ With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 | `MEMGLOW_DATA_DIR` / `dataDir` | `~/.memglow` | memglow's own data (Memory cost counts, saved view); never the notes folder |
 | `MEMGLOW_LARGE_NOTE_TOKENS` / `largeNoteTokens` | `5000` | Memory cost: a note above this is "too large" |
 | `splitChunkTokens` | `2000` | Memory cost: target size of each part of a split suggestion |
+| `MEMGLOW_ASSISTANT` / `assistant.enabled` | off | the optional [assistant](#assistant) (`1` on, `0` off whatever the file says) |
+| `MEMGLOW_ASSISTANT_PROVIDER` / `assistant.provider` | `claude-code` | which AI proposes |
+| `MEMGLOW_ASSISTANT_COMMAND` / `assistant.command` | `claude` | path of the Claude Code CLI |
+| `MEMGLOW_ASSISTANT_MODEL` / `assistant.model` | CLI default | model name passed to the provider |
+| `assistant.timeoutMinutes`, `assistant.maxBudgetUsd` | `10`, — | stop a proposal after this long; spending cap for Claude Code |
+| `assistant.backup` | `auto` | `auto` (git snapshot if the notes are a git repository, else a copy), `git` or `copy` |
+| `assistant.allowMissingLines` | `0` | how many original lines may be missing from a proposal (0 = none) |
 | `themes`, `themeByFolder`, `defaultTheme`, `subthemeLabels`, `title` | — | config file only |
 
 <a id="docker"></a>
@@ -392,7 +466,21 @@ container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same toke
 <a id="security"></a>
 ## 🔒 Security
 
-- Notes are read **read-only**; memglow never writes to `MEMORY_DIR`.
+- Notes are read **read-only**; memglow never writes to `MEMORY_DIR` — with one opt-in exception,
+  the [assistant](#assistant), off by default: **the AI only proposes; memglow only writes what you
+  approved in a diff, with a backup and Undo.**
+- Assistant: its routes do not exist unless it is enabled (`404` like any unknown route). They follow
+  the page's access rule (localhost / `MEMGLOW_ALLOWED_HOSTS`, or `MEMGLOW_PASSWORD`), and every
+  action (ask, confirm, apply, undo, cancel) needs the same CSRF protection as the saved view
+  (`X-Memglow: 1` + same `Origin`), is rate limited (30 per minute, 6 proposals per 10 minutes),
+  and takes an 8 KB JSON body at most. One job at a time. The AI gets no tool (for Claude Code:
+  `--tools ""`, no MCP server, deny-all rule, `dontAsk`, `--restricted`, never a bypass mode); an
+  answer that calls a tool anyway is rejected. Note content is sent to it as **data**, and its
+  instructions say so: a note that tries to give orders can at worst produce a proposal that
+  memglow's checks refuse or that you see, line by line, before deciding. Applying needs a
+  one-time server token (256 bits, 2 minutes, single use, only its hash kept); a backup that fails
+  stops everything. memglow's logs carry job ids, states and durations — never note text nor the
+  AI's answer. Secret-looking lines are replaced by placeholders before anything is sent.
 - By default it listens on `127.0.0.1` only. If you expose it, set `MEMGLOW_PASSWORD` and put it
   behind HTTPS.
 - Without a password, memglow only answers requests addressed to `localhost`, `127.0.0.1` or
@@ -465,6 +553,23 @@ rendered in software, in a headless browser without a GPU.
 
 Watching is unreliable on network shares and many NAS filesystems; polling a few hundred notes
 every 2 s is cheap and always works.
+</details>
+
+<details>
+<summary><b>Does memglow write my notes?</b></summary>
+
+Not unless you turn on the optional [assistant](#assistant) and click *Apply* on a proposal you
+have reviewed. The AI only proposes; memglow checks the proposal, shows you the exact diff, backs
+up the notes (git snapshot or copy) and writes only then, with Undo. Off by default.
+</details>
+
+<details>
+<summary><b>Can the assistant run with something else than Claude Code?</b></summary>
+
+Not yet. memglow only enables an AI it can run with **no tool at all**, and it has verified that
+for Claude Code only. HTTP APIs (Anthropic, OpenAI-compatible including local Ollama / LM Studio)
+are planned; Codex, Gemini and Cursor CLIs are listed in the panel when installed but stay off
+until memglow can verify the same guarantee.
 </details>
 
 <details>

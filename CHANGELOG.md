@@ -4,6 +4,23 @@
 
 ### Added
 
+- **Assistant (optional, off by default)**: a *Do it with Claude* button next to *Copy prompt for
+  your AI* on each large or costly note, and an *Assistant* panel below Memory cost. **The AI only
+  proposes; memglow only writes what you approved in a diff, with a backup and Undo.** The user's
+  own Claude Code CLI is run by the memglow server itself (no separate program) with no tool at
+  all (`--tools ""`, no MCP server, deny-all rule, `dontAsk`, `--restricted`, prompt on stdin,
+  no shell) and answers with a JSON proposal (summary, parts, link updates). memglow refuses it
+  unless every original line is kept, new files stay in the same folder under new names, parts
+  carry no frontmatter of their own (memglow copies the original `theme`/`subtheme`), the
+  summary links every part, and link updates only touch notes that link to the original. Then:
+  exact per-file diff, *Apply this plan* with a one-time server token (2 min, single use), a check
+  that nothing changed since, a backup (git snapshot commit of the touched files, or a copy in
+  `<dataDir>/backups/`) — no backup, no write — atomic writes, and *Undo* (never overwrites a file
+  changed since). Secret-looking lines are replaced by placeholders before the note is sent.
+  Enabled with `assistant.enabled` / `MEMGLOW_ASSISTANT=1`; its routes answer `404` otherwise;
+  same access rule as the page, CSRF header + same origin, rate limited, one job at a time.
+  Providers are adapters (`lib/assistant/providers/`): `claude-code` today; HTTP APIs and the
+  Codex, Gemini and Cursor CLIs are listed as not supported yet.
 - **MCP server** (`memglow-mcp`, `mcp-server/memglow-mcp.js`, bin `memglow-mcp`): a second,
   standalone, read-only MCP server, separate from the MCP proxy. It starts entirely on its own —
   no viewer, no network, no notes folder even required — and lets an assistant query its own

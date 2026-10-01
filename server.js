@@ -17,6 +17,7 @@ const { createMemory } = require("./lib/memory");
 const { createCounters, createWriteDedup } = require("./lib/counters");
 const { computeCost, dayOf } = require("./lib/cost");
 const view = require("./lib/view");
+const { createAssistant } = require("./lib/assistant");
 
 const PUBLIC = path.join(__dirname, "public");
 const STATIC = {
@@ -28,6 +29,9 @@ const STATIC = {
 const STREAM_MAX = 20;
 const ACTIVITY_MAX_BYTES = 4096;
 const COST_SECTIONS_MAX = 40; // notes whose sections are listed in one /api/cost answer
+const ASSIST_BODY_MAX = 8192;
+const ASSIST_STREAM_MAX = 5;
+const ASSIST_POSTS_PER_MIN = 30;
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -44,7 +48,7 @@ function isInside(child, parent) {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-function createServer(config, memory, { counters, views } = {}) {
+function createServer(config, memory, { counters, views, assistantEnv } = {}) {
   // memglow's own files (counters, saved view) live in its data folder, NEVER in the notes folder:
   // if the data folder is inside the notes folder, nothing is written (kept in memory only).
   let dataDir = config.dataDir || null;
@@ -65,12 +69,34 @@ function createServer(config, memory, { counters, views } = {}) {
     dir: dataDir,
     rules: view.createRules({ themeIds: config.themes.map((t) => t.id), noteExists: (id) => memory.has(id) }),
   });
+  // Optional assistant (lib/assistant): only when enabled. Disabled = its routes, script and buttons
+  // do not exist (404 like any unknown route).
+  const groupName = (id) => { const t = config.themes.find((x) => x.id === id); return t ? t.label : id; };
+  const assistant = config.assistant && config.assistant.enabled
+    ? createAssistant({
+      config, memory, dataDir, env: assistantEnv || process.env, groupName,
+      // Only the notes Memory cost offers to split (the ones with a "Do it with Claude" button).
+      costItem(id) {
+        const c = cost();
+        return (c.tooLarge || []).find((n) => n.id === id) || (c.top || []).find((n) => n.id === id && n.tokens > c.chunkTokens) || null;
+      },
+    })
+    : null;
+  const statics = { ...STATIC };
+  if (assistant) statics["/assistant.js"] = ["assistant.js", "text/javascript; charset=utf-8"];
   const template = fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8");
+  const assistantPanel = assistant ? fs.readFileSync(path.join(PUBLIC, "assistant.html"), "utf8") : "";
   const fingerprints = {};
-  for (const [url, [file]] of Object.entries(STATIC)) {
+  for (const [url, [file]] of Object.entries(statics)) {
     fingerprints[url] = crypto.createHash("sha1").update(fs.readFileSync(path.join(PUBLIC, file))).digest("hex").slice(0, 10);
   }
-  let streams = 0;
+  let streams = 0, assistStreams = 0;
+  let postWindow = 0, postsInWindow = 0;
+  function assistRateOk() {
+    const now = Date.now();
+    if (now - postWindow >= 60000) { postWindow = now; postsInWindow = 0; }
+    return ++postsInWindow <= ASSIST_POSTS_PER_MIN;
+  }
 
   const headers = (res, extra = {}) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -131,6 +157,7 @@ function createServer(config, memory, { counters, views } = {}) {
       themes: config.themes,
       subthemeLabels: config.subthemeLabels,
       showBodies: config.showBodies,
+      assistant: !!assistant,
     };
     // Theme colours: legend dots, and the group tag of the activity journal (tinted by --c).
     const dots = config.themes.map((t) => `.mem-dot--${t.id}{background:${t.color};box-shadow:0 0 6px ${t.color}}.mem-grp--${t.id}{--c:${t.color}}`).join("");
@@ -141,6 +168,8 @@ function createServer(config, memory, { counters, views } = {}) {
       .replace(/{{title}}/g, esc(config.title))
       .replace("{{dots}}", dots)
       .replace("{{legend}}", legend)
+      .replace("{{assistant}}", () => assistantPanel)
+      .replace("{{assistantScript}}", assistant ? '<script src="/assistant.js?v=' + fingerprints["/assistant.js"] + '"></script>' : "")
       // Raw JSON in a non-executed <script type="application/json">: "<" escaped so no label can
       // close the tag; never HTML-escaped (textContent would keep the entities).
       .replace("{{config}}", JSON.stringify(cfg).replace(/</g, "\\u003c"))
@@ -253,6 +282,44 @@ function createServer(config, memory, { counters, views } = {}) {
       return;
     }
 
+    // Assistant actions (only when enabled): same access rule as the page, same-origin browser request
+    // with memglow's header (CSRF), rate limited, small JSON body. Every one of them can start a
+    // process, spend tokens or write notes.
+    const am = assistant && req.method === "POST" && /^\/api\/assistant\/(propose|confirm|apply|undo|cancel)$/.exec(p);
+    if (am) {
+      if (!viewerAllowed(req)) { req.resume(); return unauthorized(); }
+      if (!sameOriginWrite(req)) { req.resume(); return json(res, 403, { error: "forbidden" }); }
+      if (!assistRateOk()) { req.resume(); headers(res, { "Retry-After": "30" }); return json(res, 429, { error: "too many requests" }); }
+      const declared = Number(req.headers["content-length"]);
+      if (Number.isFinite(declared) && declared > ASSIST_BODY_MAX) { req.resume(); return json(res, 413, { error: "too large" }); }
+      let size = 0; const chunks = [];
+      req.on("data", (c) => {
+        if (res.writableEnded) return;
+        size += c.length;
+        if (size > ASSIST_BODY_MAX) { json(res, 413, { error: "too large" }); req.resume(); return; }
+        chunks.push(c);
+      });
+      req.on("end", () => {
+        if (res.writableEnded) return;
+        let body;
+        try { body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch { return json(res, 400, { error: "bad json" }); }
+        if (!body || typeof body !== "object" || Array.isArray(body)) return json(res, 400, { error: "bad request" });
+        const id = typeof body.job === "string" && /^[0-9a-f]{16}$/.test(body.job) ? body.job : "";
+        let r;
+        switch (am[1]) {
+          case "propose": r = assistant.propose(String(body.note || ""), { extra: typeof body.extra === "string" ? body.extra : "" }); break;
+          case "confirm": r = assistant.confirm(id); break;
+          case "apply": r = assistant.apply(id, body.token); break;
+          case "undo": r = assistant.undo(id); break;
+          default: r = assistant.cancel(id);
+        }
+        if (!r.ok) return json(res, r.code || 400, { error: r.error });
+        const out = { ...r }; delete out.ok;
+        return json(res, 200, out);
+      });
+      return;
+    }
+
     if (req.method !== "GET" && req.method !== "HEAD") return notFound(res);
     if (!viewerAllowed(req)) return unauthorized();
 
@@ -264,10 +331,21 @@ function createServer(config, memory, { counters, views } = {}) {
       });
       return res.end(page());
     }
-    if (STATIC[p]) {
-      const [file, type] = STATIC[p];
+    if (statics[p]) {
+      const [file, type] = statics[p];
       headers(res, { "Content-Type": type, "Cache-Control": url.searchParams.has("v") ? "public, max-age=31536000, immutable" : "no-cache" });
       return fs.createReadStream(path.join(PUBLIC, file)).pipe(res);
+    }
+    if (assistant && p === "/api/assistant") return json(res, 200, assistant.status());
+    if (assistant && p === "/api/assistant/stream") {
+      if (assistStreams >= ASSIST_STREAM_MAX) { json(res, 429, { error: "too many streams" }); return; }
+      assistStreams++;
+      headers(res, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no", Connection: "keep-alive" });
+      res.write("retry: 5000\n\n");
+      const off = assistant.subscribe((evt) => res.write(`event: ${evt.type}\ndata: ${JSON.stringify(evt)}\n\n`));
+      const beat = setInterval(() => res.write(": beat\n\n"), 25000);
+      req.on("close", () => { off(); clearInterval(beat); assistStreams--; });
+      return;
     }
     if (p === "/api/graph") return json(res, 200, memory.graph());
     if (p === "/api/cost") return json(res, 200, cost());
@@ -325,6 +403,7 @@ function main(env = process.env) {
     console.log(`memglow: ${config.memoryDir}`);
     console.log(`memglow: open http://${config.host === "0.0.0.0" ? "localhost" : config.host}:${config.port}`);
     if (!config.token) console.log("memglow: MEMGLOW_TOKEN not set — /api/activity is disabled (live assistant activity off)");
+    if (config.assistant.enabled) console.log(`memglow: assistant ON (provider ${config.assistant.provider}) — it only proposes; memglow writes what you approve, after a backup`);
   });
 }
 

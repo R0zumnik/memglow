@@ -124,8 +124,11 @@ function costName(n, colors) {
     '<span class="mg-cost__label">' + costEsc(n.label) + '</span></span>';
 }
 
+// Set by the page when the optional assistant is enabled on this instance (config "assistant").
+var costAssistant = false;
 function costCopyButton(n) {
-  return '<button type="button" class="bn-btn mg-cost__copy" data-copy="' + costEsc(n.id) + '">Copy prompt for your AI</button>';
+  return '<button type="button" class="bn-btn mg-cost__copy" data-copy="' + costEsc(n.id) + '">Copy prompt for your AI</button>' +
+    (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-assist="' + costEsc(n.id) + '">Do it with Claude</button>' : "");
 }
 
 function costTop(top, colors, c) {
@@ -191,7 +194,7 @@ function costRender(c, colors) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName };
+  module.exports = { setAssistant: function (v) { costAssistant = !!v; }, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName };
 }
 
 (function () {
@@ -205,6 +208,7 @@ if (typeof module !== "undefined" && module.exports) {
   try {
     var cfg = JSON.parse(document.getElementById("memglow-config").textContent || "{}");
     (cfg.themes || []).forEach(function (t) { colors[t.id] = t.color; names[t.id] = t.label; });
+    costAssistant = cfg.assistant === true;
   } catch (e) { /* default colours */ }
   var last = null, pending = null, loading = false, again = false;
 
@@ -301,6 +305,11 @@ if (typeof module !== "undefined" && module.exports) {
     var t = e.target;
     var btn = t.closest && t.closest("[data-copy]");
     if (btn) { copyPrompt(btn); return; }
+    var ai = t.closest && t.closest("[data-assist]");
+    if (ai) {
+      try { document.dispatchEvent(new CustomEvent("memglow:assistant", { detail: ai.getAttribute("data-assist") })); } catch (e2) { /* old browser */ }
+      return;
+    }
     var row = t.closest && t.closest("[data-note]");
     if (row) openNote(row.getAttribute("data-note"));
   });

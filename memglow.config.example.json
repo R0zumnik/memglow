@@ -22,5 +22,11 @@
   "showBodies": true,
   "largeNoteTokens": 5000,
   "splitChunkTokens": 2000,
-  "pollMs": 2000
+  "pollMs": 2000,
+  "assistant": {
+    "enabled": false,
+    "provider": "claude-code",
+    "timeoutMinutes": 10,
+    "backup": "auto"
+  }
 }
