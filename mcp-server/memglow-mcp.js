@@ -24,6 +24,8 @@
  *   note_cost       token estimate, 7-day reads and status for one note
  *   organisation_suggestions  notes of one subject scattered across sub-themes of a group
  *                   (lib/organise.js), with a ready-to-use regroup instruction
+ *   archive_lookup  sections moved to the archive (lib/archive.js) whose topic matches a query,
+ *                   from the archive summary note: references only, never the archived text
  * No tool ever returns a full note body: only ids, titles, token estimates, frontmatter
  * descriptions and section headings — and even those go through lib/memory.js's `maskSecrets`
  * before being sent anywhere.
@@ -38,6 +40,7 @@ const { rankRelated } = require("../lib/related");
 const organise = require("../lib/organise");
 const { readZones } = require("../lib/zones");
 const { measureFiles, alwaysLoadedCost } = require("../lib/always-loaded");
+const archive = require("../lib/archive");
 
 const SERVER_NAME = "memglow-mcp";
 let SERVER_VERSION = "0.0.0";
@@ -70,6 +73,7 @@ function safeConfig(env = process.env, cwd = process.cwd()) {
       alwaysLoaded: [],
       sessionsPerDay: 5,
       indexWarningTokens: 2000,
+      archive: archive.settings({}, env),
     };
   }
 }
@@ -117,7 +121,7 @@ function toRelatedEntry(n, reasons) {
   return { id: n.id, label: n.label, tokens: n.tokens, description: safeText(n.description), reasons };
 }
 
-// ---- the four tools ----
+// ---- the tools ----
 // Each returns either { summary, data } (a successful, structured result) or { error } (reported
 // to the caller as a normal MCP tool error, isError: true, never a protocol-level failure).
 
@@ -292,6 +296,36 @@ function toolOrganisation(ctx, args) {
   };
 }
 
+/** The archive summary note (lib/archive.js), parsed: null when there is none made by memglow. */
+function readArchiveSummary(ctx) {
+  const st = ctx.config.archive || archive.settings({});
+  const rel = ctx.memory.fileOf(st.summaryNote);
+  if (!rel) return { id: st.summaryNote, entries: null };
+  let text;
+  try { text = fs.readFileSync(path.join(ctx.config.memoryDir, rel), "utf8"); } catch { return { id: st.summaryNote, entries: null }; }
+  return { id: st.summaryNote, rel, entries: archive.parseSummary(text), tokens: estimateTokens(text) };
+}
+
+function toolArchiveLookup(ctx, args) {
+  if (emptyMemory(ctx)) return noNotesFound(ctx);
+  const limit = clampInt(args.limit, 10, 1, 50);
+  const query = String(args.query).trim();
+  const s = readArchiveSummary(ctx);
+  if (!s.entries) {
+    return {
+      summary: `No archive summary yet ("${s.id}"): nothing has been archived by memglow, so everything is in the live memory.`,
+      data: { available: false, summaryNote: s.id, query, matches: [] },
+    };
+  }
+  const matches = archive.matchEntries(s.entries, query, limit).map((e) => ({
+    section: safeText(e.title), from: e.from, archiveNote: e.archive, link: `[[${e.archive}${e.anchor ? "#" + e.anchor : ""}]]`, date: e.date, tokens: e.tokens,
+  }));
+  const summary = matches.length
+    ? `${matches.length} archived section(s) match "${query}": ${matches.slice(0, 5).map((m) => `"${m.section}" (from ${m.from}, now in ${m.archiveNote}, ≈${m.tokens} tokens)`).join(", ")}. Read one with your memory tool only if the live memory had no answer.`
+    : `No archived section matches "${query}" (${s.entries.length} archived section(s) listed in ${s.id}).`;
+  return { summary, data: { available: true, summaryNote: s.id, summaryTokens: s.tokens, total: s.entries.length, query, matches } };
+}
+
 // ---- tool registry (name, LLM-facing description, strict input schema) ----
 
 const TOOLS = [
@@ -345,7 +379,21 @@ const TOOLS = [
   },
 ];
 
-const HANDLERS = { memory_health: toolMemoryHealth, split_plan: toolSplitPlan, related_notes: toolRelatedNotes, note_cost: toolNoteCost, organisation_suggestions: toolOrganisation };
+TOOLS.push({
+  name: "archive_lookup",
+  description: "Use ONLY when a search of the live memory found nothing useful. Looks up the archive summary (one line per section memglow moved out of the live memory because nobody had used it for months) and returns the archived sections whose topic or original note matches the query: section title, original note, archive note, a [[link]] to it, date and ≈tokens. Never returns the archived text: read the section with your own memory tool if it answers the question.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", minLength: 1, maxLength: 200, description: "What you were looking for (topic words, or a note name)." },
+      limit: { type: "integer", minimum: 1, maximum: 50, description: "Maximum number of matches (default 10)." },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+});
+
+const HANDLERS = { memory_health: toolMemoryHealth, split_plan: toolSplitPlan, related_notes: toolRelatedNotes, note_cost: toolNoteCost, organisation_suggestions: toolOrganisation, archive_lookup: toolArchiveLookup };
 
 // ---- a tiny, hand-written JSON Schema validator (just what the schemas above need) ----
 
@@ -405,7 +453,7 @@ function createRpc(write) {
       protocolVersion,
       capabilities: { tools: {} },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-      instructions: "Read-only inspector of a memglow Markdown memory folder: which notes are too large, how to split them, which notes are related, which notes are scattered across sub-themes, and their estimated reading cost. Never modifies notes.",
+      instructions: "Read-only inspector of a memglow Markdown memory folder: which notes are too large, how to split them, which notes are related, which notes are scattered across sub-themes, their estimated reading cost, and (archive_lookup) which archived sections match a topic when the live memory had no answer. Never modifies notes.",
     });
   }
 

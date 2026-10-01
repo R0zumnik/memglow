@@ -15,8 +15,23 @@ function aiEsc(s) {
 }
 function aiNum(n) { return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
 
-var AI_ROLE = { original: "original note → summary", part: "new note", link: "link updated", subtheme: "sub-theme changed", moved: "note at its new place", "moved-from": "old place (moved)" };
+var AI_ROLE = { original: "original note → summary", part: "new note", link: "link updated", subtheme: "sub-theme changed", moved: "note at its new place", "moved-from": "old place (moved)", origin: "sections moved out, a link left", archive: "archive note", summary: "archive summary" };
 var AI_KIND = { create: "new", modify: "changed", "delete": "moved away" };
+
+/** What an archive proposal moves, and what it saves (lib/archive.js planArchive). */
+function aiArchiveGain(a) {
+  if (!a || !a.gain) return "";
+  var g = a.gain;
+  var live = (g.live || []).map(function (x) { return '<code>' + aiEsc(x.rel) + '</code> ≈ ' + aiNum(x.before) + ' → ≈ ' + aiNum(x.after); }).join(", ");
+  return '<ul class="mg-ai__moved">' + (a.moved || []).map(function (m) {
+    return '<li>§ ' + aiEsc(m.heading) + ' <span class="mg-ai__meta">from ' + aiEsc(m.note) + ' → ' + aiEsc(m.archive) + ' · ≈ ' + aiNum(m.tokens) + ' tokens</span></li>';
+  }).join("") + '</ul>' +
+    '<p class="mg-ai__gain">Live memory: <strong>≈ ' + aiNum(g.saved) + '</strong> tokens fewer to read (' + live + '). Archive summary: ≈ ' + aiNum(g.summaryTokens) + ' tokens for ' + aiNum(g.summaryLines) + ' line(s).</p>';
+}
+function aiKeep(keep) {
+  if (!keep || !keep.length) return "";
+  return '<p class="mg-ai__sub">Kept live by the AI</p>' + aiList(keep.map(function (k) { return k.label + " § " + k.title + (k.why ? " — " + k.why : ""); }), "mg-ai__warnings");
+}
 
 function aiDiff(f) {
   var head = '<summary><span class="mg-ai__kind mg-ai__kind--' + aiEsc(f.kind) + '">' + aiEsc(AI_KIND[f.kind] || "changed") + '</span> ' +
@@ -48,13 +63,14 @@ function aiRenderJob(j, providerLabel) {
   if (!j || j.state === "discarded") return "";
   var who = aiEsc(providerLabel || "the AI");
   var regroup = j.kind === "regroup";
-  var title = '<p class="mg-ai__title">' + (regroup ? "Regroup" : "Split") + ' <strong>' + aiEsc(j.note && j.note.label) + '</strong></p>';
+  var arch = j.kind === "archive";
+  var title = '<p class="mg-ai__title">' + (arch ? "Archive" : regroup ? "Regroup" : "Split") + ' <strong>' + aiEsc(j.note && j.note.label) + '</strong></p>';
   if (j.state === "running") {
-    return title + '<p class="mg-ai__msg">Asking ' + who + ' for a proposal… <span class="mg-ai__chars" id="mg-ai-chars">' + aiNum(j.chars) + '</span> characters received. It has no tool and writes nothing.</p>' +
+    return title + '<p class="mg-ai__msg">Asking ' + who + (arch ? ' which sections to archive' : ' for a proposal') + '… <span class="mg-ai__chars" id="mg-ai-chars">' + aiNum(j.chars) + '</span> characters received. It has no tool and writes nothing.</p>' +
       '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="cancel">Cancel</button></div>';
   }
   if (j.state === "invalid") {
-    return title + '<p class="mg-ai__msg mg-ai__msg--bad">memglow refused this proposal — nothing was written:</p>' + aiList(j.errors, "mg-ai__errors") +
+    return title + '<p class="mg-ai__msg mg-ai__msg--bad">memglow refused this proposal — nothing was written:</p>' + aiList(j.errors, "mg-ai__errors") + (arch ? aiKeep(j.keep) : "") +
       '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="retry">Ask again</button><button type="button" class="bn-btn" data-ai="cancel">Discard</button></div>';
   }
   if (j.state === "failed" || j.state === "cancelled") {
@@ -62,11 +78,13 @@ function aiRenderJob(j, providerLabel) {
       '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="retry">Ask again</button><button type="button" class="bn-btn" data-ai="cancel">Discard</button></div>';
   }
   if (j.state === "proposed") {
-    return title + (j.notes ? '<p class="mg-ai__notes">' + who + ': “' + aiEsc(j.notes) + '”</p>' : '') + aiGain(j.gain) +
+    return title + (j.notes ? '<p class="mg-ai__notes">' + who + ': “' + aiEsc(j.notes) + '”</p>' : '') + (arch ? aiArchiveGain(j.archive) + aiKeep(j.keep) : aiGain(j.gain)) +
       aiList(j.warnings, "mg-ai__warnings") +
-      '<p class="mg-ai__msg">' + (regroup
-        ? "memglow checked it: same group, note texts unchanged (only the sub-theme line), no note replaced or deleted, protected groups respected. Exact changes:"
-        : "memglow checked it: nothing lost, same folder and group, no note replaced or deleted, protected groups respected. Exact changes:") + '</p>' +
+      '<p class="mg-ai__msg">' + (arch
+        ? "memglow checked it: every moved section is in its archive note word for word, the original notes can be rebuilt exactly, each archive note is in the same theme, nothing is overwritten or deleted, every link points to an existing note, protected groups respected. Exact changes:"
+        : regroup
+          ? "memglow checked it: same group, note texts unchanged (only the sub-theme line), no note replaced or deleted, protected groups respected. Exact changes:"
+          : "memglow checked it: nothing lost, same folder and group, no note replaced or deleted, protected groups respected. Exact changes:") + '</p>' +
       (j.files || []).map(aiDiff).join("") +
       '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="apply">Apply this plan</button><button type="button" class="bn-btn" data-ai="cancel">Discard</button></div>' +
       '<p class="mg-ai__hint">Apply backs up the notes first (git snapshot if your memory is a git repository, otherwise a copy in memglow\'s data folder); if the backup fails, nothing is written.</p>';
@@ -74,7 +92,7 @@ function aiRenderJob(j, providerLabel) {
   if (j.state === "applying") return title + '<p class="mg-ai__msg">Backing up and writing…</p>';
   if (j.state === "applied") {
     return title + '<p class="mg-ai__msg mg-ai__msg--ok">Applied. ' + (j.files || []).length + ' file(s) written; backup: ' +
-      (j.backup ? aiEsc(j.backup.kind === "git" ? "git commit " + j.backup.ref : "copy in " + j.backup.dir) : "—") + '.</p>' + aiGain(j.gain) +
+      (j.backup ? aiEsc(j.backup.kind === "git" ? "git commit " + j.backup.ref : "copy in " + j.backup.dir) : "—") + '.</p>' + (arch ? aiArchiveGain(j.archive) : aiGain(j.gain)) +
       '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="undo">Undo</button></div>';
   }
   if (j.state === "undone") {
@@ -138,7 +156,7 @@ function aiAskForm(noteId, label, providers, current, kind) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { aiEsc: aiEsc, aiRenderJob: aiRenderJob, aiRenderHistory: aiRenderHistory, aiRenderProviders: aiRenderProviders, aiAskForm: aiAskForm, aiDiff: aiDiff, aiDestination: aiDestination };
+  module.exports = { aiArchiveGain: aiArchiveGain, aiEsc: aiEsc, aiRenderJob: aiRenderJob, aiRenderHistory: aiRenderHistory, aiRenderProviders: aiRenderProviders, aiAskForm: aiAskForm, aiDiff: aiDiff, aiDestination: aiDestination };
 }
 
 (function () {
@@ -208,6 +226,22 @@ if (typeof module !== "undefined" && module.exports) {
     return row ? row.textContent : id;
   }
 
+  // Archive (Memory cost → Archive block): sections chosen there, with or without the AI's review.
+  var lastArchive = null;
+  function archive(req) {
+    lastArchive = req;
+    asking = null;
+    var body = { sections: req.sections, ai: !!req.ai };
+    if (req.ai && st && st.provider) body.provider = st.provider.id;
+    if (root.scrollIntoView) root.scrollIntoView({ behavior: "smooth", block: "start" });
+    return post("archive", body).then(function (o) { if (st) { st.job = o.job; render(); } else load(); }).catch(fail);
+  }
+  document.addEventListener("memglow:archive", function (e) {
+    var d = e.detail || {};
+    if (!Array.isArray(d.sections) || !d.sections.length) return;
+    archive({ sections: d.sections.map(String), ai: d.ai === true });
+  });
+
   document.addEventListener("memglow:assistant", function (e) {
     var d = e.detail;
     // A note to split (its id), or { kind: "regroup", id, label } for an organisation suggestion.
@@ -225,6 +259,10 @@ if (typeof module !== "undefined" && module.exports) {
     var job = b.getAttribute("data-job") || (st && st.job && st.job.id);
     if (what === "close") { asking = null; render(); return; }
     b.disabled = true;
+    if (what === "retry" && st && st.job && st.job.kind === "archive") {
+      if (lastArchive) archive(lastArchive); else load();
+      return;
+    }
     if (what === "propose" || what === "retry") {
       var note = what === "propose" ? b.getAttribute("data-note") : (st && st.job && st.job.target) || (st && st.job && st.job.note && st.job.note.id) || lastNote;
       var kind = what === "propose" ? (b.getAttribute("data-kind") || "split") : (st && st.job && st.job.kind) || lastKind;

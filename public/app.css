@@ -416,6 +416,23 @@ a { color: var(--bn-accent-teal); }
 .mg-cost__manual { display: block; width: calc(100% - 16px); margin: 4px 8px; min-height: 120px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bn-surface); color: var(--bn-ink); border: 1px solid var(--bn-line); border-radius: 8px; }
 .mg-cost__offscreen { position: fixed; top: 0; left: -9999px; opacity: 0; }
 .mg-cost__empty { margin: 0; font-size: 13px; color: var(--bn-ink-dim); }
+/* Archive block (dormant sections) */
+.mg-arch { margin-top: var(--bn-space-4); }
+.mg-arch__hint { margin: 0 0 var(--bn-space-2); font-size: 12px; color: var(--bn-ink-dim); max-width: 760px; }
+.mg-arch__row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 2px 10px; padding: 5px 8px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+.mg-arch__row:hover { background: rgba(255, 255, 255, 0.05); }
+.mg-arch__row input { margin: 0; grid-row: 1 / span 2; accent-color: var(--bn-accent-teal); }
+.mg-arch__row .mg-cost__name { grid-column: 2; }
+.mg-arch__title { grid-column: 2; grid-row: 2; font-size: 12px; color: var(--bn-ink); overflow-wrap: anywhere; }
+.mg-arch__row .mg-cost__num { grid-column: 3; grid-row: 1; }
+.mg-arch__row .mg-cost__det { grid-column: 3 / 5; grid-row: 2; text-align: right; }
+.mg-arch__gain { margin: var(--bn-space-2) 0 4px; font-size: 13px; overflow-wrap: anywhere; }
+.mg-arch__gain strong { color: var(--bn-accent-teal); font-variant-numeric: tabular-nums; }
+.mg-arch__btns { display: flex; flex-wrap: wrap; gap: 4px; margin-left: -8px; }
+@media (max-width: 640px) {
+  .mg-arch__row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .mg-arch__row .mg-cost__det { grid-column: 2 / -1; grid-row: 3; text-align: left; }
+}
 @media (max-width: 900px) {
   .mg-cost__figs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .mg-cost__grid { grid-template-columns: minmax(0, 1fr); }
@@ -434,6 +451,7 @@ a { color: var(--bn-accent-teal); }
 .mg-ai__msg--ok { color: var(--bn-accent-teal); }
 .mg-ai__notes { margin: 6px 0; font-size: 13px; color: var(--bn-ink-dim); font-style: italic; overflow-wrap: anywhere; }
 .mg-ai__gain { margin: 6px 0; font-size: 13px; overflow-wrap: anywhere; }
+.mg-ai__moved { margin: 6px 0; padding-left: 18px; font-size: 13px; overflow-wrap: anywhere; }
 .mg-ai__gain strong { color: var(--bn-accent-teal); font-variant-numeric: tabular-nums; }
 .mg-ai__errors, .mg-ai__warnings { margin: 4px 0 8px; padding-left: 20px; font-size: 12px; overflow-wrap: anywhere; }
 .mg-ai__errors { color: #FFB86B; }

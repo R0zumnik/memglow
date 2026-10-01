@@ -26,7 +26,9 @@
   "alwaysLoaded": ["~/.claude/CLAUDE.md", "./CLAUDE.md", "AGENTS.md"],
   "sessionsPerDay": 5,
   "indexWarningTokens": 2000,
-  "proxy": { "sizeWarning": true, "indexWarning": false, "searchDetails": true, "suggestions": true, "dedupe": false, "toc": false },
+  "proxy": { "sizeWarning": true, "indexWarning": false, "searchDetails": true, "suggestions": true, "dedupe": false, "toc": false, "archiveHint": false },
+  "archiveAfterDays": 105,
+  "archive": { "folder": "archive", "summaryNote": "archive-summary", "maxSuggestions": 20, "minSectionTokens": 100 },
   "pollMs": 2000,
   "assistant": {
     "enabled": false,
