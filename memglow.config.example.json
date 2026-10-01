@@ -22,7 +22,11 @@
   "showBodies": true,
   "largeNoteTokens": 5000,
   "splitChunkTokens": 2000,
-  "proxy": { "sizeWarning": true, "searchDetails": true, "suggestions": true, "dedupe": false, "toc": false },
+  "protectedThemes": ["people", "habits"],
+  "alwaysLoaded": ["~/.claude/CLAUDE.md", "./CLAUDE.md", "AGENTS.md"],
+  "sessionsPerDay": 5,
+  "indexWarningTokens": 2000,
+  "proxy": { "sizeWarning": true, "indexWarning": false, "searchDetails": true, "suggestions": true, "dedupe": false, "toc": false },
   "pollMs": 2000,
   "assistant": {
     "enabled": false,

@@ -18,12 +18,16 @@ const { createCounters, createWriteDedup } = require("./lib/counters");
 const { computeCost, dayOf } = require("./lib/cost");
 const view = require("./lib/view");
 const { createAssistant } = require("./lib/assistant");
+const zonesLib = require("./lib/zones");
+const organise = require("./lib/organise");
+const { measureFiles, alwaysLoadedCost } = require("./lib/always-loaded");
 
 const PUBLIC = path.join(__dirname, "public");
 const STATIC = {
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/app.css": ["app.css", "text/css; charset=utf-8"],
   "/cost.js": ["cost.js", "text/javascript; charset=utf-8"],
+  "/zones.js": ["zones.js", "text/javascript; charset=utf-8"],
   "/vendor/memglow-graph.js": ["vendor/memglow-graph.js", "text/javascript; charset=utf-8"],
 };
 const STREAM_MAX = 20;
@@ -48,7 +52,7 @@ function isInside(child, parent) {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-function createServer(config, memory, { counters, views, assistantEnv } = {}) {
+function createServer(config, memory, { counters, views, zones, assistantEnv } = {}) {
   // memglow's own files (counters, saved view) live in its data folder, NEVER in the notes folder:
   // if the data folder is inside the notes folder, nothing is written (kept in memory only).
   let dataDir = config.dataDir || null;
@@ -69,12 +73,20 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
     dir: dataDir,
     rules: view.createRules({ themeIds: config.themes.map((t) => t.id), noteExists: (id) => memory.has(id) }),
   });
+  // Protected groups and display labels of the groups (lib/zones.js): config file, or the choice
+  // saved from the page (first-run screen, Settings) in the data folder.
+  zones = zones || zonesLib.createZoneStore({ dir: dataDir, config });
+  const themesNow = () => zones.themes();
+  const groupName = (id) => { const t = themesNow().find((x) => x.id === id); return t ? t.label : id; };
+  const subthemeName = (s) => (config.subthemeLabels && typeof config.subthemeLabels[s] === "string" ? String(config.subthemeLabels[s]).slice(0, 40) : s);
   // Optional assistant (lib/assistant): only when enabled. Disabled = its routes, script and buttons
   // do not exist (404 like any unknown route).
-  const groupName = (id) => { const t = config.themes.find((x) => x.id === id); return t ? t.label : id; };
   const assistant = config.assistant && config.assistant.enabled
     ? createAssistant({
       config, memory, dataDir, env: assistantEnv || process.env, groupName,
+      protectedIds: () => zones.protectedIds(),
+      // Only the regroupings Memory cost currently suggests (by id).
+      suggestion(id) { return (cost().organisation || []).find((x) => x.id === id) || null; },
       // Only the notes Memory cost offers to split (the ones with a "Do it with Claude" button).
       costItem(id) {
         const c = cost();
@@ -153,15 +165,17 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
   }
 
   function page() {
+    const themes = themesNow();
     const cfg = {
-      themes: config.themes,
+      themes,
       subthemeLabels: config.subthemeLabels,
       showBodies: config.showBodies,
       assistant: !!assistant,
+      assistantLabel: assistant ? assistant.label : "",
     };
     // Theme colours: legend dots, and the group tag of the activity journal (tinted by --c).
-    const dots = config.themes.map((t) => `.mem-dot--${t.id}{background:${t.color};box-shadow:0 0 6px ${t.color}}.mem-grp--${t.id}{--c:${t.color}}`).join("");
-    const legend = config.themes.concat([{ id: "index", label: "Index" }])
+    const dots = themes.map((t) => `.mem-dot--${t.id}{background:${t.color};box-shadow:0 0 6px ${t.color}}.mem-grp--${t.id}{--c:${t.color}}`).join("");
+    const legend = themes.concat([{ id: "index", label: "Index" }])
       .map((t) => `<li><button type="button" class="mem-filtre" data-theme="${esc(t.id)}" aria-pressed="true"><span class="mem-dot mem-dot--${esc(t.id)}"></span>${esc(t.label)}</button></li>`)
       .join("");
     return template
@@ -186,7 +200,8 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
   let costCache = null, costKey = "";
   function cost() {
     const notes = memory.costNotes(); // rescans when due: the key below sees the result
-    const key = [counters.version(), memory.version(), dayOf(Date.now()), config.showBodies].join(":");
+    const z = zones.read();
+    const key = [counters.version(), memory.version(), dayOf(Date.now()), config.showBodies, JSON.stringify(z)].join(":");
     if (costCache && key === costKey) return costCache;
     costCache = computeCostNow(notes);
     costKey = key;
@@ -194,7 +209,7 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
   }
   function computeCostNow(notes) {
     const opts = { since: counters.since(), largeNoteTokens: config.largeNoteTokens, chunkTokens: config.splitChunkTokens };
-    const first = computeCost(counters.days(), notes, Date.now(), opts);
+    const first = withOrganisation(computeCost(counters.days(), notes, Date.now(), opts));
     if (!config.showBodies) return first;
     const bodies = {};
     for (const n of first.tooLarge.concat(first.top).slice(0, COST_SECTIONS_MAX)) {
@@ -202,7 +217,30 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
       const b = memory.maskedBody(n.id);
       if (b != null) bodies[n.id] = b;
     }
-    return computeCost(counters.days(), notes, Date.now(), { ...opts, bodies });
+    return withOrganisation(computeCost(counters.days(), notes, Date.now(), { ...opts, bodies }));
+  }
+  /**
+   * Organisation suggestions (lib/organise.js, read-only): notes of one subject scattered across
+   * sub-themes of a group. Titles, ids and sub-themes only — the same metadata the graph shows.
+   */
+  function withOrganisation(c) {
+    const g = memory.graph();
+    const protectedNames = zones.protectedIds().map(groupName);
+    c.protectedGroups = protectedNames; // named in the copy prompts ("never move notes across…")
+    c.organisation = organise.suggest({ notes: g.nodes, links: g.links, themeName: groupName, subthemeName })
+      .map((x) => ({ ...x, prompt: organise.regroupPrompt(x, { themeName: groupName, subthemeName, protectedNames }) }));
+    return c;
+  }
+  /**
+   * Always-loaded cost (lib/always-loaded.js): index note(s) + instruction files listed in
+   * `alwaysLoaded` (size only, never their content), × sessions per day. Not cached: a few stats.
+   */
+  function alwaysLoaded() {
+    return alwaysLoadedCost({
+      index: (memory.costNotes() || []).filter((n) => n.theme === "index").map((n) => ({ id: n.id, label: n.label, tokens: Math.ceil((n.bytes || 0) / 4) })),
+      files: measureFiles(config.alwaysLoaded || [], { cwd: config.cwd || process.cwd() }),
+      days: counters.days(), now: Date.now(), sessionsPerDay: config.sessionsPerDay || 5, indexWarningTokens: config.indexWarningTokens || 2000,
+    });
   }
 
   return http.createServer((req, res) => {
@@ -282,6 +320,33 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
       return;
     }
 
+    // Protected groups and group labels (first-run screen, Settings): same guard as the saved view —
+    // page access rule, same-origin request with memglow's header (CSRF), rate limited, body capped,
+    // strictly validated (lib/zones.js). A refused body is a 400: nothing is written.
+    if (p === "/api/zones" && req.method === "PUT") {
+      if (!viewerAllowed(req)) { req.resume(); return unauthorized(); }
+      if (!sameOriginWrite(req)) { req.resume(); return json(res, 403, { error: "forbidden" }); }
+      if (!zones.rateOk()) { req.resume(); headers(res, { "Retry-After": "5" }); return json(res, 429, { error: "too many requests" }); }
+      const declared = Number(req.headers["content-length"]);
+      if (Number.isFinite(declared) && declared > zonesLib.BODY_MAX) { req.resume(); return json(res, 413, { error: "too large" }); }
+      let size = 0; const chunks = [];
+      req.on("data", (c) => {
+        if (res.writableEnded) return;
+        size += c.length;
+        if (size > zonesLib.BODY_MAX) { json(res, 413, { error: "too large" }); req.resume(); return; }
+        chunks.push(c);
+      });
+      req.on("end", () => {
+        if (res.writableEnded) return;
+        let body;
+        try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return json(res, 400, { error: "bad json" }); }
+        const z = zones.write(body);
+        if (!z) return json(res, 400, { error: "bad zones" });
+        return json(res, 200, { defined: true, source: "saved", protected: z.protected, labels: z.labels });
+      });
+      return;
+    }
+
     // Assistant actions (only when enabled): same access rule as the page, same-origin browser request
     // with memglow's header (CSRF), rate limited, small JSON body. Every one of them can start a
     // process, spend tokens or write notes.
@@ -307,7 +372,13 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
         const id = typeof body.job === "string" && /^[0-9a-f]{16}$/.test(body.job) ? body.job : "";
         let r;
         switch (am[1]) {
-          case "propose": r = assistant.propose(String(body.note || ""), { extra: typeof body.extra === "string" ? body.extra : "", provider: typeof body.provider === "string" ? body.provider.slice(0, 40) : "" }); break;
+          case "propose":
+            if (body.kind === "regroup") {
+              const sid = typeof body.suggestion === "string" && /^rg-[0-9a-f]{12}$/.test(body.suggestion) ? body.suggestion : "";
+              r = assistant.proposeRegroup(sid, { extra: typeof body.extra === "string" ? body.extra : "", provider: typeof body.provider === "string" ? body.provider.slice(0, 40) : "" });
+              break;
+            }
+            r = assistant.propose(String(body.note || ""), { extra: typeof body.extra === "string" ? body.extra : "", provider: typeof body.provider === "string" ? body.provider.slice(0, 40) : "" }); break;
           case "confirm": r = assistant.confirm(id); break;
           case "apply": r = assistant.apply(id, body.token); break;
           case "undo": r = assistant.undo(id); break;
@@ -348,7 +419,11 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
       return;
     }
     if (p === "/api/graph") return json(res, 200, memory.graph());
-    if (p === "/api/cost") return json(res, 200, cost());
+    if (p === "/api/cost") return json(res, 200, { ...cost(), alwaysLoaded: alwaysLoaded() });
+    if (p === "/api/zones") {
+      const z = zones.read();
+      return json(res, 200, { ...z, themes: zonesLib.overview(config, memory.costNotes(), z.labels) });
+    }
     if (p === "/api/view") return json(res, 200, view.publicView(views.read()));
     if (p.startsWith("/api/note/")) {
       const n = memory.note(decodeURIComponent(p.slice("/api/note/".length)), { withBody: config.showBodies });

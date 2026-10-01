@@ -17,11 +17,13 @@
  * not memglow's data folder. If present, the counters give real 7-day read counts; without them,
  * the tools say so plainly instead of guessing.
  *
- * Four read-only tools, no write tool:
+ * Five read-only tools, no write tool:
  *   memory_health   folder-wide overview: notes too large, costliest to read, never read, index size
  *   split_plan      a deterministic split suggestion for one note, or an honest "no split needed"
  *   related_notes   notes related to a note (links, sub-theme, co-usage) or to a free-text topic
  *   note_cost       token estimate, 7-day reads and status for one note
+ *   organisation_suggestions  notes of one subject scattered across sub-themes of a group
+ *                   (lib/organise.js), with a ready-to-use regroup instruction
  * No tool ever returns a full note body: only ids, titles, token estimates, frontmatter
  * descriptions and section headings — and even those go through lib/memory.js's `maskSecrets`
  * before being sent anywhere.
@@ -33,6 +35,9 @@ const { createMemory, maskSecrets } = require("../lib/memory");
 const { createCounters } = require("../lib/counters");
 const { estimateTokens, sectionsOf, packSections, dayOf, daysBefore, WINDOW_DAYS } = require("../lib/cost");
 const { rankRelated } = require("../lib/related");
+const organise = require("../lib/organise");
+const { readZones } = require("../lib/zones");
+const { measureFiles, alwaysLoadedCost } = require("../lib/always-loaded");
 
 const SERVER_NAME = "memglow-mcp";
 let SERVER_VERSION = "0.0.0";
@@ -61,6 +66,10 @@ function safeConfig(env = process.env, cwd = process.cwd()) {
       themeByFolder: [],
       defaultTheme: null,
       subthemeLabels: {},
+      protectedThemes: null,
+      alwaysLoaded: [],
+      sessionsPerDay: 5,
+      indexWarningTokens: 2000,
     };
   }
 }
@@ -128,10 +137,19 @@ function toolMemoryHealth(ctx) {
     : null;
   const index = cost.index ? { id: cost.index.id, label: cost.index.label, tokens: cost.index.tokens } : null;
 
+  // Always-loaded cost: index + configured instruction files (size only, never their content).
+  const al = alwaysLoadedCost({
+    index: cost.index ? notes.filter((n) => n.theme === "index").map((n) => ({ id: n.id, label: n.label, tokens: estimateTokens(n.bytes || 0) })) : [],
+    files: measureFiles(ctx.config.alwaysLoaded || [], { cwd: ctx.config.cwd || process.cwd() }),
+    days: ctx.haveCounters ? ctx.counters.days() : null, now: Date.now(),
+    sessionsPerDay: ctx.config.sessionsPerDay || 5, indexWarningTokens: ctx.config.indexWarningTokens || 2000,
+  });
+  const alwaysLoaded = { perSession: al.perSession, sessionsPerDay: al.sessionsPerDay, sessionsSource: al.sessionsSource, perDay: al.perDay, files: al.files, tips: al.tips.map((t) => t.text) };
   const data = {
     available: true,
     totals: cost.totals,
     index,
+    alwaysLoaded,
     largeNoteTokens: cost.largeNoteTokens,
     tooLarge,
     mostExpensive7d,
@@ -146,6 +164,7 @@ function toolMemoryHealth(ctx) {
     : `No note is over the ${cost.largeNoteTokens}-token threshold.`);
   if (mostExpensive7d) lines.push(`Costliest to read over 7 days: ${mostExpensive7d.map((n) => `${n.label} (≈${n.readTokens7} tokens, ${n.reads7}×)`).join(", ")}.`);
   else lines.push(ctx.haveCounters ? "No reads recorded in the last 7 days." : "No activity counters yet (nothing read through the hooks or the MCP proxy): reading-cost figures are unavailable.");
+  lines.push(`Loaded at every session: ≈${al.perSession} tokens × ${al.sessionsPerDay} sessions/day ≈ ${al.perDay} tokens/day.`);
   if (neverRead30d) lines.push(`${neverRead30d.total} note(s) never read in the last 30 days${neverRead30d.total > 10 ? " (top 10 shown)" : ""}.`);
   return { summary: lines.join(" "), data };
 }
@@ -250,6 +269,29 @@ function toolNoteCost(ctx, args) {
   return { summary, data };
 }
 
+function toolOrganisation(ctx, args) {
+  if (emptyMemory(ctx)) return noNotesFound(ctx);
+  const g = ctx.memory.graph();
+  const themes = ctx.config.themes || [];
+  const zones = readZones(ctx.config.dataDir, ctx.config);
+  const themeName = (id) => { const t = themes.find((x) => x.id === id); return zones.labels[id] || (t ? t.label : id); };
+  const labels = ctx.config.subthemeLabels || {};
+  const subthemeName = (x) => (typeof labels[x] === "string" ? String(labels[x]).slice(0, 40) : x);
+  const max = clampInt(args.limit, organise.MAX_SUGGESTIONS, 1, organise.MAX_SUGGESTIONS);
+  const protectedNames = zones.protected.map(themeName);
+  const list = organise.suggest({ notes: g.nodes, links: g.links, themeName, subthemeName, max }).map((x) => ({
+    id: x.id, kind: x.kind, message: x.message, theme: x.theme, topic: x.topic, target: x.target, subthemes: x.subthemes,
+    notes: x.notes, move: x.move, score: x.score, reasons: x.reasons,
+    copyPrompt: organise.regroupPrompt(x, { themeName, subthemeName, protectedNames }),
+  }));
+  return {
+    summary: list.length
+      ? `${list.length} organisation suggestion(s): ${list.map((x) => x.message).join(" ")}`
+      : "No scattered notes found: every subject sits in one sub-theme of its group.",
+    data: { protectedGroups: protectedNames, suggestions: list },
+  };
+}
+
 // ---- tool registry (name, LLM-facing description, strict input schema) ----
 
 const TOOLS = [
@@ -292,9 +334,18 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "organisation_suggestions",
+    description: "Find notes about one subject that are scattered across several sub-themes of the same big group (strongly tied by [[links]] and shared title/description words), or alone in their sub-theme, and suggest regrouping them under one sub-theme. Read-only: returns the suggestions, the reasons, and a ready-to-use English instruction for the assistant's OWN memory tool (change the subtheme key only, never across groups) — memglow itself never edits notes. Never returns note bodies.",
+    inputSchema: {
+      type: "object",
+      properties: { limit: { type: "integer", minimum: 1, maximum: organise.MAX_SUGGESTIONS, description: "Maximum number of suggestions (default " + organise.MAX_SUGGESTIONS + ")." } },
+      additionalProperties: false,
+    },
+  },
 ];
 
-const HANDLERS = { memory_health: toolMemoryHealth, split_plan: toolSplitPlan, related_notes: toolRelatedNotes, note_cost: toolNoteCost };
+const HANDLERS = { memory_health: toolMemoryHealth, split_plan: toolSplitPlan, related_notes: toolRelatedNotes, note_cost: toolNoteCost, organisation_suggestions: toolOrganisation };
 
 // ---- a tiny, hand-written JSON Schema validator (just what the schemas above need) ----
 
@@ -354,7 +405,7 @@ function createRpc(write) {
       protocolVersion,
       capabilities: { tools: {} },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-      instructions: "Read-only inspector of a memglow Markdown memory folder: which notes are too large, how to split them, which notes are related, and their estimated reading cost. Never modifies notes.",
+      instructions: "Read-only inspector of a memglow Markdown memory folder: which notes are too large, how to split them, which notes are related, which notes are scattered across sub-themes, and their estimated reading cost. Never modifies notes.",
     });
   }
 

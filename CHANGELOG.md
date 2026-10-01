@@ -23,6 +23,34 @@
   three dark presets. Nothing changes for Deep, Plain or Night blue. Saved like every other
   setting (`lib/view.js` → `background`, now `"deep" | "plain" | "night" | "light"`).
 
+- **Protected groups** (`lib/zones.js`): a first-run screen, *"What are your big themes?"*, lists
+  the groups found in the folders and `theme:` keys (note counts, folders); tick the ones to
+  protect and optionally rename how they are shown (display only). Saved in the data folder
+  (`zones.json`, mode 600, atomic) through `PUT /api/zones` — page access rule, `X-Memglow`
+  header + same origin, rate limited, 4 KB body, strict validation; editable in *Settings →
+  Protected groups*; `protectedThemes` in the config file works too (a saved choice wins). The
+  assistant refuses any proposal that would move a note into or out of a protected group, create a
+  note in another group, rename a group or change a protected note's `theme` line (checked per
+  file at validation and again at Apply), and every prompt memglow writes names them.
+- **Organisation suggestions** (`lib/organise.js`, read-only, deterministic): notes of one group
+  strongly tied (a link +2, shared title/description keywords +1 each up to +3; strong at 3) that
+  span 2+ sub-themes, or the only note of a sub-theme tied to another one → *"N notes about X are
+  spread across K sub-themes of G — group them under Y?"*, max 5. New *Organisation* block in
+  Memory cost with *Copy prompt for your AI* and, with the assistant, *Do it with …*: a new
+  `regroup` proposal (`lib/assistant/regroup.js`) — the AI gets metadata only (never note
+  text) and answers `{subtheme, moves, notes}`; memglow edits only the `subtheme`/`sous_theme`
+  line, may move a file to a folder of the same group, updates path links, and refuses group
+  changes, unknown notes or folders, overwrites and any text change. Same diff, one-time token,
+  backup and Undo (moves included). New `memglow-mcp` tool `organisation_suggestions`.
+  Three scattered "docker" notes added to the demo memory to show it.
+- **Always-loaded cost** (`lib/always-loaded.js`): Memory cost shows what is loaded at every
+  session — the index note plus the files listed in `alwaysLoaded` (e.g. `~/.claude/CLAUDE.md`,
+  `AGENTS.md`; size only, never read, only the configured name and ≈ tokens reach the page) —
+  × sessions per day (estimated from index reads over 7 days, else `sessionsPerDay`), with a
+  *trim the index / CLAUDE.md* tip above `indexWarningTokens`. Also in `memory_health`. MCP
+  proxy: new opt-in lever `indexWarning` (`MEMGLOW_PROXY_INDEX_WARNING`) warns once per session
+  when the index note read is above that threshold.
+
 - **Assistant (optional, off by default)**: a *Do it with Claude* button next to *Copy prompt for
   your AI* on each large or costly note, and an *Assistant* panel below Memory cost. **The AI only
   proposes; memglow only writes what you approved in a diff, with a backup and Undo.** The user's

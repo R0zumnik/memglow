@@ -45,7 +45,8 @@
 | ⚡ **Assistant activity, live** | Hooks for Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Copilot and Cline — or an MCP proxy for any other client — report each read, search and write. The note flashes — 🔵 cyan for a read, 🔴 red-orange for a write, 🟣 violet for a search — and comets run along its links. |
 | 🎥 **Camera that follows** | Glides to what the assistant touches, frames a search's results, drifts back to the overview after a few calm seconds. |
 | 🪙 **Memory cost** | See roughly how many tokens your assistant spends reading its memory (≈ bytes ÷ 4): tokens read today and over 7 days, the notes that cost the most, notes too large to read comfortably, notes never read in 30 days. For each large note, a split along its `##` sections and a **Copy prompt for your AI** button. [More](#memory-cost) |
-| 🗂️ **Themes & sub-themes** | Notes cluster by theme with relay bubbles for sub-themes — from frontmatter or folder names. |
+| 🗂️ **Themes & sub-themes** | Notes cluster by theme with relay bubbles for sub-themes — from frontmatter or folder names. **Organisation** spots notes about one subject scattered across sub-themes; **Always loaded** shows what the index and your CLAUDE.md / AGENTS.md cost at every session. |
+| 🛡️ **Protected groups** | At first run, pick the big groups no assistant may ever move notes across (rename how they are shown if you like). [More](#protected-groups) |
 | 🎛️ **Tune it live** | Background, glow, bubble size, size by links or token cost, names and name distance, spread, gravity, spacing, signal speed, links at rest, auto-rotate, find-a-note. Saved in your browser. [Settings](#settings) |
 | 🔒 **Private by design** | Localhost by default, read-only access to your notes (the optional assistant writes only what you approve), secret-looking lines masked. Hooks send note names only, never content. No CDN, no analytics. |
 | 📦 **Zero dependencies** | One command, Node 18+. No build step, no database. Or one Docker container. |
@@ -89,6 +90,28 @@ own memory, from the activity your hooks report:
   memory consistent (same group and folder, top-level groups unchanged, `theme`/`subtheme`
   frontmatter kept, `[[links]]` kept valid, the original becomes a short summary, only the
   agent's memory tool is used, and the plan is shown before anything is written).
+- **Organisation** — notes about one subject scattered across several sub-themes of the same
+  group: *"5 notes about “docker” are spread across 4 sub-themes of Knowledge — group them under
+  “ops”?"*, with the notes, the reasons, **Copy prompt for your AI** and (with the
+  [assistant](#assistant)) **Do it with …**. Read-only detection, never across big groups; the
+  rules are below.
+- **Always loaded · every session** — what your assistant receives before doing anything: the
+  index note plus the instruction files you list in `alwaysLoaded` (`~/.claude/CLAUDE.md`,
+  `./CLAUDE.md`, `AGENTS.md`…). memglow only reads their **size**, never their content; the page
+  shows the path you wrote and ≈ tokens. *≈ X tokens per session × N sessions per day ≈ Y tokens
+  per day* — sessions per day are estimated from the reads of the index note over the last 7
+  days (an assistant reads it once per session), otherwise `sessionsPerDay` (default 5). Above
+  `indexWarningTokens` (default 2,000) you get a tip: *trim the index / CLAUDE.md*.
+
+**How Organisation decides** (deterministic, explainable, capped at 5 suggestions of 12 notes):
+keywords of a note = words of 4+ letters of its title, id and description (minus common words
+and id prefixes such as `reference-`). Two notes **of the same group** are strongly tied when
+they score 3 or more: +2 for a `[[link]]` between them, +1 per shared keyword (at most +3).
+(1) *Scattered*: notes joined by strong ties that span 2+ sub-themes and number 3+ → regroup them
+under the sub-theme that already holds most of them; the topic is the keyword they share most;
+the score is the sum of their ties. (2) *Alone*: the only note of a sub-theme, strongly tied
+(total ≥ 3) to one other sub-theme of its group → move it there. Note bodies are never read for
+this.
 
 Numbers are **estimates** (≈ bytes ÷ 4, not a tokenizer), meant to compare notes with each
 other — memglow promises no saving. Memory cost never touches your notes: the counts (note
@@ -97,6 +120,25 @@ ids and numbers only, 90 days) live in its own data folder, `~/.memglow` by defa
 without a hook (an assistant without hooks, an edit by hand); when a hook reports the same write
 within 15 seconds, it is counted once. Activity sent with `"demo": true` is animated but not
 counted. The panel refreshes a second or two after each activity or note change. The bubble size can follow the token cost too: *Settings → Size by → Token cost*.
+
+<a id="protected-groups"></a>
+## 🛡️ Protected groups
+
+Your big groups (top-level themes: *People*, *Work*, *Home*…) are yours. The first time you open
+memglow, a **"What are your big themes?"** screen lists the groups found in your folders and
+`theme:` keys (with their note counts and folders): tick the ones to **protect**, and rename how
+a group is shown if you like (display only — your notes are not changed). Change it any time in
+*Settings → Protected groups*. The choice is saved on the memglow server, in its data folder
+(`zones.json`), with the same guard as the saved view (page password if set, memglow's own
+header and same origin, strict validation). You can also set it in the config file:
+`"protectedThemes": ["people", "work"]` (a choice saved from the page wins).
+
+The [assistant](#assistant) refuses any proposal that would **move a note into or out of a
+protected group, create a note in another group, rename a group, or change the `theme`
+frontmatter** of a note in a protected group — checked on every file, with the group computed
+the way the viewer computes it (`theme:` key, then folder rules), and checked again at Apply.
+The protected groups are also named in every prompt memglow writes for an AI (*"never move notes
+across these groups"*), including the copyable ones.
 
 <a id="assistant"></a>
 ## 🤖 Assistant (optional, off by default)
@@ -207,6 +249,19 @@ you set `maxTokens`.
   (no `tools` / `functions`); an answer that tries to call one is rejected, as is an answer that is
   not valid JSON, cut off, or larger than 4 MB. Each request is time-limited (`timeoutMinutes`).
   HTTP errors are reported plainly (401 key refused, 429 rate limit with its delay, 5xx).
+
+**Regroup** (Organisation suggestions). *Do it with …* on an Organisation suggestion asks the AI
+which notes of that suggestion should share one sub-theme. The AI receives **only metadata** —
+ids, titles, descriptions (secret-looking lines masked), current sub-themes and the folders of
+the group, never a note's text — and answers `{"subtheme", "moves": [{"note", "folder"?}],
+"notes"}`. memglow then changes **only the `subtheme` line** (or an existing `sous_theme` line;
+one is added if missing) of the notes moved, and moves a file only to a folder of the **same
+group** when the AI names one. Refused, with the reasons: a key that would change or rename a
+group (`theme`, `group`, `rename`…), a note memglow did not list, an unknown folder, a file
+that would replace another, a note that would leave its group (or a protected group), any change
+of a note's text or `theme` line. Links by name stay valid (names never change); links written as
+a path (`[[folder/note]]`) to a moved file are updated. Same diff, one-time token, backup and
+Undo as a split (Undo puts a moved note back in its old place).
 
 With **basic-memory**, memglow writes the Markdown files directly; basic-memory re-indexes changed
 files on its own (its sync watches the folder). New notes have no `permalink` until basic-memory
@@ -426,6 +481,7 @@ server's own content; 4 and 5 may replace a read answer, so they are off by defa
 | 3 | `suggestions` / `MEMGLOW_PROXY_SUGGESTIONS` | on | After a read: up to 3-5 related notes (links, sub-theme, co-usage), names and sizes only. |
 | 4 | `dedupe` / `MEMGLOW_PROXY_DEDUPE` | off | An unchanged note re-read in the same session → a short "unchanged, ≈N tokens saved" notice. |
 | 5 | `toc` / `MEMGLOW_PROXY_TOC` | off | A large note → its outline with ≈tokens per section first; then one section on demand. |
+| — | `indexWarning` / `MEMGLOW_PROXY_INDEX_WARNING` | off | The **index** note read while above `indexWarningTokens` (default 2,000): `⚠ memglow: the index note … is loaded at every session` — suggests trimming it. Once per session. |
 
 Levers 4 and 5 change what the assistant receives: **measure answer quality before enabling
 them**. Repeating the same read, or adding `"memglow_fresh": true`, always brings the full note
@@ -460,10 +516,11 @@ answer "no notes found".
 
 | Tool | Arguments | What it returns |
 |---|---|---|
-| `memory_health` | *(none)* | Notes over the large-note threshold, the costliest notes to read over 7 days and the notes never read in 30 days (both only once enough activity history exists), and the size of the index note. |
+| `memory_health` | *(none)* | Notes over the large-note threshold, the costliest notes to read over 7 days and the notes never read in 30 days (both only once enough activity history exists), the size of the index note, and the always-loaded cost (index + `alwaysLoaded` files, × sessions per day). |
 | `split_plan` | `note` | A deterministic split of one note along its `##` sections (same rule as the Memory cost panel), or an honest "no split needed" under the threshold — plus a ready-to-paste English instruction for the assistant's **own** memory tool (memglow itself never edits notes). |
 | `related_notes` | `note` or `topic`, `limit` | Notes related to a note (its outgoing/incoming `[[wikilinks]]`, notes in the same sub-theme, and — when activity history exists — notes read on the same days) or to a free-text topic matched against titles, descriptions, ids and sub-themes. |
 | `note_cost` | `note` | Estimated tokens, the large-note threshold, status, and reads over the last 7 days (when available) for one note. |
+| `organisation_suggestions` | `limit` | Notes about one subject scattered across sub-themes of a group (same rules as Memory cost → Organisation), with the reasons and a ready-to-paste instruction for the assistant's own memory tool that names your protected groups. |
 
 No write tool, and no tool ever returns a full note body: only ids, titles, token estimates,
 frontmatter descriptions and section headings — masked for secret-looking lines like everywhere
@@ -514,6 +571,10 @@ With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 | `assistant.timeoutMinutes`, `assistant.maxBudgetUsd` | `10`, — | stop a proposal after this long; spending cap for Claude Code |
 | `assistant.backup` | `auto` | `auto` (git snapshot if the notes are a git repository, else a copy), `git` or `copy` |
 | `assistant.allowMissingLines` | `0` | how many original lines may be missing from a proposal (0 = none) |
+| `protectedThemes` | not set (asked at first run) | [protected groups](#protected-groups): theme ids the assistant never moves notes across; a choice saved from the page wins |
+| `alwaysLoaded` | `[]` | instruction files loaded at every session (`"~/.claude/CLAUDE.md"`, `"./CLAUDE.md"`, `"AGENTS.md"`…); size only, never read; relative paths from where memglow starts |
+| `sessionsPerDay` | `5` | Always loaded: sessions per day when no read of the index note was counted |
+| `indexWarningTokens` | `2000` | Always loaded: "trim" tip above this; also the threshold of the proxy's `indexWarning` |
 | `themes`, `themeByFolder`, `defaultTheme`, `subthemeLabels`, `title` | — | config file only |
 
 <a id="docker"></a>

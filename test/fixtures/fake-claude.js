@@ -24,6 +24,24 @@ process.stdin.on("end", () => {
   const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
   if (mode === "fail") { process.stderr.write("Not logged in\n"); process.exit(1); }
   if (mode === "slow") { setTimeout(() => {}, 60000); return; }
+  // Regroup requests (lib/assistant/regroup.js): modes regroup-theme, regroup-foreign, regroup-move.
+  if (/^Regroup these notes/m.test(input)) {
+    const target = /Suggested sub-theme: ([a-z0-9-]+)\./.exec(input)[1];
+    const notes = [...input.matchAll(/^- id: (\S+) \| title: .*? \| sub-theme: (\S+) \| folder: ("[^"]*")/gm)].map((x) => ({ id: x[1], sub: x[2], folder: JSON.parse(x[3]) }));
+    const folders = (/Folders of this group \(for the optional "folder"\): (.*)\.$/m.exec(input) || [])[1] || "";
+    const r = { subtheme: target, moves: notes.filter((n) => n.sub !== target).map((n) => ({ note: n.id })), notes: "Grouped." };
+    if (mode === "regroup-theme") r.theme = "people";
+    if (mode === "regroup-foreign") r.moves.push({ note: "outsider-note" });
+    if (mode === "regroup-move") {
+      const list = folders === "none" ? [] : JSON.parse("[" + folders + "]");
+      const mv = r.moves[0];
+      const n = notes.find((x) => x.id === mv.note);
+      mv.folder = list.find((f) => f !== n.folder);
+    }
+    const t = JSON.stringify(r);
+    out({ type: "result", subtype: "success", is_error: false, result: t });
+    return;
+  }
   const m = /<note>\n([\s\S]*?)\n<\/note>/.exec(input);
   const id = /Note id: (\S+)/.exec(input)[1];
   const body = m ? m[1] : "";

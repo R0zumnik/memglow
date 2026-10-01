@@ -88,6 +88,7 @@ function costSplitPrompt(n, c, names) {
   lines.push("Rules:");
   lines.push("- Keep every new note in the same group (" + group + ") and the same folder as the original note.");
   lines.push("- Do not create, rename or remove top-level groups" + (groups.length ? " (" + groups.join(", ") + ")" : "") + ".");
+  if (c.protectedGroups && c.protectedGroups.length) lines.push("- Protected groups — never move notes across these groups: " + c.protectedGroups.join(", ") + ".");
   lines.push("- Keep the `theme` and `subtheme` (or `sous_theme`) frontmatter keys on every new note, with the original values.");
   lines.push("- Keep every [[link]] valid: update the links that pointed to the moved content, and link the new notes to each other where it helps.");
   lines.push("- The original note becomes a short summary that links to the new notes, or is removed once nothing links to it any more.");
@@ -124,11 +125,51 @@ function costName(n, colors) {
     '<span class="mg-cost__label">' + costEsc(n.label) + '</span></span>';
 }
 
-// Set by the page when the optional assistant is enabled on this instance (config "assistant").
+// Set by the page when the optional assistant is enabled on this instance (config "assistant"), with
+// the name of its default provider.
 var costAssistant = false;
+var costAssistantLabel = "Claude";
 function costCopyButton(n) {
   return '<button type="button" class="bn-btn mg-cost__copy" data-copy="' + costEsc(n.id) + '">Copy prompt for your AI</button>' +
-    (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-assist="' + costEsc(n.id) + '">Do it with Claude</button>' : "");
+    (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-assist="' + costEsc(n.id) + '">Do it with ' + costEsc(costAssistantLabel) + '</button>' : "");
+}
+
+/**
+ * "Organisation": notes about one subject scattered across sub-themes of a group (lib/organise.js).
+ * Each suggestion: its sentence, the notes (clickable), why, and the two buttons.
+ */
+function costOrganisation(list, colors) {
+  if (!list || !list.length) return '<p class="mg-cost__empty">No scattered notes found: every subject sits in one sub-theme.</p>';
+  return '<ul class="mg-cost__list mg-cost__org">' + list.map(function (s) {
+    var notes = (s.notes || []).map(function (n) {
+      var moving = (s.move || []).indexOf(n.id) >= 0;
+      return '<li><div class="mg-cost__row mg-cost__row--simple" data-note="' + costEsc(n.id) + '" tabindex="0" role="button">' +
+        costName({ label: n.label, theme: s.theme }, colors) + '<span class="mg-cost__det">' + costEsc(n.subtheme || "general") + (moving ? " → " + costEsc(s.target) : "") + '</span></div></li>';
+    }).join("");
+    return '<li class="mg-cost__item mg-cost__org-item"><p class="mg-cost__org-msg">' + costEsc(s.message) + '</p>' +
+      '<ul class="mg-cost__list mg-cost__list--compact">' + notes + '</ul>' +
+      '<details class="mg-cost__sections"><summary>Why</summary><ul>' + (s.reasons || []).map(function (r) { return '<li>' + costEsc(r) + '</li>'; }).join("") + '</ul></details>' +
+      '<button type="button" class="bn-btn mg-cost__copy" data-copy-org="' + costEsc(s.id) + '">Copy prompt for your AI</button>' +
+      (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-assist-org="' + costEsc(s.id) + '">Do it with ' + costEsc(costAssistantLabel) + '</button>' : "") +
+      '</li>';
+  }).join("") + '</ul>';
+}
+
+/** "Always loaded": index + instruction files read at every session, × sessions per day. */
+function costAlwaysLoaded(a) {
+  if (!a) return '<p class="mg-cost__empty">Not available.</p>';
+  var rows = (a.index || []).map(function (n) {
+    return '<li><div class="mg-cost__row mg-cost__row--simple" data-note="' + costEsc(n.id) + '" tabindex="0" role="button"><span class="mg-cost__name"><span class="mg-cost__label">Index · ' + costEsc(n.label) + '</span></span><span class="mg-cost__det">' + costTokens(n.tokens) + '</span></div></li>';
+  }).concat((a.files || []).map(function (f) {
+    return '<li><div class="mg-cost__row mg-cost__row--simple"><span class="mg-cost__name"><span class="mg-cost__label">' + costEsc(f.name) + '</span></span><span class="mg-cost__det">' + (f.found ? costTokens(f.tokens) : "not found") + '</span></div></li>';
+  }));
+  var html = '<p class="mg-cost__share-text"><strong>' + costTokens(a.perSession) + '</strong> tokens per session × <strong>' + costNumber(a.sessionsPerDay) + '</strong> sessions per day ≈ <strong>' + costTokens(a.perDay) + '</strong> tokens per day</p>' +
+    '<p class="mg-cost__empty">' + (a.sessionsSource === "index reads" ? "Sessions per day estimated from the reads of the index note (last 7 days)." : "Sessions per day: the sessionsPerDay setting (no read of the index counted yet).") + '</p>';
+  html += rows.length ? '<ul class="mg-cost__list mg-cost__list--compact">' + rows.join("") + '</ul>' : '<p class="mg-cost__empty">No index note.</p>';
+  if (!(a.files || []).length) html += '<p class="mg-cost__empty">Add your instruction files (CLAUDE.md, AGENTS.md…) to <code>alwaysLoaded</code> in memglow.config.json to count them too — only their size is read.</p>';
+  if (a.tips && a.tips.length) html += '<ul class="mg-cost__tips">' + a.tips.map(function (t) { return '<li>' + costEsc(t.text) + '</li>'; }).join("") + '</ul>';
+  else html += '<p class="mg-cost__empty">Small enough: nothing to trim.</p>';
+  return html;
 }
 
 function costTop(top, colors, c) {
@@ -190,11 +231,15 @@ function costRender(c, colors) {
   html += '<figure class="mg-cost__block"><figcaption>Too large (&gt; ' + costEsc(costTokens(c.largeNoteTokens)) + ' tokens)</figcaption>' + costLarge(c.tooLarge, colors, c) + '</figure>';
   html += '<figure class="mg-cost__block"><figcaption>Never read in 30 days</figcaption>' + costNeverRead(c.neverRead, colors) + '</figure>';
   html += '</div>';
+  html += '<div class="mg-cost__grid mg-cost__grid--two">';
+  html += '<figure class="mg-cost__block"><figcaption>Organisation</figcaption>' + costOrganisation(c.organisation, colors) + '</figure>';
+  html += '<figure class="mg-cost__block"><figcaption>Always loaded · every session</figcaption>' + costAlwaysLoaded(c.alwaysLoaded) + '</figure>';
+  html += '</div>';
   return html;
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { setAssistant: function (v) { costAssistant = !!v; }, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName };
+  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName };
 }
 
 (function () {
@@ -209,6 +254,7 @@ if (typeof module !== "undefined" && module.exports) {
     var cfg = JSON.parse(document.getElementById("memglow-config").textContent || "{}");
     (cfg.themes || []).forEach(function (t) { colors[t.id] = t.color; names[t.id] = t.label; });
     costAssistant = cfg.assistant === true;
+    if (typeof cfg.assistantLabel === "string" && cfg.assistantLabel) costAssistantLabel = cfg.assistantLabel;
   } catch (e) { /* default colours */ }
   var last = null, pending = null, loading = false, again = false;
 
@@ -274,7 +320,9 @@ if (typeof module !== "undefined" && module.exports) {
   function copyPrompt(btn) {
     var n = itemOf(btn.getAttribute("data-copy"));
     if (!n) return;
-    var text = costSplitPrompt(n, last, names);
+    copyInto(btn, costSplitPrompt(n, last, names));
+  }
+  function copyInto(btn, text) {
     copyText(text).then(function () {
       btn.textContent = "Copied ✓";
       btn.classList.add("mg-cost__copy--done");
@@ -301,8 +349,25 @@ if (typeof module !== "undefined" && module.exports) {
     if (stage && stage.scrollIntoView) stage.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  function orgOf(id) {
+    var list = (last && last.organisation) || [];
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
   body.addEventListener("click", function (e) {
     var t = e.target;
+    var org = t.closest && t.closest("[data-copy-org]");
+    if (org) {
+      var s = orgOf(org.getAttribute("data-copy-org"));
+      if (s && s.prompt) copyInto(org, s.prompt);
+      return;
+    }
+    var aiOrg = t.closest && t.closest("[data-assist-org]");
+    if (aiOrg) {
+      var so = orgOf(aiOrg.getAttribute("data-assist-org"));
+      try { document.dispatchEvent(new CustomEvent("memglow:assistant", { detail: { kind: "regroup", id: aiOrg.getAttribute("data-assist-org"), label: so ? so.message : "" } })); } catch (e3) { /* old browser */ }
+      return;
+    }
     var btn = t.closest && t.closest("[data-copy]");
     if (btn) { copyPrompt(btn); return; }
     var ai = t.closest && t.closest("[data-assist]");
