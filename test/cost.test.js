@@ -145,7 +145,7 @@ test("page: every note and section title is escaped", () => {
   assert.ok(html.includes("Big &lt;script&gt;alert(1)&lt;/script&gt;"));
   assert.ok(html.includes("Q1 &lt;img src=x onerror=alert(1)&gt;"));
   assert.ok(html.includes('data-copy="big"'), "copy button on the large note");
-  assert.ok(html.includes("1 note</strong> = <strong>100 %"));
+  assert.ok(html.includes("1 note</strong> = <strong>100%"));
   assert.ok(html.includes("Data since Oct 1"));
   assert.ok(!/on[a-z]+="/i.test(html), "no inline handler");
 });

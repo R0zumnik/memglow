@@ -201,6 +201,67 @@ test("i18n: v0.4 texts go through keys — journal channel, organisation facts, 
   assert.ok(aiPage.aiAskForm("rg-1", "L", [], "", "regroup", T).includes("[ai.regroupAskMsg]"));
 });
 
+// ---- numbers and dates in the page language (Intl) ----
+
+test("i18n: numbers and dates follow the language (Intl), English as the fallback", () => {
+  const D = Date.UTC(2026, 8, 30, 12, 5, 9);
+  const want = {
+    en: { n: "1,234,567", day: "Sep 30" }, fr: { n: "1 234 567", day: "30 sept." }, de: { n: "1.234.567", day: "30. Sept." },
+    es: { n: "1.234.567", day: "30 sept" }, "pt-BR": { n: "1.234.567", day: "30 de set." }, ja: { n: "1,234,567", day: "9月30日" },
+    ko: { n: "1,234,567", day: "9월 30일" }, "zh-CN": { n: "1,234,567", day: "9月30日" },
+  };
+  for (const code of LANGS) {
+    // Exact forms where ICU is stable; a newer ICU may move a dot or a space, never the grouping.
+    const n = i18n.formatNumber(1234567, code);
+    assert.strictEqual(n.replace(/\s/g, " "), want[code].n.replace(/\s/g, " "), code + " number");
+    assert.strictEqual(i18n.formatDay("2026-09-30", code), want[code].day, code + " day");
+    assert.match(i18n.formatTime(D, code), /\d{2}.05.09/, code + " time");
+    assert.ok(i18n.formatDateTime(D, code).includes(i18n.formatTime(D, code).replace(/^(오전|오후) /, "")), code + " date and time");
+    // Every page script uses the same options as i18n.js (their own copies, for the Node tests).
+    assert.strictEqual(costPage.costNumber(1234567, code), n, code + " cost.js");
+    assert.strictEqual(costPage.costDay("2026-09-30", code), want[code].day, code + " cost.js day");
+    assert.strictEqual(aiPage.aiNum(1234567, code), n, code + " assistant.js");
+    assert.strictEqual(appPage.appNum(1234567, code), n, code + " app.js");
+    assert.strictEqual(appPage.appTime(D, code), i18n.formatTime(D, code), code + " app.js time");
+    assert.strictEqual(appPage.appDateTime(D, code), i18n.formatDateTime(D, code), code + " app.js date and time");
+  }
+  // t() formats numeric parameters in its language; strings are left as they are.
+  assert.strictEqual(i18n.resolveText({ k: "{n} notes · {s}" }, "k", { n: 3000, s: "3000" }, "de"), "3.000 notes · 3000");
+  assert.strictEqual(i18n.resolveText({ k: "{n} notes" }, "k", { n: 3000 }), "3000 notes", "no language: unchanged");
+  // Unknown or broken language tag, bad input: English, never a throw.
+  assert.strictEqual(i18n.formatNumber(3000, "not a tag!"), "3,000");
+  assert.strictEqual(costPage.costNumber(3000, "not a tag!"), "3,000");
+  assert.strictEqual(i18n.formatDay("30/09/2026", "fr"), "");
+  assert.strictEqual(i18n.formatNumber(NaN, "fr"), "—");
+  assert.strictEqual(costPage.costPercent(59, "en"), "59%");
+  assert.strictEqual(costPage.costPercent(59, "fr").replace(/\s/g, " "), "59 %");
+});
+
+test("i18n: the page language drives Memory cost and Assistant figures; prompts for the AI stay English", () => {
+  const before = global.window;
+  global.window = { MemglowI18n: { lang: () => "fr", dict: {}, t: (k) => k } };
+  try {
+    const c = { read: { today: 0, days7: 0 }, written: { days7: 0 }, totals: { tokens: 12345, notes: 1 }, index: null, share: null, top: [], largeNoteTokens: 5000, chunkTokens: 2000, tooLarge: [], neverRead: { available: false, since: "2026-09-01" },
+      archive: { available: false, since: "2026-09-01", afterDays: 105, readyOn: "2026-12-15" } };
+    const html = costPage.costRender(c, {});
+    assert.ok(html.includes("≈ 12 345"), "French grouping in the panel");
+    assert.ok(html.includes("1 sept.") && html.includes("15 déc."), "French days in the panel");
+    assert.ok(!html.includes("12,345") && !html.includes("Sep 1"));
+    assert.ok(aiPage.aiArchiveGain({ gain: { saved: 2800, live: [], summaryTokens: 1200, summaryLines: 1 } }).includes("2 800"), "assistant figures in French");
+    const n = { id: "big", label: "Big", theme: "knowledge", tokens: 7500, reads7: 3, readTokens7: 22500, split: null };
+    const prompt = costPage.costSplitPrompt(n, { largeNoteTokens: 5000, chunkTokens: 2000, read: { complete7: false }, since: "2026-09-01" }, {});
+    assert.match(prompt, /≈ 7,500 tokens/);
+    assert.match(prompt, /≈ 22,500 tokens read/);
+    assert.match(prompt, /counted since Sep 1/);
+    assert.ok(!/ /.test(prompt), "no French number in the AI prompt");
+    const arch = costPage.costArchivePrompt({ afterDays: 105, cutoff: "2026-06-17", folder: "archive", summaryNote: "archive-summary" },
+      [{ title: "Old", label: "Old", note: "old", theme: "projects", tokens: 4321 }], {}, "2026-10-01");
+    assert.match(arch, /≈ 4,321 tokens/);
+  } finally {
+    if (before === undefined) delete global.window; else global.window = before;
+  }
+});
+
 // ---- no English left hardcoded where a translation key should be ----
 
 test("i18n: no hardcoded English UI text remains outside the English fallback blocks", () => {

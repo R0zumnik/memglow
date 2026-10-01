@@ -13,7 +13,20 @@ function aiEsc(s) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
   });
 }
-function aiNum(n) { return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+/* Numbers in the memglow language (window.MemglowI18n.lang(), never the browser locale), with Intl:
+   "1 234" in French — same options as public/i18n.js formatNumber, copied so this file stays
+   self-contained. English "1,234" without Intl, without the page language, or in the Node tests. */
+var AI_FMT = {};
+function aiNum(n, lang) {
+  n = Math.round(Number(n) || 0);
+  if (!lang) { var M = typeof window !== "undefined" && window.MemglowI18n; lang = M && typeof M.lang === "function" ? M.lang() : "en"; }
+  if (!Object.prototype.hasOwnProperty.call(AI_FMT, lang)) {
+    var f = null;
+    try { if (typeof Intl !== "undefined" && Intl.NumberFormat) f = new Intl.NumberFormat(lang, { maximumFractionDigits: 0 }); } catch (e) { f = null; }
+    AI_FMT[lang] = f;
+  }
+  return AI_FMT[lang] ? AI_FMT[lang].format(n) : String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
 
 /* ---- i18n (public/i18n.js, public/i18n/<code>.json) ----
    Same approach as app.js/cost.js: a small English copy of just the keys this file renders, used
@@ -254,7 +267,7 @@ function aiAskForm(noteId, label, providers, current, kind, T) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     aiArchiveGain: aiArchiveGain, aiEsc: aiEsc, aiRenderJob: aiRenderJob, aiRenderHistory: aiRenderHistory, aiRenderProviders: aiRenderProviders,
-    aiAskForm: aiAskForm, aiDiff: aiDiff, aiDestination: aiDestination,
+    aiAskForm: aiAskForm, aiDiff: aiDiff, aiDestination: aiDestination, aiNum: aiNum,
     EN_AI: EN_AI, resolveTextAi: resolveTextAi, defaultAiT: defaultAiT
   };
 }

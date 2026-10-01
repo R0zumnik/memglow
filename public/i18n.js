@@ -10,6 +10,12 @@
  *
  * Translation text only ever reaches the page through textContent or a plain attribute value
  * (data-i18n / data-i18n-attr below) — never through innerHTML.
+ *
+ * Numbers and dates follow the memglow language too (formatNumber / formatDay / formatTime /
+ * formatDateTime: Intl with that language, never the browser's own locale): "3 000" and "30 sept."
+ * in French, "3.000" in German, "9月30日" in Japanese. A number passed to t() as a parameter is
+ * formatted the same way. Fixed English formats stay only where a comment says why: prompts sent
+ * to the AI (public/cost.js), and the lines memglow writes in the archive summary (lib/archive.js).
  */
 var SUPPORTED_LANGS = ["en", "fr", "de", "es", "pt-BR", "ja", "ko", "zh-CN"];
 var FALLBACK_LANG = "en";
@@ -20,7 +26,7 @@ var FALLBACK_LANG = "en";
  * params.n (when present, a number) picks "one" vs "other"; every {name} in the chosen string is
  * replaced from params. An unknown key returns the key itself (visible, easy to spot).
  */
-function resolveText(dict, key, params) {
+function resolveText(dict, key, params, lang) {
   var entry = dict ? dict[key] : undefined;
   if (entry === undefined || entry === null) return key;
   var str = entry;
@@ -33,8 +39,60 @@ function resolveText(dict, key, params) {
   if (typeof str !== "string") return key;
   if (!params) return str;
   return str.replace(/\{(\w+)\}/g, function (m, name) {
-    return Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : m;
+    if (!Object.prototype.hasOwnProperty.call(params, name)) return m;
+    var v = params[name];
+    // With a language (the page's t()), a number reads in that language: "{n} notes" → "1 234 notes".
+    return lang && typeof v === "number" && isFinite(v) ? formatNumber(v, lang, 3) : String(v);
   });
+}
+
+/* ---- Localized numbers and dates (Intl) ----
+   One formatter per (kind, language, options), cached. When Intl or the language is unavailable
+   (very old browser, unknown tag), the English form is used: "1,234", "Sep 30", "14:05:09". */
+var FORMATTERS = {};
+function intlFormatter(kind, lang, opts, key) {
+  var k = kind + "|" + lang + "|" + key;
+  if (!Object.prototype.hasOwnProperty.call(FORMATTERS, k)) {
+    var f = null;
+    try { if (typeof Intl !== "undefined" && Intl[kind]) f = new Intl[kind](lang, opts); } catch (e) { f = null; }
+    if (!f && lang !== FALLBACK_LANG) f = intlFormatter(kind, FALLBACK_LANG, opts, key);
+    FORMATTERS[k] = f;
+  }
+  return FORMATTERS[k];
+}
+var EN_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function pad2(n) { return (n < 10 ? "0" : "") + n; }
+/** 1234 → "1,234" (en), "1 234" (fr), "1.234" (de)… Rounded to an integer unless `decimals`. */
+function formatNumber(n, lang, decimals) {
+  n = Number(n);
+  if (!isFinite(n)) return "—";
+  var d = typeof decimals === "number" ? decimals : 0;
+  var f = intlFormatter("NumberFormat", lang || FALLBACK_LANG, { maximumFractionDigits: d, minimumFractionDigits: 0 }, "n" + d);
+  if (f) return f.format(n);
+  var parts = (d ? n.toFixed(d).replace(/\.?0+$/, "") : String(Math.round(n))).split(".");
+  return parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",") + (parts[1] ? "." + parts[1] : "");
+}
+/** "2026-09-30" (a calendar day, no time zone) → "Sep 30" (en), "30 sept." (fr), "9月30日" (ja)… */
+function formatDay(day, lang) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ""));
+  if (!m) return "";
+  var date = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  var f = intlFormatter("DateTimeFormat", lang || FALLBACK_LANG, { month: "short", day: "numeric", timeZone: "UTC" }, "day");
+  return f ? f.format(date) : EN_MONTHS[Number(m[2]) - 1] + " " + Number(m[3]);
+}
+/** A time of day (ms), local time: "02:05:09 PM" (en), "14:05:09" (fr, de…). */
+function formatTime(ms, lang) {
+  var date = new Date(ms);
+  if (!isFinite(date.getTime())) return "";
+  var f = intlFormatter("DateTimeFormat", lang || FALLBACK_LANG, { hour: "2-digit", minute: "2-digit", second: "2-digit" }, "time");
+  return f ? f.format(date) : pad2(date.getHours()) + ":" + pad2(date.getMinutes()) + ":" + pad2(date.getSeconds());
+}
+/** A moment (ms), local time: day, short month and time — "Sep 30, 02:05:09 PM" (en), "30 sept., 14:05:09" (fr). */
+function formatDateTime(ms, lang) {
+  var date = new Date(ms);
+  if (!isFinite(date.getTime())) return "";
+  var f = intlFormatter("DateTimeFormat", lang || FALLBACK_LANG, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" }, "datetime");
+  return f ? f.format(date) : EN_MONTHS[date.getMonth()] + " " + date.getDate() + ", " + pad2(date.getHours()) + ":" + pad2(date.getMinutes()) + ":" + pad2(date.getSeconds());
 }
 
 /**
@@ -60,7 +118,10 @@ function pickLanguage(supported, navLangs, fallback) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { SUPPORTED_LANGS: SUPPORTED_LANGS, FALLBACK_LANG: FALLBACK_LANG, resolveText: resolveText, pickLanguage: pickLanguage };
+  module.exports = {
+    SUPPORTED_LANGS: SUPPORTED_LANGS, FALLBACK_LANG: FALLBACK_LANG, resolveText: resolveText, pickLanguage: pickLanguage,
+    formatNumber: formatNumber, formatDay: formatDay, formatTime: formatTime, formatDateTime: formatDateTime,
+  };
 }
 
 (function () {
@@ -93,7 +154,7 @@ if (typeof module !== "undefined" && module.exports) {
 
   var state = { lang: FALLBACK_LANG, dict: {} };
   function t(key, params) {
-    return resolveText(state.dict, key, params);
+    return resolveText(state.dict, key, params, state.lang);
   }
 
   function load(lang) {
@@ -132,6 +193,12 @@ if (typeof module !== "undefined" && module.exports) {
     get dict() { return state.dict; },
     supported: SUPPORTED_LANGS.slice(),
     ready: function (fn) { return fn ? ready.then(fn) : ready; },
+    /** Numbers and dates in the page language (formatNumber… above). app.js, cost.js and
+        assistant.js keep their own small copy for the Node tests, and use the same Intl options. */
+    num: function (n, decimals) { return formatNumber(n, state.lang, decimals); },
+    day: function (d) { return formatDay(d, state.lang); },
+    time: function (ms) { return formatTime(ms, state.lang); },
+    dateTime: function (ms) { return formatDateTime(ms, state.lang); },
     /** Settings panel → Language: saves the choice locally (view.js syncs it like every other
         setting) and switches the page live. */
     setLanguage: function (lang) {

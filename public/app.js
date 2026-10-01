@@ -625,6 +625,46 @@ function defaultT(key, params) {
   return resolveTextApp(EN_APP, key, params);
 }
 
+/* Numbers and times in the memglow language (the Settings choice, window.MemglowI18n.lang() — not
+   the browser locale, which the journal clock used to follow), with Intl. Same options as
+   public/i18n.js formatNumber/formatTime/formatDateTime, copied so this file stays self-contained;
+   `lang` defaults to the page language, English in the Node tests and without Intl. */
+var APP_FMT = {};
+function appLang() {
+  var M = typeof window !== "undefined" && window.MemglowI18n;
+  return M && typeof M.lang === "function" ? M.lang() : "en";
+}
+function appIntl(kind, lang, opts, key) {
+  var k = kind + "|" + lang + "|" + key;
+  if (!Object.prototype.hasOwnProperty.call(APP_FMT, k)) {
+    var f = null;
+    try { if (typeof Intl !== "undefined" && Intl[kind]) f = new Intl[kind](lang, opts); } catch (e) { f = null; }
+    APP_FMT[k] = f || (lang !== "en" ? appIntl(kind, "en", opts, key) : null);
+  }
+  return APP_FMT[k];
+}
+function deux(n) { return (n < 10 ? "0" : "") + n; }
+/** 1234 → "1,234" (en), "1 234" (fr), "1.234" (de)… */
+function appNum(n, lang) {
+  n = Math.round(Number(n) || 0);
+  var f = appIntl("NumberFormat", lang || appLang(), { maximumFractionDigits: 0 }, "n");
+  return f ? f.format(n) : String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+/** Clock of a journal line (local time): "02:05:09 PM" (en), "14:05:09" (fr)… */
+function appTime(ms, lang) {
+  var d = new Date(ms);
+  if (!isFinite(d.getTime())) return "";
+  var f = appIntl("DateTimeFormat", lang || appLang(), { hour: "2-digit", minute: "2-digit", second: "2-digit" }, "time");
+  return f ? f.format(d) : deux(d.getHours()) + ":" + deux(d.getMinutes()) + ":" + deux(d.getSeconds());
+}
+/** Day, short month and time (local): "Sep 30, 02:05:09 PM" (en), "30 sept., 14:05:09" (fr)… */
+function appDateTime(ms, lang) {
+  var d = new Date(ms);
+  if (!isFinite(d.getTime())) return "";
+  var f = appIntl("DateTimeFormat", lang || appLang(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" }, "datetime");
+  return f ? f.format(d) : d.toISOString().slice(0, 19).replace("T", " ");
+}
+
 /* Activity journal line: ACTION · GROUP · NOTE · MACHINE · CHANNEL · TOOL ("Write · Projects ·
    Smart home · laptop · hook · Claude Code"), for an activity as for "Note changed / New note /
    Note removed" (channel "file": seen on disk, no machine or tool). The group is the top-level
@@ -804,7 +844,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   rayonNote, rayonRelais, facteurTaille, plancherRayon, dureeComete, niveauLien, creerCollision,
   margeEffective, FONDS, fondValide, luminanceRelative, teinteLisible, opaciteNom, masquesValides, RAYON_INDEX,
   JOURNAL_ACTION_KEYS, SOURCE_LABELS, SOURCE_TRANSLATED_KEYS, CHANNEL_LABELS, CHANNEL_TRANSLATED_KEYS, formatJournalLine, VIEW_SETTINGS, settingsToLocal, settingsFromLocal,
-  offsetFor, seedPositions, layoutOf, EN_APP, resolveTextApp, defaultT
+  offsetFor, seedPositions, layoutOf, EN_APP, resolveTextApp, defaultT, appNum, appTime, appDateTime
 };
 (function() {
   "use strict";
@@ -1650,9 +1690,10 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   try {
     graphe = MG.ForceGraph3D({ controlType: "orbit" })(el).backgroundColor("#04120F").showNavInfo(false).nodeId("id").nodeThreeObject(objetNoeud).nodeLabel(function(n) {
       if (n.__relais) {
-        return '<div class="mem-bulle"><strong>' + esc(n.label) + "</strong><br>" + esc(NOM_THEME[n.theme] || "") + " · " + n.nb + " note" + (n.nb > 1 ? "s" : "") + "</div>";
+        return '<div class="mem-bulle"><strong>' + esc(n.label) + "</strong><br>" + esc(NOM_THEME[n.theme] || "") + " · " + esc(appNum(n.nb)) + " " + esc(T("stats.notesWord", { n: n.nb })) + "</div>";
       }
-      var jetons = typeof n.tokens === "number" && isFinite(n.tokens) ? "<br><small>≈ " + esc(Math.round(n.tokens).toLocaleString("en-US")) + " tokens</small>" : "";
+      var nJ = Math.round(n.tokens);
+      var jetons = typeof n.tokens === "number" && isFinite(n.tokens) ? "<br><small>" + esc(T("panel.tokens", { n: nJ, show: appNum(nJ) })) + "</small>" : "";
       return '<div class="mem-bulle"><strong>' + esc(n.label) + "</strong>" + (n.description ? "<br>" + esc(n.description) : "") + jetons + "</div>";
     }).linkWidth(0).linkMaterial(materiauLien).linkDirectionalParticles(0).linkDirectionalParticleWidth(1.5).linkDirectionalParticleSpeed(55e-4).linkDirectionalParticleResolution(6).linkDirectionalParticleColor(function() {
       return "#CFFFEA";
@@ -2461,8 +2502,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
   function compter() {
     var a = document.getElementById("mem-nb-notes"), b = document.getElementById("mem-nb-liens");
     var wa = document.getElementById("mem-mot-notes"), wb = document.getElementById("mem-mot-liens");
-    if (a) a.textContent = donnees.nodes.length;
-    if (b) b.textContent = donnees.links.length;
+    if (a) a.textContent = appNum(donnees.nodes.length);
+    if (b) b.textContent = appNum(donnees.links.length);
     if (wa) wa.textContent = T("stats.notesWord", { n: donnees.nodes.length });
     if (wb) wb.textContent = T("stats.linksWord", { n: donnees.links.length });
   }
@@ -2507,7 +2548,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     li.textContent = "";
     var heure = document.createElement("span");
     heure.className = "mem-journal__h";
-    heure.textContent = new Date(ligne.t || Date.now()).toLocaleTimeString(void 0, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    heure.textContent = appTime(ligne.t || Date.now());
     var dot = document.createElement("span");
     dot.className = ligne.cible ? "mem-dot mem-dot--cible-" + ligne.cible : "mem-dot mem-dot--" + (ligne.theme || "autre");
     // ACTION · GROUP · NOTE · MACHINE · CHANNEL · TOOL (formatJournalLine); the group is a small
@@ -2773,7 +2814,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
       return r.json();
     }).then(function(d) {
       if (diffDemande !== diffId) return;
-      document.getElementById("mem-p-diff-meta").textContent = "+" + d.plus + " / −" + d.moins + " " + T("diff.lineWord", { n: d.plus + d.moins }) + " · " + new Date(d.t).toLocaleString(void 0, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      document.getElementById("mem-p-diff-meta").textContent = "+" + appNum(d.plus) + " / −" + appNum(d.moins) + " " + T("diff.lineWord", { n: d.plus + d.moins }) + " · " + appDateTime(d.t);
       var ol = document.getElementById("mem-p-diff-lignes");
       ol.textContent = "";
       d.lignes.forEach(function(l) {
@@ -2797,7 +2838,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = {
     var jours = Math.floor((Date.now() - f.mtime) / 864e5);
     var quand = jours < 1 ? T("common.today") : jours === 1 ? T("common.yesterday") : T("common.daysAgo", { n: jours });
     var nJetons = Math.round(f.tokens);
-    var jetons = typeof f.tokens === "number" ? T("panel.tokens", { n: nJetons, show: nJetons.toLocaleString("en-US") }) + " · " : "";
+    var jetons = typeof f.tokens === "number" ? T("panel.tokens", { n: nJetons, show: appNum(nJetons) }) + " · " : "";
     document.getElementById("mem-p-meta").textContent = T("panel.written", { when: quand }) + " · " + jetons +
       T("panel.outgoingLinks", { n: f.outgoing.length }) + ", " + T("panel.incoming", { n: f.incoming.length });
     var zone = document.getElementById("mem-p-liens");

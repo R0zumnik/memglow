@@ -95,18 +95,49 @@ function defaultCostT(key, params) {
   return resolveTextCost(EN_COST, key, params);
 }
 
-function costNumber(n) {
+/* ---- Numbers and dates ----
+   The panel shows them in the memglow language (window.MemglowI18n.lang(), the Settings choice —
+   never the browser locale), with Intl: "1 234" and "30 sept." in French. Same options as
+   public/i18n.js formatNumber/formatDay, copied so this file stays self-contained (Node tests).
+   The prompts for the AI below (costSplitPrompt, costArchivePrompt) are English on purpose, so
+   they pass "en" explicitly: "≈ 1,234 tokens", "Sep 30". Without Intl or with an unknown language:
+   the same English forms. */
+var COST_FMT = {};
+function costLang() {
+  var M = typeof window !== "undefined" && window.MemglowI18n;
+  return M && typeof M.lang === "function" ? M.lang() : "en";
+}
+function costIntl(kind, lang, opts, key) {
+  var k = kind + "|" + lang + "|" + key;
+  if (!Object.prototype.hasOwnProperty.call(COST_FMT, k)) {
+    var f = null;
+    try { if (typeof Intl !== "undefined" && Intl[kind]) f = new Intl[kind](lang, opts); } catch (e) { f = null; }
+    COST_FMT[k] = f || (lang !== "en" ? costIntl(kind, "en", opts, key) : null);
+  }
+  return COST_FMT[k];
+}
+/** 1234 → "1,234" (en), "1 234" (fr)… `lang` defaults to the page language. */
+function costNumber(n, lang) {
   n = Math.round(Number(n) || 0);
-  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  var f = costIntl("NumberFormat", lang || costLang(), { maximumFractionDigits: 0 }, "n");
+  return f ? f.format(n) : String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+/** 59 → "59%" (en), "59 %" (fr, de), "59 %" (es)… */
+function costPercent(p, lang) {
+  var f = costIntl("NumberFormat", lang || costLang(), { style: "percent", maximumFractionDigits: 0 }, "pct");
+  return f ? f.format((Number(p) || 0) / 100) : Math.round(Number(p) || 0) + "%";
 }
 /** "≈ 1,234" — every token figure is an estimate. */
-function costTokens(n) {
-  return n == null || !isFinite(n) ? "≈ —" : "≈ " + costNumber(n);
+function costTokens(n, lang) {
+  return n == null || !isFinite(n) ? "≈ —" : "≈ " + costNumber(n, lang);
 }
-/** "Sep 30" for "2026-09-30" (English, independent of the browser locale). */
-function costDay(day) {
+/** "2026-09-30" → "Sep 30" (en), "30 sept." (fr), "9月30日" (ja)… — a calendar day, read in UTC so
+    no time zone can shift it. `lang` defaults to the page language. */
+function costDay(day, lang) {
   var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ""));
   if (!m) return "";
+  var f = costIntl("DateTimeFormat", lang || costLang(), { month: "short", day: "numeric", timeZone: "UTC" }, "day");
+  if (f) return f.format(new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))));
   var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return months[Number(m[2]) - 1] + " " + Number(m[3]);
 }
@@ -114,8 +145,9 @@ function costColor(colors, theme) {
   var c = colors && colors[theme];
   return /^#[0-9A-Fa-f]{6}$/.test(String(c || "")) ? c : "#A9C9BF";
 }
+/** English only: used by the prompt for the AI (costSplitPrompt). */
 function costPlural(n, word) {
-  return costNumber(n) + " " + word + (n === 1 ? "" : "s");
+  return costNumber(n, "en") + " " + word + (n === 1 ? "" : "s");
 }
 
 /** Text of a part in a split suggestion: its section titles. */
@@ -136,35 +168,37 @@ function costGroupName(theme, names) {
  * Ready-to-paste English prompt asking an AI assistant to split one note, with the rules that
  * keep the memory consistent. `n` is an item of /api/cost (tooLarge or top), `c` the whole answer,
  * `names` the group labels ({ themeId: label }). Built at click time, never put in the page.
+ * English end to end, numbers and dates included (costNumber/costDay with "en"), whatever the page
+ * language — same for costArchivePrompt.
  */
 function costSplitPrompt(n, c, names) {
   var large = c.largeNoteTokens || 5000, chunk = c.chunkTokens || 2000;
   var group = costGroupName(n.theme, names);
   var groups = Object.keys(names || {}).filter(function (k) { return k !== "index" && k !== "other"; })
     .map(function (k) { return costGroupName(k, names); });
-  var partial = c.read && c.read.complete7 === false && c.since ? " (counted since " + costDay(c.since) + ")" : "";
+  var partial = c.read && c.read.complete7 === false && c.since ? " (counted since " + costDay(c.since, "en") + ")" : "";
   var lines = [];
   lines.push("Please split one note of my AI memory into several smaller notes. Show me the plan BEFORE writing anything.");
   lines.push("");
   lines.push("Note: \"" + n.label + "\" (id: " + n.id + ", folder: " + (n.folder || "(root)") + ", group: " + group +
     (n.subtheme ? ", subtheme: " + n.subtheme : "") + ")");
-  lines.push("Size: ≈ " + costNumber(n.tokens) + " tokens (estimate: bytes ÷ 4). Read " + costPlural(n.reads7 || 0, "time") +
-    " in the last 7 days" + partial + ", ≈ " + costNumber(n.readTokens7 || 0) + " tokens read in total.");
+  lines.push("Size: ≈ " + costNumber(n.tokens, "en") + " tokens (estimate: bytes ÷ 4). Read " + costPlural(n.reads7 || 0, "time") +
+    " in the last 7 days" + partial + ", ≈ " + costNumber(n.readTokens7 || 0, "en") + " tokens read in total.");
   // Honest about why this note is here: above the threshold, or under it but costly to read.
   if (n.tokens > large) {
-    lines.push("It is above the ≈ " + costNumber(large) + "-token threshold for large notes.");
+    lines.push("It is above the ≈ " + costNumber(large, "en") + "-token threshold for large notes.");
   } else {
-    lines.push("It is under the ≈ " + costNumber(large) + "-token threshold for large notes, but it is one of the notes that cost the most to read over the last 7 days.");
+    lines.push("It is under the ≈ " + costNumber(large, "en") + "-token threshold for large notes, but it is one of the notes that cost the most to read over the last 7 days.");
   }
-  lines.push("Aim for new notes of ≈ " + costNumber(chunk) + " tokens or less.");
+  lines.push("Aim for new notes of ≈ " + costNumber(chunk, "en") + " tokens or less.");
   lines.push("");
   if (n.split && n.split.length > 1) {
     lines.push("Suggested split into " + n.split.length + " notes (consecutive ## sections, in order):");
     n.split.forEach(function (p, i) {
-      lines.push((i + 1) + ". " + costPartName(p) + " — ≈ " + costNumber(p.tokens) + " tokens");
+      lines.push((i + 1) + ". " + costPartName(p) + " — ≈ " + costNumber(p.tokens, "en") + " tokens");
     });
   } else {
-    lines.push("Suggested split: group consecutive ## sections into notes of ≈ " + costNumber(chunk) + " tokens or less.");
+    lines.push("Suggested split: group consecutive ## sections into notes of ≈ " + costNumber(chunk, "en") + " tokens or less.");
   }
   lines.push("");
   lines.push("Rules:");
@@ -198,8 +232,8 @@ function costFigures(c, T) {
 function costShare(share, T) {
   if (!share) return '<p class="mg-cost__empty">' + costEsc(T("cost.noReadYet")) + '</p>';
   var p = Math.max(0, Math.min(100, share.percent));
-  return '<div class="mg-cost__share"><p class="mg-cost__share-text"><strong>' + costEsc(T("cost.notesCount", { n: share.notes })) + '</strong> = <strong>' + p +
-    ' %</strong> ' + costEsc(T("cost.ofTokensRead7")) + '</p><div class="mg-cost__share-bar" role="img" aria-label="' + costEsc(T("cost.percentAria", { n: p })) + '"><span style="width:' + p + '%"></span></div></div>';
+  return '<div class="mg-cost__share"><p class="mg-cost__share-text"><strong>' + costEsc(T("cost.notesCount", { n: share.notes })) + '</strong> = <strong>' + costEsc(costPercent(p)) +
+    '</strong> ' + costEsc(T("cost.ofTokensRead7")) + '</p><div class="mg-cost__share-bar" role="img" aria-label="' + costEsc(T("cost.percentAria", { n: p })) + '"><span style="width:' + p + '%"></span></div></div>';
 }
 
 function costName(n, colors) {
@@ -373,7 +407,7 @@ function costArchivePrompt(a, list, names, today, protectedGroups) {
   lines.push("");
   lines.push("memglow counted that the notes below were not read, nor found by a search, for " + a.afterDays + " days (since " + a.cutoff + "), and that these sections were not edited in that time:");
   list.forEach(function (s, i) {
-    lines.push((i + 1) + ". Section \"" + s.title + "\" of note \"" + s.label + "\" (id: " + s.note + ", group: " + costGroupName(s.theme, names) + ") — ≈ " + costNumber(s.tokens) + " tokens");
+    lines.push((i + 1) + ". Section \"" + s.title + "\" of note \"" + s.label + "\" (id: " + s.note + ", group: " + costGroupName(s.theme, names) + ") — ≈ " + costNumber(s.tokens, "en") + " tokens");
   });
   lines.push("");
   lines.push("Rules:");
@@ -448,7 +482,7 @@ function costRender(c, colors, T) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT };
+  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costPercent: costPercent, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT };
 }
 
 (function () {

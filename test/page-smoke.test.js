@@ -142,7 +142,7 @@ test("page scripts run: graph loads, settings apply, animation ticks, Memory cos
 
   assert.ok(fetched.includes("/api/graph") && fetched.includes("/api/cost"));
   assert.strictEqual(els["mem-etat"].textContent, "", "no error message shown");
-  assert.strictEqual(els["mem-nb-notes"].textContent, 3);
+  assert.strictEqual(els["mem-nb-notes"].textContent, "3");
   assert.ok(state.forces.collision && state.forces.themes, "custom forces installed");
   assert.strictEqual(els["mem-taille"].value, "jetons", "saved 'Size by' restored");
   assert.strictEqual(els["mem-fond"].value, "nuit", "saved background restored");
@@ -260,5 +260,5 @@ test("page scripts: no answer from the server in 2.5 s, the local cache is used"
   timers.find((x) => x.ms === 2500).f();
   await ticks(4);
   assert.strictEqual(els["mem-fond"].value, "nuit", "local settings used");
-  assert.strictEqual(els["mem-nb-notes"].textContent, 3, "graph loaded");
+  assert.strictEqual(els["mem-nb-notes"].textContent, "3", "graph loaded");
 });
