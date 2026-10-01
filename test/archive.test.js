@@ -207,6 +207,41 @@ test("plan + protected groups: an archive note stays in its group, so a protecte
   assert.ok(zones.checkFiles(forged, { resolver, protect: ["projects"] }).length >= 1);
 });
 
+test("plan + protected groups: a protected defaultTheme and no `archive` theme no longer block archiving", () => {
+  const zones = require("../lib/zones");
+  const { themeResolver } = require("../lib/memory");
+  const f = planFixture();
+  const themes = THEMES.filter((t) => t.id !== "archive");
+  const resolver = themeResolver({ themes, defaultTheme: "people" });
+  const p = f.make([{ note: "old", key: f.key("Old plan") }], { themes });
+  assert.ok(p.ok, JSON.stringify(p.errors));
+  const sum = p.files.find((x) => x.role === "summary");
+  const arch = p.files.find((x) => x.role === "archive");
+  assert.ok(!/\ntheme:/.test(A.splitFrontmatter(sum.after).fm), "no `archive` theme: the summary declares none");
+  assert.ok(sum.after.includes("\n" + A.SUMMARY_FLAG + "\n") && sum.owner === "memglow", "summary: explicit memglow frontmatter, owned by memglow");
+  assert.strictEqual(resolver.themeOfText(sum.rel, sum.after), "people", "it falls in the protected default group");
+  assert.ok(arch.after.includes("\ntheme: projects\n"), "archive note: explicit theme of its origin");
+  for (const protect of [["people"], ["people", "projects"]]) {
+    assert.deepStrictEqual(zones.checkFiles(p.files, { resolver, protect }), [], "protected: " + protect);
+  }
+  // Still strict for everything else: without memglow's mark, or with a forged flag on another file.
+  const unmarked = p.files.map((x) => (x.role === "summary" ? { ...x, owner: undefined } : x));
+  assert.ok(zones.checkFiles(unmarked, { resolver, protect: ["people"] }).some((e) => /protected group "people"/.test(e)), "unmarked summary refused");
+  const forgedPart = { rel: "people/x.md", kind: "create", role: "part", before: null, after: "---\n" + A.SUMMARY_FLAG + "\n---\nmine\n" };
+  assert.strictEqual(zones.checkFiles([forgedPart], { resolver, protect: ["people"] }).length, 1, "the flag alone grants nothing");
+  const flagless = p.files.map((x) => (x.role === "summary" ? { ...x, after: x.after.replace(A.SUMMARY_FLAG + "\n", "") } : x));
+  assert.strictEqual(zones.checkFiles(flagless, { resolver, protect: ["people"] }).length, 1, "a summary without its flag is refused");
+  assert.strictEqual(zones.isOwnedSummary({ ...sum, kind: "delete" }), false, "never for a deletion");
+  assert.strictEqual(zones.isOwnedSummary({ ...sum, kind: "modify", before: "---\ntheme: people\n---\nuser text\n" }), false, "never over a file that was not a summary");
+  // An archive note forged into the protected default group is still refused.
+  const forged = p.files.map((x) => (x.role === "archive" ? { ...x, after: x.after.replace("\ntheme: projects\n", "\ntheme: people\n") } : x));
+  assert.ok(zones.checkFiles(forged, { resolver, protect: ["people"] }).length >= 1);
+  // The `archive` theme protected too: the summary (theme: archive) still goes through.
+  const p2 = f.make([{ note: "old", key: f.key("Old plan") }]);
+  const r2 = themeResolver({ themes: THEMES, defaultTheme: "people" });
+  assert.deepStrictEqual(zones.checkFiles(p2.files, { resolver: r2, protect: ["archive", "people"] }), []);
+});
+
 test("plan: refused when content would be lost, the theme changes, or a file would be overwritten", () => {
   const f = planFixture();
   const p = f.make([{ note: "old", key: f.key("Old plan") }]);
