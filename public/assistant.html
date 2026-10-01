@@ -1,14 +1,14 @@
     <section class="bn-tile mg-ai" id="mg-ai" data-api="/api/assistant" aria-labelledby="mg-ai-title">
       <div class="mg-cost__head">
-        <h2 class="bn-label" id="mg-ai-title">Assistant</h2>
-        <p class="mg-cost__sub">The AI only proposes. memglow checks the proposal (nothing lost, same folder and group, no note replaced or deleted), shows you every change, and writes only what you approve — after a backup, with Undo. Pick a note with “Do it with Claude” in Memory cost.</p>
+        <h2 class="bn-label" id="mg-ai-title" data-i18n="ai.title">Assistant</h2>
+        <p class="mg-cost__sub" data-i18n="ai.description">The AI only proposes. memglow checks the proposal (nothing lost, same folder and group, no note replaced or deleted), shows you every change, and writes only what you approve — after a backup, with Undo. Pick a note with “Do it with Claude” in Memory cost.</p>
       </div>
-      <p class="mg-ai__status" id="mg-ai-status" role="status">Loading…</p>
+      <p class="mg-ai__status" id="mg-ai-status" role="status" data-i18n="common.loading">Loading…</p>
       <div class="mg-ai__job" id="mg-ai-job" aria-live="polite"></div>
       <div class="mg-ai__history" id="mg-ai-history"></div>
       <details class="mg-ai__providers">
-        <summary>Providers</summary>
+        <summary data-i18n="ai.providersTitle">Providers</summary>
         <ul id="mg-ai-providers"></ul>
-        <p class="mg-ai__hint">Set the default with <code>assistant.provider</code> in memglow.config.json; every ready one can be picked when you ask. API keys are never shown here, only “set” or “not set”. memglow never gives the AI a tool: it only reads the note you picked and answers with a proposal.</p>
+        <p class="mg-ai__hint"><span data-i18n="ai.providersHintBefore">Set the default with </span><code>assistant.provider</code><span data-i18n="ai.providersHintAfter"> in memglow.config.json; every ready one can be picked when you ask. API keys are never shown here, only “set” or “not set”. memglow never gives the AI a tool: it only reads the note you picked and answers with a proposal.</span></p>
       </details>
     </section>

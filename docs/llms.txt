@@ -10,6 +10,8 @@ memglow has an optional assistant, off by default (`assistant.enabled` or `MEMGL
 
 The view (settings, bubble layout, camera) is saved on the memglow instance, in its own data folder, so every browser and device that opens the same instance shows the same view.
 
+The interface ships in 8 languages (English, French, German, Spanish, Brazilian Portuguese, Japanese, Korean, Simplified Chinese), auto-detected from the browser and switchable any time in Settings; product names and AI-facing prompts always stay in English.
+
 memglow reads a folder of Markdown notes read-only: a basic-memory knowledge base, an Obsidian vault, or any notes folder. It runs on the user's machine (Node.js 18+, zero dependencies, no build step) or in Docker. Hooks send note ids only, never note content. No CDN, no analytics, localhost by default.
 
 ## Install

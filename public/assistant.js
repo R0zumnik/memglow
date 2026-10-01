@@ -15,11 +15,83 @@ function aiEsc(s) {
 }
 function aiNum(n) { return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
 
-var AI_ROLE = { original: "original note → summary", part: "new note", link: "link updated" };
+/* ---- i18n (public/i18n.js, public/i18n/<code>.json) ----
+   Same approach as app.js/cost.js: a small English copy of just the keys this file renders, used
+   whenever window.MemglowI18n is not available (Node tests, or before the page's language loads),
+   kept in sync with public/i18n/en.json by a test. Every function below takes T last, optional,
+   defaulting to the page's current language. */
+var EN_AI = {
+  "ai.theAi": "the AI", "ai.roleOriginal": "original note → summary", "ai.rolePart": "new note", "ai.roleLink": "link updated",
+  "ai.badgeNew": "new", "ai.badgeChanged": "changed",
+  "ai.gain": "Reading this note: ≈ {before} tokens today → ≈ {after} for the summary{saved}. Parts: {parts}.",
+  "ai.gainSaved": " (≈ {n} fewer each time it is read)",
+  "ai.splitTitle": "Split {label}",
+  "ai.asking": "Asking {who} for a proposal… {chars} characters received. It has no tool and writes nothing.",
+  "ai.cancel": "Cancel", "ai.discard": "Discard", "ai.retry": "Ask again",
+  "ai.refused": "memglow refused this proposal — nothing was written:", "ai.failedDefault": "Failed.",
+  "ai.aiNotes": "{who}: “{notes}”",
+  "ai.checked": "memglow checked it: nothing lost, same folder and group, no note replaced or deleted. Exact changes:",
+  "ai.apply": "Apply this plan",
+  "ai.applyHint": "Apply backs up the notes first (git snapshot if your memory is a git repository, otherwise a copy in memglow's data folder); if the backup fails, nothing is written.",
+  "ai.applying": "Backing up and writing…",
+  "ai.applied": "Applied. {files} written; backup: {backup}.",
+  "ai.fileCount": { one: "{n} file", other: "{n} files" },
+  "ai.backupGit": "git commit {ref}", "ai.backupCopy": "copy in {dir}",
+  "ai.undo": "Undo", "ai.undone": "Undone: {restored} restored, {removed} removed.",
+  "ai.leftAsIs": "Left as they are (changed since):", "ai.recentChanges": "Recent changes",
+  "ai.notSupported": "not supported yet", "ai.ready": "ready", "ai.installedNotReady": "installed, not ready", "ai.notSetUp": "not set up",
+  "ai.onThisMachine": "on this machine ({dest})", "ai.sendsTo": "sends to {dest}", "ai.noUrl": "no URL",
+  "ai.modelSuffix": " · model {model}", "ai.keySuffix": " · key: {key}", "ai.keyNotSet": "not set", "ai.defaultTag": " (default)",
+  "ai.destLocal": "Local model — nothing leaves your machine ({dest}).",
+  "ai.destRemote": "Your note will be sent to {dest}{model}.", "ai.destModelSuffix": " (model {model})",
+  "ai.destCli": "Your note will be sent through your {label} (to Anthropic, or wherever your CLI is set up to send it).",
+  "ai.providerLabel": "AI", "ai.splitTitleQuestion": "Split {label}?",
+  "ai.askMsg": "The note is sent to the AI, which answers with a proposal. Nothing is written until you approve the exact changes. Lines that look like secrets are replaced by placeholders first.",
+  "ai.extraLabel": "Extra instructions (optional)", "ai.propose": "Propose", "ai.notNow": "Not now",
+  "ai.unavailable": "The assistant is not available.", "ai.readyProvider": "Ready — provider: {label}.",
+  "ai.unreachable": "Could not reach memglow: reload the page."
+};
+function resolveTextAi(dict, key, params) {
+  var entry = dict ? dict[key] : undefined;
+  if (entry === undefined || entry === null) return key;
+  var str = entry;
+  if (typeof entry === "object") {
+    var n = params && typeof params.n === "number" ? params.n : null;
+    var hasOne = Object.prototype.hasOwnProperty.call(entry, "one");
+    var hasOther = Object.prototype.hasOwnProperty.call(entry, "other");
+    str = n === 1 && hasOne ? entry.one : hasOther ? entry.other : hasOne ? entry.one : key;
+  }
+  if (typeof str !== "string") return key;
+  if (!params) return str;
+  return str.replace(/\{(\w+)\}/g, function (m, name) {
+    return Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : m;
+  });
+}
+function defaultAiT(key, params) {
+  var M = typeof window !== "undefined" && window.MemglowI18n;
+  if (M && M.dict && Object.prototype.hasOwnProperty.call(M.dict, key)) return M.t(key, params);
+  return resolveTextAi(EN_AI, key, params);
+}
 
-function aiDiff(f) {
-  var head = '<summary><span class="mg-ai__kind mg-ai__kind--' + aiEsc(f.kind) + '">' + (f.kind === "create" ? "new" : "changed") + '</span> ' +
-    '<code>' + aiEsc(f.rel) + '</code> <span class="mg-ai__role">' + aiEsc(AI_ROLE[f.role] || "") + '</span> ' +
+function aiRoleLabel(role, T) {
+  T = T || defaultAiT;
+  return role === "original" ? T("ai.roleOriginal") : role === "part" ? T("ai.rolePart") : role === "link" ? T("ai.roleLink") : "";
+}
+
+/** `key`'s translation, split around the literal "{param}" placeholder (left untouched because
+    `extra` never sets it) — lets a piece of HTML (a bold label, here) sit exactly where the
+    translator put the placeholder, in any language's word order. Returns [before, after]. */
+function aiSplitAround(T, key, param, extra) {
+  var tmpl = T(key, extra || {});
+  var marker = "{" + param + "}";
+  var i = tmpl.indexOf(marker);
+  return i < 0 ? [tmpl, ""] : [tmpl.slice(0, i), tmpl.slice(i + marker.length)];
+}
+
+function aiDiff(f, T) {
+  T = T || defaultAiT;
+  var head = '<summary><span class="mg-ai__kind mg-ai__kind--' + aiEsc(f.kind) + '">' + aiEsc(f.kind === "create" ? T("ai.badgeNew") : T("ai.badgeChanged")) + '</span> ' +
+    '<code>' + aiEsc(f.rel) + '</code> <span class="mg-ai__role">' + aiEsc(aiRoleLabel(f.role, T)) + '</span> ' +
     '<span class="mg-ai__counts"><span class="mg-ai__plus">+' + aiNum(f.added) + '</span> <span class="mg-ai__minus">−' + aiNum(f.removed) + '</span></span></summary>';
   var body = (f.hunks || []).map(function (h) {
     return '<pre class="mg-ai__hunk">' + (h.lines || []).map(function (l) {
@@ -30,11 +102,14 @@ function aiDiff(f) {
   return '<details class="mg-ai__file"' + (f.role === "original" ? " open" : "") + '>' + head + body + '</details>';
 }
 
-function aiGain(g) {
+function aiGain(g, T) {
+  T = T || defaultAiT;
   if (!g) return "";
-  return '<p class="mg-ai__gain">Reading this note: <strong>≈ ' + aiNum(g.before) + '</strong> tokens today → <strong>≈ ' + aiNum(g.summary) +
-    '</strong> for the summary' + (g.saved ? ' (≈ ' + aiNum(g.saved) + ' fewer each time it is read)' : '') + '. Parts: ' +
-    (g.parts || []).map(function (p) { return aiEsc(p.id) + ' ≈ ' + aiNum(p.tokens); }).join(", ") + '.</p>';
+  // Raw (unescaped) pieces here: the whole T("ai.gain", …) result is escaped once, below — g.parts
+  // carries a note id, which could contain HTML-special characters.
+  var saved = g.saved ? T("ai.gainSaved", { n: aiNum(g.saved) }) : "";
+  var parts = (g.parts || []).map(function (p) { return p.id + ' ≈ ' + aiNum(p.tokens); }).join(", ");
+  return '<p class="mg-ai__gain">' + aiEsc(T("ai.gain", { before: aiNum(g.before), after: aiNum(g.summary), saved: saved, parts: parts })) + '</p>';
 }
 
 function aiList(items, cls) {
@@ -42,95 +117,109 @@ function aiList(items, cls) {
   return '<ul class="' + cls + '">' + items.map(function (e) { return '<li>' + aiEsc(e) + '</li>'; }).join("") + '</ul>';
 }
 
-/** The current job, as HTML. `providerLabel` names the AI. */
-function aiRenderJob(j, providerLabel) {
+/** The current job, as HTML. `providerLabel` names the AI. `T` defaults to the page's language. */
+function aiRenderJob(j, providerLabel, T) {
+  T = T || defaultAiT;
   if (!j || j.state === "discarded") return "";
-  var who = aiEsc(providerLabel || "the AI");
-  var title = '<p class="mg-ai__title">Split <strong>' + aiEsc(j.note && j.note.label) + '</strong></p>';
+  var who = aiEsc(providerLabel || T("ai.theAi"));
+  var titleParts = aiSplitAround(T, "ai.splitTitle", "label");
+  var title = '<p class="mg-ai__title">' + aiEsc(titleParts[0]) + '<strong>' + aiEsc(j.note && j.note.label) + '</strong>' + aiEsc(titleParts[1]) + '</p>';
   if (j.state === "running") {
-    return title + '<p class="mg-ai__msg">Asking ' + who + ' for a proposal… <span class="mg-ai__chars" id="mg-ai-chars">' + aiNum(j.chars) + '</span> characters received. It has no tool and writes nothing.</p>' +
-      '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="cancel">Cancel</button></div>';
+    return title + '<p class="mg-ai__msg">' + T("ai.asking", { who: who, chars: '<span class="mg-ai__chars" id="mg-ai-chars">' + aiNum(j.chars) + '</span>' }) + '</p>' +
+      '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="cancel">' + aiEsc(T("ai.cancel")) + '</button></div>';
   }
   if (j.state === "invalid") {
-    return title + '<p class="mg-ai__msg mg-ai__msg--bad">memglow refused this proposal — nothing was written:</p>' + aiList(j.errors, "mg-ai__errors") +
-      '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="retry">Ask again</button><button type="button" class="bn-btn" data-ai="cancel">Discard</button></div>';
+    return title + '<p class="mg-ai__msg mg-ai__msg--bad">' + aiEsc(T("ai.refused")) + '</p>' + aiList(j.errors, "mg-ai__errors") +
+      '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="retry">' + aiEsc(T("ai.retry")) + '</button><button type="button" class="bn-btn" data-ai="cancel">' + aiEsc(T("ai.discard")) + '</button></div>';
   }
   if (j.state === "failed" || j.state === "cancelled") {
-    return title + '<p class="mg-ai__msg mg-ai__msg--bad">' + aiEsc(j.error || "Failed.") + '</p>' +
-      '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="retry">Ask again</button><button type="button" class="bn-btn" data-ai="cancel">Discard</button></div>';
+    return title + '<p class="mg-ai__msg mg-ai__msg--bad">' + aiEsc(j.error || T("ai.failedDefault")) + '</p>' +
+      '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="retry">' + aiEsc(T("ai.retry")) + '</button><button type="button" class="bn-btn" data-ai="cancel">' + aiEsc(T("ai.discard")) + '</button></div>';
   }
   if (j.state === "proposed") {
-    return title + (j.notes ? '<p class="mg-ai__notes">' + who + ': “' + aiEsc(j.notes) + '”</p>' : '') + aiGain(j.gain) +
+    return title + (j.notes ? '<p class="mg-ai__notes">' + T("ai.aiNotes", { who: who, notes: aiEsc(j.notes) }) + '</p>' : '') + aiGain(j.gain, T) +
       aiList(j.warnings, "mg-ai__warnings") +
-      '<p class="mg-ai__msg">memglow checked it: nothing lost, same folder and group, no note replaced or deleted. Exact changes:</p>' +
-      (j.files || []).map(aiDiff).join("") +
-      '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="apply">Apply this plan</button><button type="button" class="bn-btn" data-ai="cancel">Discard</button></div>' +
-      '<p class="mg-ai__hint">Apply backs up the notes first (git snapshot if your memory is a git repository, otherwise a copy in memglow\'s data folder); if the backup fails, nothing is written.</p>';
+      '<p class="mg-ai__msg">' + aiEsc(T("ai.checked")) + '</p>' +
+      (j.files || []).map(function (f) { return aiDiff(f, T); }).join("") +
+      '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="apply">' + aiEsc(T("ai.apply")) + '</button><button type="button" class="bn-btn" data-ai="cancel">' + aiEsc(T("ai.discard")) + '</button></div>' +
+      '<p class="mg-ai__hint">' + aiEsc(T("ai.applyHint")) + '</p>';
   }
-  if (j.state === "applying") return title + '<p class="mg-ai__msg">Backing up and writing…</p>';
+  if (j.state === "applying") return title + '<p class="mg-ai__msg">' + aiEsc(T("ai.applying")) + '</p>';
   if (j.state === "applied") {
-    return title + '<p class="mg-ai__msg mg-ai__msg--ok">Applied. ' + (j.files || []).length + ' file(s) written; backup: ' +
-      (j.backup ? aiEsc(j.backup.kind === "git" ? "git commit " + j.backup.ref : "copy in " + j.backup.dir) : "—") + '.</p>' + aiGain(j.gain) +
-      '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="undo">Undo</button></div>';
+    var backup = j.backup ? (j.backup.kind === "git" ? T("ai.backupGit", { ref: j.backup.ref }) : T("ai.backupCopy", { dir: j.backup.dir })) : "—";
+    var filesWord = T("ai.fileCount", { n: (j.files || []).length });
+    return title + '<p class="mg-ai__msg mg-ai__msg--ok">' + aiEsc(T("ai.applied", { files: filesWord, backup: backup })) + '</p>' + aiGain(j.gain, T) +
+      '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="undo">' + aiEsc(T("ai.undo")) + '</button></div>';
   }
   if (j.state === "undone") {
     var u = j.undo || { restored: [], removed: [], skipped: [] };
-    return title + '<p class="mg-ai__msg">Undone: ' + u.restored.length + ' restored, ' + u.removed.length + ' removed.</p>' +
-      (u.skipped.length ? '<p class="mg-ai__msg mg-ai__msg--bad">Left as they are (changed since):</p>' + aiList(u.skipped.map(function (s) { return s.rel + " — " + s.why; }), "mg-ai__errors") : "");
+    return title + '<p class="mg-ai__msg">' + aiEsc(T("ai.undone", { restored: u.restored.length, removed: u.removed.length })) + '</p>' +
+      (u.skipped.length ? '<p class="mg-ai__msg mg-ai__msg--bad">' + aiEsc(T("ai.leftAsIs")) + '</p>' + aiList(u.skipped.map(function (s) { return s.rel + " — " + s.why; }), "mg-ai__errors") : "");
   }
   return "";
 }
 
 /** Recent applied changes (Undo stays available). */
-function aiRenderHistory(h, currentId) {
+function aiRenderHistory(h, currentId, T) {
+  T = T || defaultAiT;
   var rows = (h || []).filter(function (j) { return j.id !== currentId && j.state === "applied"; });
   if (!rows.length) return "";
-  return '<p class="mg-ai__sub">Recent changes</p><ul class="mg-ai__recent">' + rows.map(function (j) {
-    return '<li><span>' + aiEsc(j.note && j.note.label) + ' — ' + (j.files || []).length + ' file(s)</span> <button type="button" class="bn-btn" data-ai="undo" data-job="' + aiEsc(j.id) + '">Undo</button></li>';
+  return '<p class="mg-ai__sub">' + aiEsc(T("ai.recentChanges")) + '</p><ul class="mg-ai__recent">' + rows.map(function (j) {
+    return '<li><span>' + aiEsc(j.note && j.note.label) + ' — ' + aiEsc(T("ai.fileCount", { n: (j.files || []).length })) + '</span> <button type="button" class="bn-btn" data-ai="undo" data-job="' + aiEsc(j.id) + '">' + aiEsc(T("ai.undo")) + '</button></li>';
   }).join("") + '</ul>';
 }
 
-function aiRenderProviders(list, current) {
+function aiRenderProviders(list, current, T) {
+  T = T || defaultAiT;
   return (list || []).map(function (p) {
-    var state = !p.implemented ? "not supported yet" : p.available ? "ready" : p.detected ? "installed, not ready" : "not set up";
+    var state = !p.implemented ? T("ai.notSupported") : p.available ? T("ai.ready") : p.detected ? T("ai.installedNotReady") : T("ai.notSetUp");
     var extra = "";
     if (p.kind === "http" && p.implemented) {
-      extra = ' <span class="mg-ai__meta">' + (p.destination ? (p.local ? "on this machine (" + aiEsc(p.destination) + ")" : "sends to " + aiEsc(p.destination)) : "no URL") +
-        (p.model ? " · model " + aiEsc(p.model) : "") + " · key: " + aiEsc(p.key || "not set") + '</span>';
+      extra = ' <span class="mg-ai__meta">' + aiEsc(p.destination ? (p.local ? T("ai.onThisMachine", { dest: p.destination }) : T("ai.sendsTo", { dest: p.destination })) : T("ai.noUrl")) +
+        (p.model ? aiEsc(T("ai.modelSuffix", { model: p.model })) : "") + aiEsc(T("ai.keySuffix", { key: p.key || T("ai.keyNotSet") })) + '</span>';
     }
     var why = p.implemented && !p.available && p.reason ? '<br><span class="mg-ai__meta">' + aiEsc(p.reason) + '</span>' : "";
-    return '<li' + (p.id === current ? ' class="mg-ai__current"' : '') + '><code>' + aiEsc(p.id) + '</code> ' + aiEsc(p.label) + ' — ' + aiEsc(state) + (p.id === current ? " (default)" : "") + extra + why + '</li>';
+    return '<li' + (p.id === current ? ' class="mg-ai__current"' : '') + '><code>' + aiEsc(p.id) + '</code> ' + aiEsc(p.label) + ' — ' + aiEsc(state) + (p.id === current ? aiEsc(T("ai.defaultTag")) : "") + extra + why + '</li>';
   }).join("");
 }
 
 /** Where the note goes with this provider, said BEFORE the user asks. */
-function aiDestination(p) {
+function aiDestination(p, T) {
+  T = T || defaultAiT;
   if (!p) return "";
   if (p.kind === "http") {
-    if (p.local) return '<p class="mg-ai__dest mg-ai__dest--local" id="mg-ai-dest">Local model — nothing leaves your machine (' + aiEsc(p.destination) + ').</p>';
-    return '<p class="mg-ai__dest" id="mg-ai-dest">Your note will be sent to <strong>' + aiEsc(p.destination || "?") + '</strong>' + (p.model ? ' (model ' + aiEsc(p.model) + ')' : '') + '.</p>';
+    if (p.local) return '<p class="mg-ai__dest mg-ai__dest--local" id="mg-ai-dest">' + aiEsc(T("ai.destLocal", { dest: p.destination })) + '</p>';
+    var model = p.model ? T("ai.destModelSuffix", { model: p.model }) : "";
+    var destParts = aiSplitAround(T, "ai.destRemote", "dest", { model: model });
+    return '<p class="mg-ai__dest" id="mg-ai-dest">' + aiEsc(destParts[0]) + '<strong>' + aiEsc(p.destination || "?") + '</strong>' + aiEsc(destParts[1]) + '</p>';
   }
-  return '<p class="mg-ai__dest" id="mg-ai-dest">Your note will be sent through your ' + aiEsc(p.label) + ' (to Anthropic, or wherever your CLI is set up to send it).</p>';
+  return '<p class="mg-ai__dest" id="mg-ai-dest">' + aiEsc(T("ai.destCli", { label: p.label })) + '</p>';
 }
 
 /** `providers` = the status list, `current` = the default provider id. */
-function aiAskForm(noteId, label, providers, current) {
+function aiAskForm(noteId, label, providers, current, T) {
+  T = T || defaultAiT;
   var ready = (providers || []).filter(function (p) { return p.implemented && p.available; });
   var sel = ready.filter(function (p) { return p.id === current; })[0] || ready[0] || null;
   var picker = ready.length > 1
-    ? '<label class="mg-ai__extra">AI<select id="mg-ai-provider">' + ready.map(function (p) {
+    ? '<label class="mg-ai__extra">' + aiEsc(T("ai.providerLabel")) + '<select id="mg-ai-provider">' + ready.map(function (p) {
       return '<option value="' + aiEsc(p.id) + '"' + (p === sel ? " selected" : "") + '>' + aiEsc(p.label) + '</option>';
     }).join("") + '</select></label>'
     : "";
-  return '<p class="mg-ai__title">Split <strong>' + aiEsc(label || noteId) + '</strong>?</p>' +
-    '<p class="mg-ai__msg">The note is sent to the AI, which answers with a proposal. Nothing is written until you approve the exact changes. Lines that look like secrets are replaced by placeholders first.</p>' +
-    picker + aiDestination(sel) +
-    '<label class="mg-ai__extra">Extra instructions (optional)<textarea id="mg-ai-extra" maxlength="1000" rows="2"></textarea></label>' +
-    '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="propose" data-note="' + aiEsc(noteId) + '"' + (sel ? ' data-provider="' + aiEsc(sel.id) + '"' : '') + '>Propose</button><button type="button" class="bn-btn" data-ai="close">Not now</button></div>';
+  var titleParts = aiSplitAround(T, "ai.splitTitleQuestion", "label");
+  return '<p class="mg-ai__title">' + aiEsc(titleParts[0]) + '<strong>' + aiEsc(label || noteId) + '</strong>' + aiEsc(titleParts[1]) + '</p>' +
+    '<p class="mg-ai__msg">' + aiEsc(T("ai.askMsg")) + '</p>' +
+    picker + aiDestination(sel, T) +
+    '<label class="mg-ai__extra">' + aiEsc(T("ai.extraLabel")) + '<textarea id="mg-ai-extra" maxlength="1000" rows="2"></textarea></label>' +
+    '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="propose" data-note="' + aiEsc(noteId) + '"' + (sel ? ' data-provider="' + aiEsc(sel.id) + '"' : '') + '>' + aiEsc(T("ai.propose")) + '</button><button type="button" class="bn-btn" data-ai="close">' + aiEsc(T("ai.notNow")) + '</button></div>';
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { aiEsc: aiEsc, aiRenderJob: aiRenderJob, aiRenderHistory: aiRenderHistory, aiRenderProviders: aiRenderProviders, aiAskForm: aiAskForm, aiDiff: aiDiff, aiDestination: aiDestination };
+  module.exports = {
+    aiEsc: aiEsc, aiRenderJob: aiRenderJob, aiRenderHistory: aiRenderHistory, aiRenderProviders: aiRenderProviders,
+    aiAskForm: aiAskForm, aiDiff: aiDiff, aiDestination: aiDestination,
+    EN_AI: EN_AI, resolveTextAi: resolveTextAi, defaultAiT: defaultAiT
+  };
 }
 
 (function () {
@@ -143,6 +232,7 @@ if (typeof module !== "undefined" && module.exports) {
   var elJob = document.getElementById("mg-ai-job");
   var elHist = document.getElementById("mg-ai-history");
   var elProv = document.getElementById("mg-ai-providers");
+  var T = defaultAiT;
   var st = null, asking = null, lastNote = null, lastExtra = "", lastProvider = "";
 
   function post(action, body) {
@@ -163,18 +253,18 @@ if (typeof module !== "undefined" && module.exports) {
   }
   function render() {
     if (!st) return;
-    if (!st.available) say(st.reason || "The assistant is not available.", true);
-    else say("Ready — provider: " + st.provider.label + ".", false);
-    if (asking && !(st.job && (st.job.state === "running" || st.job.state === "applying"))) elJob.innerHTML = aiAskForm(asking.id, asking.label, st.providers, st.provider && st.provider.id);
-    else elJob.innerHTML = aiRenderJob(st.job, labelOfProvider(st.job && st.job.provider));
-    elHist.innerHTML = aiRenderHistory(st.history, st.job && st.job.id);
-    elProv.innerHTML = aiRenderProviders(st.providers, st.provider && st.provider.id);
+    if (!st.available) say(st.reason || T("ai.unavailable"), true);
+    else say(T("ai.readyProvider", { label: st.provider.label }), false);
+    if (asking && !(st.job && (st.job.state === "running" || st.job.state === "applying"))) elJob.innerHTML = aiAskForm(asking.id, asking.label, st.providers, st.provider && st.provider.id, T);
+    else elJob.innerHTML = aiRenderJob(st.job, labelOfProvider(st.job && st.job.provider), T);
+    elHist.innerHTML = aiRenderHistory(st.history, st.job && st.job.id, T);
+    elProv.innerHTML = aiRenderProviders(st.providers, st.provider && st.provider.id, T);
   }
   function load() {
     return fetch(api, { credentials: "same-origin" }).then(function (r) {
       if (!r.ok) throw new Error(r.status);
       return r.json();
-    }).then(function (s) { st = s; render(); }).catch(function () { say("Could not reach memglow: reload the page.", true); });
+    }).then(function (s) { st = s; render(); }).catch(function () { say(T("ai.unreachable"), true); });
   }
   function fail(e) { say(e.message || String(e), true); load(); }
 
@@ -190,7 +280,7 @@ if (typeof module !== "undefined" && module.exports) {
     if (!e.target || e.target.id !== "mg-ai-provider") return;
     var p = providerOf(e.target.value);
     var dest = document.getElementById("mg-ai-dest");
-    if (dest && p) dest.outerHTML = aiDestination(p);
+    if (dest && p) dest.outerHTML = aiDestination(p, T);
     var btn = root.querySelector('[data-ai="propose"]');
     if (btn && p) btn.setAttribute("data-provider", p.id);
   });
@@ -242,5 +332,6 @@ if (typeof module !== "undefined" && module.exports) {
       } catch (x) { /* ignore */ }
     });
   }
+  document.addEventListener("memglow:language", render); // T() reads window.MemglowI18n live
   load();
 })();
