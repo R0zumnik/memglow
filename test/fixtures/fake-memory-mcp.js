@@ -24,7 +24,9 @@ function find(identifier) {
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]);
   return walk(DIR).find((f) => path.basename(f, ".md") === id) || null;
 }
-const text = (t) => ({ content: [{ type: "text", text: t }] });
+// FAKE_WRAP=1: like basic-memory on FastMCP (`wrap_result`), every text answer also carries
+// structuredContent { result: <the same text> } — which is what Claude Code shows the model.
+const text = (t) => (process.env.FAKE_WRAP ? { content: [{ type: "text", text: t }], structuredContent: { result: t } } : { content: [{ type: "text", text: t }] });
 
 function call(name, args) {
   if (LOG) fs.appendFileSync(LOG, JSON.stringify({ name, args }) + "\n");

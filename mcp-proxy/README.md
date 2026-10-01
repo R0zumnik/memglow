@@ -89,8 +89,15 @@ about. Rules, for every lever:
   `pollMs` (2 s), plus once after each successful write.
 - **The server's answer is kept as is.** Levers 1-3 only *add* a text block before or after the
   server's own `content` items, which stay byte-for-byte identical. Only levers 4 and 5, both off by
-  default, replace an answer — and only a plain-text read answer (never one carrying
+  default, replace an answer — and only a plain-text read answer (never one carrying other
   `structuredContent`, never `build_context`, which returns several notes).
+- **FastMCP text wrapper.** basic-memory (like any FastMCP server with `wrap_result`) sends each
+  answer twice: in `content` and as `structuredContent: { "result": "<the same text>" }`. Claude
+  Code (checked with v2.1) gives the *model* the `structuredContent` when there is one — so the
+  proxy keeps that wrapper equal to the annotated text (`content` blocks joined by a blank line).
+  Before this, every lever was invisible to Claude Code behind basic-memory. Only that exact shape
+  is touched (a single `result` key holding the same text as `content`); any other
+  `structuredContent` is relayed as is.
 - **No note body is ever added.** Titles, ids, themes, token estimates (≈ bytes / 4, as in the
   Memory cost panel) and frontmatter descriptions only, with secret-looking text masked.
 - Unknown tools, errors (`error` or `isError`) and every other message pass through untouched. If a
@@ -109,6 +116,12 @@ about. Rules, for every lever:
 > **Levers 4 and 5 change what the assistant receives. Measure answer quality before enabling
 > them**, not only the tokens saved: an assistant whose context was compacted may no longer have
 > the earlier copy of a note, and an outline is not the note.
+
+**Measured** (Claude Code + basic-memory, 225 test notes, 21 questions, Haiku and Sonnet —
+[bench/RESULTS.md](../bench/RESULTS.md)): the default levers 1-3 made no measurable difference;
+`toc` cut the note text the assistant received by about two thirds with every answer still
+correct, but added a round trip (≈ +12 % input tokens and time, ≈ −13 % cost with Haiku);
+`dedupe` could not be judged with one question per session.
 
 **Getting the full note back (levers 4 and 5).** When either is on, the proxy adds an optional
 `memglow_fresh` argument (and `memglow_section` for lever 5) to the read tools it lists in

@@ -1,0 +1,26 @@
+{
+  "_about": "Factual questions over the generated test memory (bench/generate.js). `expect` is a case-insensitive regex the final answer must match; `notes` are the notes that hold the answer (checked by `node bench/run.js --check`); kind: small = in a small note, large = inside a note over 5,000 tokens, link = needs following a [[link]] from the note the question names, none = the answer is not in the memory (the assistant must say so).",
+  "questions": [
+    { "id": "q01", "kind": "small", "q": "On which port does the Kestrel staging database listen?", "expect": "\\b6439\\b", "notes": ["project-kestrel"] },
+    { "id": "q02", "kind": "small", "q": "On which day of the month are Marlow Bakery invoices sent?", "expect": "\\b12(th)?\\b", "notes": ["client-marlow-bakery"] },
+    { "id": "q03", "kind": "small", "q": "What is Ingrid Valtersen's preferred meeting slot?", "expect": "tuesday[^\\n]{0,20}14[:h.]30", "notes": ["person-ingrid"] },
+    { "id": "q04", "kind": "small", "q": "How many days before expiry are TLS certificates renewed?", "expect": "\\b21\\b", "notes": ["reference-tls-renewal"] },
+    { "id": "q05", "kind": "small", "q": "What is the maximum length of a commit message subject line, according to the user's rules?", "expect": "\\b64\\b", "notes": ["feedback-commit-messages"] },
+    { "id": "q06", "kind": "small", "q": "On which weekday is the weekly Northwind demo?", "expect": "friday", "notes": ["client-northwind"] },
+    { "id": "q07", "kind": "small", "q": "At the meeting of 4 March 2026 about Kestrel, to which date was the launch moved?", "expect": "2026-05-19|19 may|may 19", "notes": ["meeting-2026-03-04"] },
+    { "id": "q08", "kind": "large", "q": "In the Harbor runbook, what is the maximum replication lag allowed before failover?", "expect": "\\b42\\s*(s\\b|sec)", "notes": ["reference-runbook-harbor"] },
+    { "id": "q09", "kind": "large", "q": "What is our account number with Quillon Supplies?", "expect": "QS-88213", "notes": ["reference-vendor-catalog"] },
+    { "id": "q10", "kind": "large", "q": "What budget was agreed at the Lantern kickoff meeting?", "expect": "18[,. ]?500", "notes": ["log-meetings-2025"] },
+    { "id": "q11", "kind": "large", "q": "What is the management IP address of the switch in rack B?", "expect": "10\\.20\\.7\\.4\\b", "notes": ["reference-network-inventory"] },
+    { "id": "q12", "kind": "large", "q": "What is the rate limit of the Ledger API?", "expect": "\\b240\\b", "notes": ["reference-api-catalog"] },
+    { "id": "q13", "kind": "large", "q": "Which internal job is called 'Bramble' in the glossary?", "expect": "reconcil", "notes": ["reference-glossary"] },
+    { "id": "q14", "kind": "large", "q": "How long did it take to fix the Git server incident of 2025-02-13?", "expect": "\\b69\\b", "notes": ["reference-incident-log"] },
+    { "id": "q15", "kind": "large", "q": "What is the name of the VPN profile new subcontractors must import?", "expect": "corp-north-2", "notes": ["reference-onboarding-guide"] },
+    { "id": "q16", "kind": "link", "q": "Who is the accountant of the client behind the Lantern project?", "expect": "novakova", "notes": ["project-lantern", "client-ostrava-tiles"] },
+    { "id": "q17", "kind": "link", "q": "On which weekday does the project that Dmitri leads deploy to production?", "expect": "wednesday", "notes": ["person-dmitri", "project-orchard"] },
+    { "id": "q18", "kind": "link", "q": "What is the phone extension of Fjord Analytics' main contact?", "expect": "\\b4471\\b", "notes": ["client-fjord-analytics", "person-solveig"] },
+    { "id": "q19", "kind": "link", "q": "For the Harbor project, how many days are backups kept, according to its runbook?", "expect": "\\b35\\b", "notes": ["project-harbor", "reference-runbook-harbor"] },
+    { "id": "q20", "kind": "link", "q": "Which message queue was chosen for the Orchard project, according to the decision log?", "expect": "\\bnats\\b", "notes": ["project-orchard", "log-decisions"] },
+    { "id": "q21", "kind": "none", "q": "What is the Wi-Fi password of the Kestrel project office?", "expect": "(not|no|couldn.?t|could not|cannot|can.?t|unable)[^.]{0,60}(find|found|contain|record|information|mention|stored|listed|available)|no (such|record|information|mention)", "notes": [] }
+  ]
+}

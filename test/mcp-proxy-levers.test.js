@@ -246,6 +246,48 @@ test("levers 4/5 never touch structuredContent answers; the proxy writes nothing
   fs.rmSync(fx.root, { recursive: true, force: true });
 });
 
+test("FastMCP text wrapper (structuredContent { result }): kept equal to the annotated text, so clients that show it see the levers", async () => {
+  const fx = makeNotes();
+  const c = start(fx, { FAKE_WRAP: "1", MEMGLOW_PROXY_DEDUPE: "1", MEMGLOW_PROXY_TOC: "1" });
+  try {
+    const sc = (r) => r.result.structuredContent.result;
+    const joined = (r) => texts(r).join("\n\n");
+    // Lever 3 (suggestions) on a plain read: both views carry the suffix.
+    const a = await c.call("read_note", { identifier: "alice" });
+    assert.match(sc(a), /memglow: related notes: Bob/);
+    assert.strictEqual(sc(a), joined(a));
+    assert.ok(sc(a).includes("SECRETBODY-alice"), "upstream text still there, untouched");
+    // Lever 4 (dedupe) now applies to wrapped answers too; the wrapper says the same as content.
+    const a2 = await c.call("read_note", { identifier: "alice" });
+    assert.match(sc(a2), /is unchanged since you read it earlier/);
+    assert.ok(!sc(a2).includes("SECRETBODY-alice"));
+    assert.strictEqual(sc(a2), joined(a2));
+    // Lever 5 (toc) on the large note.
+    const b = await c.call("read_note", { identifier: "big" });
+    assert.match(sc(b), /only its outline is shown/);
+    assert.strictEqual(sc(b), joined(b));
+    // Lever 2 (search details).
+    const s = await c.call("search_notes", { query: "carol" });
+    assert.match(sc(s), /memglow: notes in these results/);
+    assert.strictEqual(sc(s), joined(s));
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("FastMCP text wrapper: recognised strictly", () => {
+  // A wrapper whose text differs from content, or with another key, is not a wrapper: left alone.
+  const cfg = L.proxyConfig({ MEMGLOW_HOME: os.tmpdir(), MEMGLOW_CONFIG: path.join(os.tmpdir(), "none.json"), MEMGLOW_PROXY_DEDUPE: "1" });
+  const idx = { resolve: () => null, note: () => null, related: () => [], afterWrite() {}, isArchive: () => false, archiveEntries: () => [] };
+  const e = L.createLevers({ config: cfg, index: idx, savings: { add() {} } });
+  const call = (id, sc) => {
+    e.clientMessage({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "read_note", arguments: { identifier: "x" } } });
+    return e.serverMessage({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "body ".repeat(400) }], structuredContent: sc } });
+  };
+  call(1, { result: "different" });
+  assert.strictEqual(call(2, { result: "different" }).changed, false, "not a wrapper: never deduplicated");
+  call(3, { result: "body ".repeat(400), extra: 1 });
+  assert.strictEqual(call(4, { result: "body ".repeat(400), extra: 1 }).changed, false);
+});
+
 test("note index: cached — no rescan per call", () => {
   const fx = makeNotes();
   const cfg = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_MEMORY_DIR: fx.notes, MEMGLOW_DATA_DIR: fx.data, MEMGLOW_POLL_MS: "60000" });

@@ -17,6 +17,13 @@
   (≥ 10 searches in each window, last-24-hour median ≥ 2× the 6 days before and ≥ 250 ms slower).
   `engine-speed.json` in the data folder (8 days). Both blocks are translated in the 8 languages;
   durations use the browser's `Intl` unit names.
+- **`bench/`** (repository only, not in the npm package): a reproducible benchmark of the proxy
+  levers — the real `claude` CLI, non-interactive, against a disposable basic-memory on 225
+  generated fictional notes, 21 questions with known answers, 5 variants (direct, proxy off,
+  default levers, + dedupe, + toc), Haiku and Sonnet. Results in `bench/RESULTS.md`: default
+  levers neutral; `toc` −64 % of note text received, all answers correct, but +1 round trip
+  (+12 % input tokens and time, −13 % cost); `dedupe` not measurable with one question per
+  session; it also found the `structuredContent` bug fixed below.
 
 - **Settings → Forces** (Repulsion, Link force, Link distance, 0.2×–3×, a "Reset forces" button)
   and **Settings → Links → Link opacity** (0×–3×): multipliers around the values already set by
@@ -235,6 +242,14 @@
   proposal — split, regroup, archive — with the same diff, one-time token, backup and Undo.
 
 ### Fixed
+
+- **MCP proxy levers were invisible to Claude Code behind basic-memory** (found by the `bench/`
+  benchmark): basic-memory, as a FastMCP server, sends every answer both in `content` and as
+  `structuredContent: { "result": <same text> }`, and Claude Code gives the model the
+  `structuredContent` when there is one — so the blocks the levers added to `content` never
+  reached it, and dedupe/table-of-contents never applied (they skipped any `structuredContent`).
+  The proxy now recognises that exact wrapper (one `result` key equal to the text of `content`)
+  and keeps it equal to the annotated text; any other `structuredContent` is untouched, as before.
 
 - **Archiving inside a protected group** (found while integrating the protected groups and the
   archive tier): an archive note is created in the group of the sections it receives, and now says
