@@ -26,6 +26,7 @@
   <a href="#install">Install</a> ·
   <a href="#activity-api">API</a> ·
   <a href="#mcp-proxy">MCP proxy</a> ·
+  <a href="#mcp-server">MCP server</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#security">Security</a> ·
   <a href="#faq">FAQ</a> ·
@@ -292,6 +293,43 @@ the memory server. It relays every byte unchanged and reports note names only:
 
 Streamable HTTP servers too: `memglow-mcp-proxy --upstream http://127.0.0.1:8000/mcp --listen 127.0.0.1:8765`.
 Tool-name mapping is configurable. Details: [mcp-proxy/README.md](mcp-proxy/README.md).
+
+<a id="mcp-server"></a>
+## 🧠 MCP server (read-only)
+
+A second, separate MCP server — not the proxy above — that lets your assistant **ask memglow
+questions about its own memory**, instead of only being watched by it: which notes are too
+large, what to read first about a topic, what something costs to read. It starts entirely on its
+own (no viewer, no network, nothing else to run first) and never writes anything — not the
+notes, not even memglow's own counters.
+
+```json
+"memglow": {
+  "command": "npx",
+  "args": ["-y", "memglow-mcp"],
+  "env": { "MEMORY_DIR": "/path/to/your/notes" }
+}
+```
+
+Works the same way in Claude Code (`claude mcp add memglow -- npx -y memglow-mcp`), Cursor
+(`.cursor/mcp.json`, same `command`/`args`/`env`) or any MCP client that can run a stdio
+command. Locally, straight from the repo: `node mcp-server/memglow-mcp.js`. Configuration is the
+same as the viewer's (`MEMORY_DIR`, `memglow.config.json`, `MEMGLOW_DATA_DIR`, `MEMGLOW_LARGE_NOTE_TOKENS`,
+`splitChunkTokens` — see [Configuration](#configuration)); if `MEMGLOW_DATA_DIR` holds the
+viewer's activity counters, the tools below use real 7-day read counts, otherwise they say so
+plainly instead of guessing. An empty or missing notes folder is not an error: the tools just
+answer "no notes found".
+
+| Tool | Arguments | What it returns |
+|---|---|---|
+| `memory_health` | *(none)* | Notes over the large-note threshold, the costliest notes to read over 7 days and the notes never read in 30 days (both only once enough activity history exists), and the size of the index note. |
+| `split_plan` | `note` | A deterministic split of one note along its `##` sections (same rule as the Memory cost panel), or an honest "no split needed" under the threshold — plus a ready-to-paste English instruction for the assistant's **own** memory tool (memglow itself never edits notes). |
+| `related_notes` | `note` or `topic`, `limit` | Notes related to a note (its outgoing/incoming `[[wikilinks]]`, notes in the same sub-theme, and — when activity history exists — notes read on the same days) or to a free-text topic matched against titles, descriptions, ids and sub-themes. |
+| `note_cost` | `note` | Estimated tokens, the large-note threshold, status, and reads over the last 7 days (when available) for one note. |
+
+No write tool, and no tool ever returns a full note body: only ids, titles, token estimates,
+frontmatter descriptions and section headings — masked for secret-looking lines like everywhere
+else in memglow.
 
 <a id="your-notes"></a>
 ## 📝 Your notes

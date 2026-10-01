@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **MCP server** (`memglow-mcp`, `mcp-server/memglow-mcp.js`, bin `memglow-mcp`): a second,
+  standalone, read-only MCP server, separate from the MCP proxy. It starts entirely on its own —
+  no viewer, no network, no notes folder even required — and lets an assistant query its own
+  memory directly: `memory_health` (notes too large, costliest to read over 7 days, never read in
+  30 days, index size), `split_plan` (a deterministic split suggestion along a note's `##`
+  sections, or an honest "no split needed" under the threshold, plus a ready-to-paste English
+  instruction for the assistant's own memory tool), `related_notes` (notes related to a note —
+  links, sub-theme, and co-usage when activity counters exist — or to a free-text topic), and
+  `note_cost` (token estimate, threshold, status and 7-day reads for one note). No write tool, no
+  full note body ever returned (titles, descriptions and section headings only, secret-masked),
+  and no file is ever written — not the notes, not even memglow's own activity counters. Hand-
+  written JSON-RPC 2.0 over newline-delimited stdio, zero dependency, same reasoning as the
+  existing MCP proxy. Reuses `lib/memory.js` and `lib/cost.js` — same token estimate, same split
+  rule, same secret masking as the viewer and the Memory cost panel.
+
 ## 0.3.1 — 2026-10-01
 
 ### Fixed

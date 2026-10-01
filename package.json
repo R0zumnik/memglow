@@ -6,7 +6,8 @@
   "main": "server.js",
   "bin": {
     "memglow": "bin/memglow.js",
-    "memglow-mcp-proxy": "mcp-proxy/memglow-mcp-proxy.js"
+    "memglow-mcp-proxy": "mcp-proxy/memglow-mcp-proxy.js",
+    "memglow-mcp": "mcp-server/memglow-mcp.js"
   },
   "files": [
     "server.js",
@@ -16,6 +17,7 @@
     "hooks/",
     "adapters/",
     "mcp-proxy/",
+    "mcp-server/",
     "docker-compose.example.yml",
     "memglow.config.example.json",
     "THIRD_PARTY_LICENSES",
