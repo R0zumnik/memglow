@@ -32,6 +32,7 @@ const { loadConfig, DEFAULT_THEMES } = require("../lib/config");
 const { createMemory, maskSecrets } = require("../lib/memory");
 const { createCounters } = require("../lib/counters");
 const { estimateTokens, sectionsOf, packSections, dayOf, daysBefore, WINDOW_DAYS } = require("../lib/cost");
+const { rankRelated } = require("../lib/related");
 
 const SERVER_NAME = "memglow-mcp";
 let SERVER_VERSION = "0.0.0";
@@ -200,35 +201,10 @@ function toolRelatedNotes(ctx, args) {
     const id = resolveNote(ctx.memory, args.note);
     if (!id) return { error: `Note not found: ${JSON.stringify(args.note)}` };
     const rec = ctx.memory.note(id, { withBody: false }); // gives outgoing/incoming links
-    const scored = new Map();
-    const bump = (oid, reason, weight) => {
-      if (oid === id || !byId.has(oid)) return;
-      const e = scored.get(oid) || { reasons: new Set(), score: 0 };
-      e.reasons.add(reason);
-      e.score += weight;
-      scored.set(oid, e);
-    };
-    for (const t of rec.outgoing) bump(t, "outgoing link", 3);
-    for (const t of rec.incoming) bump(t, "incoming link", 3);
-    for (const n of nodes) {
-      if (n.id !== id && n.subtheme && n.theme === rec.theme && n.subtheme === rec.subtheme) bump(n.id, "same sub-theme", 1);
-    }
-    if (ctx.haveCounters) {
-      const days = ctx.counters.days();
-      const sameDays = Object.keys(days).filter((d) => days[d] && days[d].notes && days[d].notes[id] && days[d].notes[id].read > 0);
-      const coReads = new Map();
-      for (const day of sameDays) {
-        for (const [oid, c] of Object.entries(days[day].notes)) {
-          if (oid === id || !c || !(c.read > 0)) continue;
-          coReads.set(oid, (coReads.get(oid) || 0) + c.read);
-        }
-      }
-      for (const [oid, n] of coReads) bump(oid, "co-usage", Math.min(n, 5));
-    }
-    const related = [...scored.entries()]
-      .sort((a, b) => b[1].score - a[1].score || (a[0] < b[0] ? -1 : 1))
-      .slice(0, limit)
-      .map(([oid, e]) => toRelatedEntry(byId.get(oid), [...e.reasons]));
+    const related = rankRelated({
+      id, theme: rec.theme, subtheme: rec.subtheme, outgoing: rec.outgoing, incoming: rec.incoming,
+      nodes, days: ctx.haveCounters ? ctx.counters.days() : null, limit,
+    }).map((r) => toRelatedEntry(byId.get(r.id), r.reasons));
     return {
       summary: `${related.length} note(s) related to "${rec.label}"${ctx.haveCounters ? "" : " (co-usage unavailable: no activity counters)"}.`,
       data: { id: rec.id, label: rec.label, related },
