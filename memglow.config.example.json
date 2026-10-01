@@ -22,7 +22,9 @@
   "showBodies": true,
   "largeNoteTokens": 5000,
   "splitChunkTokens": 2000,
-  "proxy": { "sizeWarning": true, "searchDetails": true, "suggestions": true, "dedupe": false, "toc": false },
+  "proxy": { "sizeWarning": true, "searchDetails": true, "suggestions": true, "dedupe": false, "toc": false, "archiveHint": false },
+  "archiveAfterDays": 105,
+  "archive": { "folder": "archive", "summaryNote": "archive-summary", "maxSuggestions": 20, "minSectionTokens": 100 },
   "pollMs": 2000,
   "assistant": {
     "enabled": false,

@@ -45,6 +45,7 @@
 | ⚡ **Assistant activity, live** | Hooks for Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Copilot and Cline — or an MCP proxy for any other client — report each read, search and write. The note flashes — 🔵 cyan for a read, 🔴 red-orange for a write, 🟣 violet for a search — and comets run along its links. |
 | 🎥 **Camera that follows** | Glides to what the assistant touches, frames a search's results, drifts back to the overview after a few calm seconds. |
 | 🪙 **Memory cost** | See roughly how many tokens your assistant spends reading its memory (≈ bytes ÷ 4): tokens read today and over 7 days, the notes that cost the most, notes too large to read comfortably, notes never read in 30 days. For each large note, a split along its `##` sections and a **Copy prompt for your AI** button. [More](#memory-cost) |
+| 🗄️ **Archive tier** | Sections unused for months (≈ 3.5 by default) move, word for word, to an archive note of the same theme, with a one-line summary each; the live memory stays small, nothing is lost. [More](#archive) |
 | 🗂️ **Themes & sub-themes** | Notes cluster by theme with relay bubbles for sub-themes — from frontmatter or folder names. |
 | 🎛️ **Tune it live** | Background, glow, bubble size, size by links or token cost, names and name distance, spread, gravity, spacing, signal speed, links at rest, auto-rotate, find-a-note. Saved in your browser. [Settings](#settings) |
 | 🔒 **Private by design** | Localhost by default, read-only access to your notes (the optional assistant writes only what you approve), secret-looking lines masked. Hooks send note names only, never content. No CDN, no analytics. |
@@ -92,11 +93,12 @@ own memory, from the activity your hooks report:
 
 Numbers are **estimates** (≈ bytes ÷ 4, not a tokenizer), meant to compare notes with each
 other — memglow promises no saving. Memory cost never touches your notes: the counts (note
-ids and numbers only, 90 days) live in its own data folder, `~/.memglow` by default
+ids, days and numbers only; per-day counts kept 90 days, plus the last day each note was read, found or written) live in its own data folder, `~/.memglow` by default
 (`MEMGLOW_DATA_DIR`, `/data` in Docker). A note whose text changes on disk counts as a write even
 without a hook (an assistant without hooks, an edit by hand); when a hook reports the same write
 within 15 seconds, it is counted once. Activity sent with `"demo": true` is animated but not
-counted. The panel refreshes a second or two after each activity or note change. The bubble size can follow the token cost too: *Settings → Size by → Token cost*.
+counted. The panel refreshes a second or two after each activity or note change. Its
+**Archive** block lists sections unused for months — see [Archive tier](#archive). The bubble size can follow the token cost too: *Settings → Size by → Token cost*.
 
 <a id="assistant"></a>
 ## 🤖 Assistant (optional, off by default)
@@ -211,6 +213,79 @@ you set `maxTokens`.
 With **basic-memory**, memglow writes the Markdown files directly; basic-memory re-indexes changed
 files on its own (its sync watches the folder). New notes have no `permalink` until basic-memory
 adds one.
+
+<a id="archive"></a>
+## 🗄️ Archive tier
+
+Parts of notes nobody has used for months still cost tokens every time their note is read. The
+archive tier moves those **sections** (not only whole notes) out of the live memory, into an
+archive note of the **same theme**, and keeps a compact **archive summary** — one line per archived
+section. Retrieval order for the assistant: **the live memory first**; the archive summary only
+when nothing was found there; then the archived section itself. **Nothing is ever lost**: each
+section is moved word for word, and its note keeps a one-line link to it.
+
+**Which sections are "dormant"** (Memory cost → *Archive* block, read only). A section S of note N
+is listed when all of this holds:
+
+1. **Enough history**: activity counting started at least `archiveAfterDays` days ago (default
+   **105**, about 3.5 months). Before that, the block says *Not enough data yet since <day>* and
+   when it will start.
+2. N was **not read** during those days, and **did not appear in search results** (activity
+   counters, per note).
+3. S was **not edited** during those days: checked **per section** once memglow's section log
+   (`section-ages.json` in its data folder: a hash and a first-seen day per section, never text)
+   covers the whole window; until then, **per note** (no write counted, and the note's body
+   unchanged on disk since the cutoff).
+4. S is a heading section (the note's top heading level, sub-sections included) of at least
+   `archive.minSectionTokens` (100) tokens — never the text before the first heading, an index
+   note, a note without a theme, or a note already in the archive folder. At most
+   `archive.maxSuggestions` (20) are listed, biggest first.
+
+**Honest limits.** The counters only see **whole-note** reads and searches: a hook or the MCP proxy
+reports "note X was read", never which part. So reads and searches are judged per note — a note
+read once in the window keeps all its sections live — and only *edits* can be judged per section.
+A read nobody reported (an assistant without hooks, you in an editor) is invisible to memglow.
+After an archive, the note counts as written, so with the per-note check its other sections wait
+another full window. The figures are estimates (≈ bytes ÷ 4).
+
+**The move** — for each chosen section:
+
+- the section goes, **verbatim**, to `archive/<theme>-archive.md` (created with `theme: <theme>`,
+  `subtheme: archive`, `memglow_archive: true`), right after a marker line
+  `<!-- memglow:archived from="<note>" date="YYYY-MM-DD" -->`; an existing archive note is only
+  appended to;
+- the original note keeps one line in its place, e.g.
+  `Archived: Old plan → [[projects-archive#Old plan]] (2026-10-01)`; nothing else in it changes,
+  frontmatter included;
+- `archive/archive-summary.md` (`memglow_archive_summary: true`) is rebuilt from every archive
+  note, one line each, newest first:
+  `- 2026-10-01 · Old plan · from [[old-project]] → [[projects-archive#Old plan]] · ≈ 420 tokens`.
+  About 25-30 tokens per line: small by construction (the panel shows its size).
+
+**Three ways to do it**, from the *Archive* block (tick the sections you want):
+
+- **Copy prompt for your AI** — always there: a ready-to-paste prompt asking your assistant to do
+  the move with its own memory tool, in exactly this format, showing you the plan first.
+- **Prepare without AI** (assistant on) — memglow builds the move itself. A verbatim move needs no
+  judgement, so this is the safest path.
+- **Do it with <provider>** (assistant on) — the AI **only reviews the list** (titles, sizes, last
+  read day, a few lines of each section, secret-looking lines masked) and answers which sections to
+  archive and which to keep live, with a reason. memglow then builds the move itself: the AI never
+  writes any file content.
+
+Either way it goes through the [assistant](#assistant)'s safeguards: memglow checks the plan —
+**nothing lost** (each original note rebuilds exactly from the note and its archived sections;
+each section is in its archive note once, word for word), **same theme** (every archive note has
+the theme of the notes it receives; no `theme`/`subtheme` of an existing note changes), **no
+overwrite** (a file memglow did not make is never touched; a new file never replaces one), **valid
+links** (every `[[…#…]]` names an existing note and heading) — shows the exact diff, and writes
+only after *Apply this plan* (one-time server token), after a backup, with **Undo**. The check
+runs again right before writing.
+
+For the assistant: `memglow-mcp` has a read-only [`archive_lookup`](#mcp-server) tool, and the
+MCP proxy an optional [archive hint](#mcp-proxy) (lever 6, off by default). Search engines that
+index your notes folder (basic-memory…) still index the archive notes: archived text stays
+findable, it just stops costing tokens when its original note is read.
 
 <a id="settings"></a>
 ## 🎛️ Settings
@@ -421,6 +496,7 @@ server's own content; 4 and 5 may replace a read answer, so they are off by defa
 | 3 | `suggestions` / `MEMGLOW_PROXY_SUGGESTIONS` | on | After a read: up to 3-5 related notes (links, sub-theme, co-usage), names and sizes only. |
 | 4 | `dedupe` / `MEMGLOW_PROXY_DEDUPE` | off | An unchanged note re-read in the same session → a short "unchanged, ≈N tokens saved" notice. |
 | 5 | `toc` / `MEMGLOW_PROXY_TOC` | off | A large note → its outline with ≈tokens per section first; then one section on demand. |
+| 6 | `archiveHint` / `MEMGLOW_PROXY_ARCHIVE_HINT` | off | A search that finds nothing in the live memory (no result, or only [archive](#archive) notes) → `memglow: nothing found in the live memory — the archive summary lists: …` with the **titles** of the archived sections that match the query (never their text). |
 
 Levers 4 and 5 change what the assistant receives: **measure answer quality before enabling
 them**. Repeating the same read, or adding `"memglow_fresh": true`, always brings the full note
@@ -459,6 +535,7 @@ answer "no notes found".
 | `split_plan` | `note` | A deterministic split of one note along its `##` sections (same rule as the Memory cost panel), or an honest "no split needed" under the threshold — plus a ready-to-paste English instruction for the assistant's **own** memory tool (memglow itself never edits notes). |
 | `related_notes` | `note` or `topic`, `limit` | Notes related to a note (its outgoing/incoming `[[wikilinks]]`, notes in the same sub-theme, and — when activity history exists — notes read on the same days) or to a free-text topic matched against titles, descriptions, ids and sub-themes. |
 | `note_cost` | `note` | Estimated tokens, the large-note threshold, status, and reads over the last 7 days (when available) for one note. |
+| `archive_lookup` | `query`, `limit` | For when a search of the live memory found nothing: the [archived sections](#archive) whose topic or original note matches, read from the archive summary — title, original note, archive note, `[[link]]`, date, ≈tokens. Never the archived text. |
 
 No write tool, and no tool ever returns a full note body: only ids, titles, token estimates,
 frontmatter descriptions and section headings — masked for secret-looking lines like everywhere
@@ -509,6 +586,9 @@ With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 | `assistant.timeoutMinutes`, `assistant.maxBudgetUsd` | `10`, — | stop a proposal after this long; spending cap for Claude Code |
 | `assistant.backup` | `auto` | `auto` (git snapshot if the notes are a git repository, else a copy), `git` or `copy` |
 | `assistant.allowMissingLines` | `0` | how many original lines may be missing from a proposal (0 = none) |
+| `MEMGLOW_ARCHIVE_AFTER_DAYS` / `archiveAfterDays` (or `archive.afterDays`) | `105` | [archive tier](#archive): a section is dormant after this many days without a read, a search hit or an edit (7-3650) |
+| `archive.folder`, `archive.summaryNote` | `archive`, `archive-summary` | where archive notes and the archive summary go (inside the notes folder) |
+| `archive.maxSuggestions`, `archive.minSectionTokens` | `20`, `100` | at most this many dormant sections listed (biggest first); smaller sections are never suggested |
 | `themes`, `themeByFolder`, `defaultTheme`, `subthemeLabels`, `title` | — | config file only |
 
 <a id="docker"></a>

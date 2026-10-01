@@ -100,6 +100,7 @@ about. Rules, for every lever:
 | 3 | `suggestions` | **on** | After a note is read: `memglow: related notes: A (≈t), B (≈t), C (≈t)` — linked notes, same sub-theme and, when activity counters exist, notes usually read the same days. 3 by default (`suggestionsMax`, up to 5); notes already read in the session are skipped. |
 | 4 | `dedupe` | off | A note re-read in the same session with **exactly the same answer** gets a short "unchanged since you read it earlier in this session (≈N tokens saved)" instead of its content (only when that is shorter). |
 | 5 | `toc` | off | A note over the threshold first comes back as its description plus its sections with ≈tokens each; the assistant then asks for one section (`"memglow_section": "Decisions"` or `"3"`), cut verbatim from the server's answer. |
+| 6 | `archiveHint` | off | A search that finds nothing in the live memory (an empty answer such as `No results` or `"results": []`, or hits only in the [archive folder](../README.md#archive)) → after the server's answer: `memglow: nothing found in the live memory — the archive summary lists: "Router setup" (from \`home-net\`, archived 2026-06-01 in \`habits-archive\`, ≈420 tokens)`. Titles of the archived sections matching the query (up to `archiveHintMax`, 5), read from the archive summary note — never their text. Nothing matches: a one-line pointer to the summary note. No archive summary: nothing added. |
 
 > **Levers 4 and 5 change what the assistant receives. Measure answer quality before enabling
 > them**, not only the tokens saved: an assistant whose context was compacted may no longer have
@@ -171,6 +172,8 @@ sets `memoryDir`), or the file named by `MEMGLOW_CONFIG`:
     "suggestionsMax": 3,
     "dedupe": false,
     "toc": false,
+    "archiveHint": false,
+    "archiveHintMax": 5,
     "readTools": ["read_note", "view_note", "read_content", "fetch", "build_context"],
     "multiNoteTools": ["build_context"],
     "searchTools": ["search_notes", "search"],
@@ -186,7 +189,7 @@ Environment variables win over the file:
 
 | Variable | Meaning |
 |---|---|
-| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
+| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
 | `MEMGLOW_PROXY_READ_TOOLS`, `MEMGLOW_PROXY_MULTI_NOTE_TOOLS`, `MEMGLOW_PROXY_SEARCH_TOOLS`, `MEMGLOW_PROXY_WRITE_TOOLS` | comma-separated tool names (defaults above: basic-memory's) |
 | `MEMGLOW_LARGE_NOTE_TOKENS` | the threshold (default 5000) |
 | `MEMGLOW_MEMORY_DIR` (or `MEMORY_DIR`) | the notes folder, if not in the config file |

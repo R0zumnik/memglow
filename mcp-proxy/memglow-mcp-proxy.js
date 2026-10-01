@@ -324,7 +324,7 @@ function createHttpProxy(o) {
 if (require.main === module) {
   const o = parseArgs(process.argv.slice(2));
   if (o.help) {
-    process.stdout.write("usage:\n  memglow-mcp-proxy [--name NAME] -- <memory MCP server command>\n  memglow-mcp-proxy --upstream URL --listen HOST:PORT [--name NAME]\nlevers (v0.4): MEMGLOW_PROXY_SIZE_WARNING, _SEARCH_DETAILS, _SUGGESTIONS (default on), MEMGLOW_PROXY_DEDUPE, _TOC (default off)\n  or memglow.config.json → \"proxy\": { ... } — see mcp-proxy/README.md\n");
+    process.stdout.write("usage:\n  memglow-mcp-proxy [--name NAME] -- <memory MCP server command>\n  memglow-mcp-proxy --upstream URL --listen HOST:PORT [--name NAME]\nlevers (v0.4): MEMGLOW_PROXY_SIZE_WARNING, _SEARCH_DETAILS, _SUGGESTIONS (default on), MEMGLOW_PROXY_DEDUPE, _TOC, _ARCHIVE_HINT (default off)\n  or memglow.config.json → \"proxy\": { ... } — see mcp-proxy/README.md\n");
     process.exit(0);
   }
   if (o.upstream) {

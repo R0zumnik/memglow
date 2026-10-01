@@ -180,6 +180,77 @@ function costNeverRead(nr, colors) {
   }).join("") + '</ul>' + (more > 0 ? '<p class="mg-cost__empty">+ ' + costNumber(more) + ' more.</p>' : '');
 }
 
+// ---- Archive tier (lib/archive.js): dormant sections ----
+
+// Label of the default AI, for "Do it with <provider>" (set by the page).
+var costProvider = "";
+
+/** Today as "YYYY-MM-DD" (local). */
+function costToday() {
+  var d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+/**
+ * Ready-to-paste English prompt asking an AI assistant to archive the chosen dormant sections with
+ * its own memory tool, in memglow's archive format (so the archive summary stays readable by
+ * memglow and its `archive_lookup` tool). `list` = chosen sections of /api/cost → archive.
+ */
+function costArchivePrompt(a, list, names, today) {
+  var day = today || costToday();
+  var lines = [];
+  lines.push("Please archive some dormant sections of my AI memory: move them, word for word, out of the notes that are read every day, into archive notes. Show me the plan BEFORE writing anything.");
+  lines.push("");
+  lines.push("memglow counted that the notes below were not read, nor found by a search, for " + a.afterDays + " days (since " + a.cutoff + "), and that these sections were not edited in that time:");
+  list.forEach(function (s, i) {
+    lines.push((i + 1) + ". Section \"" + s.title + "\" of note \"" + s.label + "\" (id: " + s.note + ", group: " + costGroupName(s.theme, names) + ") — ≈ " + costNumber(s.tokens) + " tokens");
+  });
+  lines.push("");
+  lines.push("Rules:");
+  lines.push("- Move each section (its heading and everything under it, sub-sections included) WORD FOR WORD to the archive note of the SAME group: " + a.folder + "/<group id>-archive.md (for example " + a.folder + "/" + (list[0] ? list[0].theme : "projects") + "-archive.md). Create it if needed, with the frontmatter keys `theme: <group id>`, `subtheme: archive` and `memglow_archive: true`. Never rewrite, shorten or summarise archived text.");
+  lines.push("- In the archive note, put this line right before each moved section: <!-- memglow:archived from=\"<note id>\" date=\"" + day + "\" -->");
+  lines.push("- In the original note, replace the section by ONE line: Archived: <section title> → [[<group id>-archive#<section title>]] (" + day + "). Change nothing else in that note, frontmatter included.");
+  lines.push("- Add one line per archived section to the archive summary " + a.folder + "/" + a.summaryNote + ".md (create it with the frontmatter key `memglow_archive_summary: true` if needed): - " + day + " · <section title> · from [[<note id>]] → [[<group id>-archive#<section title>]] · ≈ <tokens> tokens");
+  lines.push("- Keep every note in its group: do not change any `theme` or `subtheme` (or `sous_theme`), and do not create, rename or remove groups.");
+  lines.push("- Never overwrite or delete a note. If an archive note already has a section with the same title, stop and ask me.");
+  lines.push("- Use only your memory tool (the one you normally use to read and write these notes). First show me the plan, then wait for my OK before writing.");
+  return lines.join("\n");
+}
+
+/** Archive block: dormant sections with checkboxes, the estimated gain, and the actions. */
+function costArchive(a, colors) {
+  if (!a) return "";
+  if (!a.available) {
+    return '<p class="mg-cost__empty">Not enough data yet' + (a.since ? ' since ' + costEsc(costDay(a.since)) : '') + ' — a section is suggested only after ' +
+      costNumber(a.afterDays) + ' days of counted activity' + (a.readyOn ? ' (from ' + costEsc(costDay(a.readyOn)) + ')' : '') + '.</p>';
+  }
+  if (!a.sections.length) return '<p class="mg-cost__empty">No dormant section: every note was read, found or edited in the last ' + costNumber(a.afterDays) + ' days.</p>';
+  var more = a.total - a.sections.length;
+  var hint = '<p class="mg-arch__hint">Their notes were not read nor found by a search for ' + costNumber(a.afterDays) + ' days, and the sections were not edited (' +
+    (a.basis === "section" ? "checked per section" : "checked per note") + '). memglow only sees whole-note reads, so a note read once keeps all its sections live.</p>';
+  if (!a.withTitles) {
+    return '<p class="mg-cost__empty">' + costPlural(a.total, "dormant section") + ', ' + costTokens(a.totalTokens) + ' tokens. Section titles are hidden (MEMGLOW_SHOW_BODIES is off).</p>' + hint;
+  }
+  var list = '<ul class="mg-cost__list mg-arch__list">' + a.sections.map(function (s) {
+    return '<li class="mg-arch__item"><label class="mg-arch__row"><input type="checkbox" data-archive-key="' + costEsc(s.key) + '" checked>' +
+      costName(s, colors) + '<span class="mg-arch__title">§ ' + costEsc(s.title) + '</span>' +
+      '<strong class="mg-cost__num">' + costTokens(s.tokens) + '</strong>' +
+      '<span class="mg-cost__det">' + (s.lastRead ? 'last read ' + costEsc(costDay(s.lastRead)) : 'not read since counting began') + '</span></label></li>';
+  }).join("") + '</ul>' + (more > 0 ? '<p class="mg-cost__empty">+ ' + costPlural(more, "more section") + ' (the biggest are listed).</p>' : '');
+  var btns = '<div class="mg-arch__btns"><button type="button" class="bn-btn mg-cost__copy" data-archive-copy="1">Copy prompt for your AI</button>' +
+    (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-archive-ai="1">Do it with ' + costEsc(costProvider || "your AI") + '</button>' +
+      '<button type="button" class="bn-btn mg-cost__copy" data-archive-plain="1">Prepare without AI</button>' : '') + '</div>';
+  return hint + list + '<p class="mg-arch__gain" id="mg-arch-gain">' + costArchiveGain(a.sections) + '</p>' + btns;
+}
+
+/** "3 sections · live memory ≈ 1,200 tokens smaller · archive summary + ≈ 75 tokens" for the chosen ones. */
+function costArchiveGain(chosen) {
+  if (!chosen.length) return "No section selected.";
+  var saved = 0, line = 0;
+  chosen.forEach(function (s) { saved += Math.max(0, s.tokens - (s.stubTokens || 0)); line += s.lineTokens || 0; });
+  return '<strong>' + costPlural(chosen.length, "section") + '</strong> · live memory <strong>' + costTokens(saved) + '</strong> tokens smaller (each section leaves a one-line link) · archive summary + ' + costTokens(line) + ' tokens';
+}
+
 /** The whole panel body, or a short message when there is nothing to show. */
 function costRender(c, colors) {
   if (!c || !c.read) return '<p class="mg-cost__empty">Memory cost is not available.</p>';
@@ -190,11 +261,12 @@ function costRender(c, colors) {
   html += '<figure class="mg-cost__block"><figcaption>Too large (&gt; ' + costEsc(costTokens(c.largeNoteTokens)) + ' tokens)</figcaption>' + costLarge(c.tooLarge, colors, c) + '</figure>';
   html += '<figure class="mg-cost__block"><figcaption>Never read in 30 days</figcaption>' + costNeverRead(c.neverRead, colors) + '</figure>';
   html += '</div>';
+  if (c.archive) html += '<figure class="mg-cost__block mg-arch" id="mg-arch"><figcaption>Archive · sections unused for ' + costNumber(c.archive.afterDays) + ' days</figcaption>' + costArchive(c.archive, colors) + '</figure>';
   return html;
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { setAssistant: function (v) { costAssistant = !!v; }, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName };
+  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costProvider = label || ""; }, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName };
 }
 
 (function () {
@@ -209,8 +281,20 @@ if (typeof module !== "undefined" && module.exports) {
     var cfg = JSON.parse(document.getElementById("memglow-config").textContent || "{}");
     (cfg.themes || []).forEach(function (t) { colors[t.id] = t.color; names[t.id] = t.label; });
     costAssistant = cfg.assistant === true;
+    costProvider = typeof cfg.assistantProvider === "string" ? cfg.assistantProvider : "";
   } catch (e) { /* default colours */ }
   var last = null, pending = null, loading = false, again = false;
+  var archOff = {}; // archive sections the user unticked (kept across refreshes)
+
+  function archChosen() {
+    if (!last || !last.archive || !last.archive.sections) return [];
+    return last.archive.sections.filter(function (s) { return !archOff[s.key]; });
+  }
+  function archSync() {
+    Array.prototype.forEach.call(body.querySelectorAll("[data-archive-key]"), function (cb) { cb.checked = !archOff[cb.getAttribute("data-archive-key")]; });
+    var g = document.getElementById("mg-arch-gain");
+    if (g) g.innerHTML = costArchiveGain(archChosen());
+  }
 
   function load() {
     if (loading) { again = true; return; } // asked during a load: load again right after
@@ -231,6 +315,7 @@ if (typeof module !== "undefined" && module.exports) {
       var active = document.activeElement;
       var focused = active && body.contains && body.contains(active) && active.getAttribute ? active.getAttribute("data-copy") : null;
       body.innerHTML = costRender(c, colors);
+      archSync();
       Array.prototype.forEach.call(body.querySelectorAll(".mg-cost__item"), function (li) {
         var row = li.querySelector("[data-note]"), d = li.querySelector("details");
         if (row && d && open[row.getAttribute("data-note")]) d.open = true;
@@ -301,8 +386,34 @@ if (typeof module !== "undefined" && module.exports) {
     if (stage && stage.scrollIntoView) stage.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  function copied(btn, label) {
+    btn.textContent = "Copied ✓";
+    btn.classList.add("mg-cost__copy--done");
+    setTimeout(function () { btn.textContent = label; btn.classList.remove("mg-cost__copy--done"); }, 2000);
+  }
+  body.addEventListener("change", function (e) {
+    var cb = e.target;
+    if (!cb || !cb.getAttribute || !cb.hasAttribute("data-archive-key")) return;
+    if (cb.checked) delete archOff[cb.getAttribute("data-archive-key")];
+    else archOff[cb.getAttribute("data-archive-key")] = true;
+    archSync();
+  });
+
   body.addEventListener("click", function (e) {
     var t = e.target;
+    var arch = t.closest && t.closest("[data-archive-copy],[data-archive-ai],[data-archive-plain]");
+    if (arch) {
+      var chosen = archChosen();
+      if (!chosen.length) return;
+      if (arch.hasAttribute("data-archive-copy")) {
+        var text = costArchivePrompt(last.archive, chosen, names);
+        copyText(text).then(function () { copied(arch, "Copy prompt for your AI"); }).catch(function () { arch.textContent = "Copy failed: select the sections again"; });
+        return;
+      }
+      var keys = chosen.map(function (s) { return s.key; });
+      try { document.dispatchEvent(new CustomEvent("memglow:archive", { detail: { sections: keys, ai: arch.hasAttribute("data-archive-ai") } })); } catch (e3) { /* old browser */ }
+      return;
+    }
     var btn = t.closest && t.closest("[data-copy]");
     if (btn) { copyPrompt(btn); return; }
     var ai = t.closest && t.closest("[data-assist]");

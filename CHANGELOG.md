@@ -4,6 +4,33 @@
 
 ### Added
 
+- **Archive tier** (`lib/archive.js`): sections of notes unused for months move, word for word, to
+  an archive note of the same theme (`archive/<theme>-archive.md`), the original note keeps one
+  line `Archived: <section> → [[<theme>-archive#<section>]] (YYYY-MM-DD)`, and an archive summary
+  (`archive/archive-summary.md`, one ≈ 25-token line per archived section) is rebuilt at each
+  application. **Detection** (read only, *Archive* block of Memory cost): a section is dormant when
+  its note was neither read nor found by a search for `archiveAfterDays` days (default 105) and
+  the section was not edited in that time — per section once memglow's new section log
+  (`section-ages.json`: hashes and days, never text) covers the window, per note before that; it
+  needs that much counted history first (*Not enough data yet since …*), lists at most 20
+  sections (biggest first), never the intro, index notes, notes without a theme or the archive
+  itself. Documented limit: counters only see whole-note reads, so reads and searches are judged
+  per note. **Applying**: *Copy prompt for your AI* always; with the assistant on, *Prepare
+  without AI* (memglow builds the verbatim move itself) or *Do it with <provider>* (the AI only
+  reviews the list — titles, sizes, a few masked lines — and chooses what to archive; memglow
+  builds the move). Strict checks before showing and again before writing: every original note
+  rebuilds exactly from the note and its archived sections, each section is in its archive note
+  once and verbatim, same theme, append-only archive notes, never a file memglow did not make,
+  every link names an existing note and heading; then diff, one-time token, backup, Undo.
+  New route `POST /api/assistant/archive` (same access, CSRF and rate rules as the others).
+- **`archive_lookup`** in `memglow-mcp` (read only): the archived sections whose topic or original
+  note matches a query, from the archive summary — references only, never the archived text.
+- **Proxy lever 6, `archiveHint`** (off by default, `MEMGLOW_PROXY_ARCHIVE_HINT`): when a search finds
+  nothing in the live memory, adds "memglow: nothing found in the live memory — the archive summary
+  lists: …" with matching archived section titles only.
+- Activity counters keep `started` (first day of counting) and `last` (last read / search / write
+  day per note) beyond the 90-day purge; older counter files are migrated on load.
+
 - **Assistant (optional, off by default)**: a *Do it with Claude* button next to *Copy prompt for
   your AI* on each large or costly note, and an *Assistant* panel below Memory cost. **The AI only
   proposes; memglow only writes what you approved in a diff, with a backup and Undo.** The user's

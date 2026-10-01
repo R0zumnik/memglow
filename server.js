@@ -18,6 +18,8 @@ const { createCounters, createWriteDedup } = require("./lib/counters");
 const { computeCost, dayOf } = require("./lib/cost");
 const view = require("./lib/view");
 const { createAssistant } = require("./lib/assistant");
+const providers = require("./lib/assistant/providers");
+const archive = require("./lib/archive");
 
 const PUBLIC = path.join(__dirname, "public");
 const STATIC = {
@@ -61,8 +63,14 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
   // A write seen on disk (body changed, new note) counts as a write, unless a reported write on the
   // same note within ±15 s was already counted (and the other way round). See createWriteDedup.
   const dedup = createWriteDedup(15000);
+  // Archive tier: the first day each section's exact text was seen (section-level "modified").
+  const sectionLog = archive.createSectionLog({ dir: dataDir });
+  let sectionsObserved = false;
   if (memory.onWrite) {
-    memory.onWrite((id, t) => { if (dedup.changed(id, t)) counters.add({ type: "write", ids: [id], t }); });
+    memory.onWrite((id, t) => {
+      if (dedup.changed(id, t)) counters.add({ type: "write", ids: [id], t });
+      if (sectionsObserved && memory.rawBody) sectionLog.observe(id, memory.rawBody(id));
+    });
   }
   // The saved view of this instance (settings, layout, camera): one per instance, lib/view.js.
   views = views || view.createViewStore({
@@ -80,6 +88,8 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
         const c = cost();
         return (c.tooLarge || []).find((n) => n.id === id) || (c.top || []).find((n) => n.id === id && n.tokens > c.chunkTokens) || null;
       },
+      // Only sections of the current dormancy report can be archived.
+      archiveReport: () => cost().archive,
     })
     : null;
   const statics = { ...STATIC };
@@ -158,6 +168,8 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
       subthemeLabels: config.subthemeLabels,
       showBodies: config.showBodies,
       assistant: !!assistant,
+      // Label of the default AI ("Do it with <provider>"): a name, never a setting or a key.
+      assistantProvider: assistant ? ((providers.get(config.assistant.provider) || providers.get("claude-code")).label || "your AI") : "",
     };
     // Theme colours: legend dots, and the group tag of the activity journal (tinted by --c).
     const dots = config.themes.map((t) => `.mem-dot--${t.id}{background:${t.color};box-shadow:0 0 6px ${t.color}}.mem-grp--${t.id}{--c:${t.color}}`).join("");
@@ -195,6 +207,7 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
   function computeCostNow(notes) {
     const opts = { since: counters.since(), largeNoteTokens: config.largeNoteTokens, chunkTokens: config.splitChunkTokens };
     const first = computeCost(counters.days(), notes, Date.now(), opts);
+    first.archive = archiveNow(notes);
     if (!config.showBodies) return first;
     const bodies = {};
     for (const n of first.tooLarge.concat(first.top).slice(0, COST_SECTIONS_MAX)) {
@@ -202,8 +215,31 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
       const b = memory.maskedBody(n.id);
       if (b != null) bodies[n.id] = b;
     }
-    return computeCost(counters.days(), notes, Date.now(), { ...opts, bodies });
+    const out = computeCost(counters.days(), notes, Date.now(), { ...opts, bodies });
+    out.archive = first.archive;
+    return out;
   }
+  /**
+   * Archive tier (lib/archive.js): dormant sections, read only. Section titles only when note bodies
+   * may be shown. Keys are hashes (no content); they are what an archive proposal refers to.
+   */
+  function archiveNow(notes) {
+    if (!memory.rawBody) return null;
+    if (!sectionsObserved) {
+      sectionsObserved = true;
+      for (const n of notes) sectionLog.observe(n.id, memory.rawBody(n.id));
+    }
+    // Recomputed only when notes, the day, or a note's last read/search/write day change.
+    const key = [memory.version(), dayOf(Date.now()), counters.lastVersion ? counters.lastVersion() : counters.version(), config.showBodies].join(":");
+    if (archiveCache && key === archiveKey) return archiveCache;
+    archiveKey = key;
+    sectionLog.keep(new Set(notes.map((n) => n.id)));
+    return (archiveCache = archive.detectDormant({
+      notes, last: counters.last ? counters.last() : {}, started: counters.started ? counters.started() : counters.since(),
+      now: Date.now(), settings: config.archive, sectionLog, readBody: (id) => memory.rawBody(id), withTitles: config.showBodies,
+    }));
+  }
+  let archiveCache = null, archiveKey = "";
 
   return http.createServer((req, res) => {
     const url = new URL(req.url, "http://localhost");
@@ -285,7 +321,7 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
     // Assistant actions (only when enabled): same access rule as the page, same-origin browser request
     // with memglow's header (CSRF), rate limited, small JSON body. Every one of them can start a
     // process, spend tokens or write notes.
-    const am = assistant && req.method === "POST" && /^\/api\/assistant\/(propose|confirm|apply|undo|cancel)$/.exec(p);
+    const am = assistant && req.method === "POST" && /^\/api\/assistant\/(propose|archive|confirm|apply|undo|cancel)$/.exec(p);
     if (am) {
       if (!viewerAllowed(req)) { req.resume(); return unauthorized(); }
       if (!sameOriginWrite(req)) { req.resume(); return json(res, 403, { error: "forbidden" }); }
@@ -308,6 +344,7 @@ function createServer(config, memory, { counters, views, assistantEnv } = {}) {
         let r;
         switch (am[1]) {
           case "propose": r = assistant.propose(String(body.note || ""), { extra: typeof body.extra === "string" ? body.extra : "", provider: typeof body.provider === "string" ? body.provider.slice(0, 40) : "" }); break;
+          case "archive": r = assistant.proposeArchive(Array.isArray(body.sections) ? body.sections.slice(0, 101) : null, { ai: body.ai === true, provider: typeof body.provider === "string" ? body.provider.slice(0, 40) : "" }); break;
           case "confirm": r = assistant.confirm(id); break;
           case "apply": r = assistant.apply(id, body.token); break;
           case "undo": r = assistant.undo(id); break;
