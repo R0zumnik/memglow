@@ -17,6 +17,11 @@ const TOOLS = [
   { name: "write_note", description: "Write", inputSchema: strict({ title: { type: "string" }, content: { type: "string" }, directory: { type: "string" } }, ["title", "content", "directory"]) },
   { name: "edit_note", description: "Edit", inputSchema: strict({ identifier: { type: "string" }, operation: { type: "string" }, content: { type: "string" } }, ["identifier", "operation", "content"]) },
   { name: "list_directory", description: "List", inputSchema: strict({ dir_name: { type: "string" } }, []) },
+  // Like real basic-memory: always listed, but it answers "Unsupported MCP client" itself to any
+  // caller that is not its OpenAI/ChatGPT adapter — the proxy's hideUnsupportedTools lever is what
+  // keeps OTHER clients from ever seeing them in tools/list, not this fixture.
+  { name: "search", description: "ChatGPT-compatible search", inputSchema: strict({ query: { type: "string" } }, ["query"]) },
+  { name: "fetch", description: "ChatGPT-compatible fetch", inputSchema: strict({ id: { type: "string" } }, ["id"]) },
 ];
 
 function find(identifier) {
@@ -60,6 +65,7 @@ function call(name, args) {
     return { result: text(`# Edited note (${args.operation})\npermalink: ${path.relative(DIR, f).replace(/\.md$/, "")}`) };
   }
   if (name === "list_directory") return { result: text("people/alice.md\nprojects/big.md") };
+  if (name === "search" || name === "fetch") return { result: text(`${name}-called:${JSON.stringify(args)}`) };
   return { error: { code: -32601, message: "unknown tool " + name } };
 }
 

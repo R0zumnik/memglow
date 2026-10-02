@@ -626,6 +626,7 @@ server's own content; 4 and 5 may replace a read answer, so they are off by defa
 | 4 | `dedupe` / `MEMGLOW_PROXY_DEDUPE` | off | An unchanged note re-read in the same session → a short "unchanged, ≈N tokens saved" notice. |
 | 5 | `toc` / `MEMGLOW_PROXY_TOC` | off | A large note → its outline with ≈tokens per section first; then one section on demand. |
 | 6 | `archiveHint` / `MEMGLOW_PROXY_ARCHIVE_HINT` | off | A search that finds nothing in the live memory (no result, or only [archive](#archive) notes) → `memglow: nothing found in the live memory — the archive summary lists: …` with the **titles** of the archived sections that match the query (never their text). |
+| 7 | `hideUnsupportedTools` / `MEMGLOW_PROXY_HIDE_UNSUPPORTED` | off | Hides, from `tools/list` and **per client session**, the tools a config table marks unsupported for that client — default: basic-memory's `search`/`fetch` (its ChatGPT-only adapters) hidden from any client that is not OpenAI's MCP client. A client that calls a hidden tool anyway is relayed unchanged; one unrecognised client is never filtered. |
 | — | `indexWarning` / `MEMGLOW_PROXY_INDEX_WARNING` | off | The **index** note read while above `indexWarningTokens` (default 2,000): `⚠ memglow: the index note … is loaded at every session` — suggests trimming it. Once per session. |
 
 Levers 4 and 5 change what the assistant receives: **measure answer quality before enabling

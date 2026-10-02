@@ -38,7 +38,7 @@ const WRITE_TOOLS = ["write_note", "edit_note", "delete_note", "move_note", "cre
 const PROMPT = (q) => "Answer the question below from the user's notes, which you can reach only through the memory tools. " +
   "Reply with the answer in one short sentence. If the notes do not contain the answer, say that you could not find it.\n\nQuestion: " + q;
 
-const LEVERS_OFF = { MEMGLOW_PROXY_SIZE_WARNING: "0", MEMGLOW_PROXY_SEARCH_DETAILS: "0", MEMGLOW_PROXY_SUGGESTIONS: "0", MEMGLOW_PROXY_DEDUPE: "0", MEMGLOW_PROXY_TOC: "0", MEMGLOW_PROXY_INDEX_WARNING: "0", MEMGLOW_PROXY_ARCHIVE_HINT: "0" };
+const LEVERS_OFF = { MEMGLOW_PROXY_SIZE_WARNING: "0", MEMGLOW_PROXY_SEARCH_DETAILS: "0", MEMGLOW_PROXY_SUGGESTIONS: "0", MEMGLOW_PROXY_DEDUPE: "0", MEMGLOW_PROXY_TOC: "0", MEMGLOW_PROXY_INDEX_WARNING: "0", MEMGLOW_PROXY_ARCHIVE_HINT: "0", MEMGLOW_PROXY_HIDE_UNSUPPORTED: "0" };
 const DEFAULTS_ON = { ...LEVERS_OFF, MEMGLOW_PROXY_SIZE_WARNING: "1", MEMGLOW_PROXY_SEARCH_DETAILS: "1", MEMGLOW_PROXY_SUGGESTIONS: "1" };
 const VARIANTS = {
   A: { label: "direct (no memglow)", proxy: null },
@@ -46,6 +46,8 @@ const VARIANTS = {
   C: { label: "proxy, default levers", proxy: DEFAULTS_ON },
   D: { label: "C + dedupe", proxy: { ...DEFAULTS_ON, MEMGLOW_PROXY_DEDUPE: "1" } },
   E: { label: "C + toc", proxy: { ...DEFAULTS_ON, MEMGLOW_PROXY_TOC: "1" } },
+  // H = B + hideUnsupportedTools only (isolates lever 7's own effect against the B control).
+  H: { label: "B + hideUnsupportedTools", proxy: { ...LEVERS_OFF, MEMGLOW_PROXY_HIDE_UNSUPPORTED: "1" } },
 };
 
 function args(argv) {

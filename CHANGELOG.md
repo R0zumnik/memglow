@@ -24,6 +24,19 @@
   levers neutral; `toc` −64 % of note text received, all answers correct, but +1 round trip
   (+12 % input tokens and time, −13 % cost); `dedupe` not measurable with one question per
   session; it also found the `structuredContent` bug fixed below.
+- **MCP proxy lever 7 — `hideUnsupportedTools`** (`lib/proxy-levers.js`, off by default,
+  `MEMGLOW_PROXY_HIDE_UNSUPPORTED`): the proxy reads `clientInfo` from each session's `initialize`
+  (one per stdio process, one per HTTP `Mcp-Session-Id`) and removes from `tools/list`, for that
+  client only, the tools a config table (`proxy.unsupportedTools`, replaces the default whole)
+  marks unsupported for it. Default table reproduces basic-memory 0.23's own rule, read from its
+  source rather than guessed: `search`/`fetch` (its ChatGPT-only adapters,
+  `chatgpt_tools.py`/`client_info.py`) are hidden from any client whose `clientInfo.name`/`title`
+  is not `openai-mcp` (or doesn't start with `openai-mcp/`) — matching the exact label OpenAI's
+  MCP client sends, not the product name "ChatGPT". An unknown client (no name/title) is never
+  filtered. A client that calls a hidden tool anyway is still relayed, untouched — this lever only
+  edits `tools/list`. Several clients on the same HTTP server (e.g. Claude Code and ChatGPT talking
+  to the same basic-memory) each see their own list. See `bench/RESULTS.md` →
+  "hideUnsupportedTools" for the measured effect and why it stays off by default.
 
 - **Settings → Forces** (Repulsion, Link force, Link distance, 0.2×–3×, a "Reset forces" button)
   and **Settings → Links → Link opacity** (0×–3×): multipliers around the values already set by

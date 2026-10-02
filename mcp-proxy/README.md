@@ -111,7 +111,51 @@ about. Rules, for every lever:
 | 4 | `dedupe` | off | A note re-read in the same session with **exactly the same answer** gets a short "unchanged since you read it earlier in this session (≈N tokens saved)" instead of its content (only when that is shorter). |
 | 5 | `toc` | off | A note over the threshold first comes back as its description plus its sections with ≈tokens each; the assistant then asks for one section (`"memglow_section": "Decisions"` or `"3"`), cut verbatim from the server's answer. |
 | 6 | `archiveHint` | off | A search that finds nothing in the live memory (an empty answer such as `No results` or `"results": []`, or hits only in the [archive folder](../README.md#archive)) → after the server's answer: `memglow: nothing found in the live memory — the archive summary lists: "Router setup" (from \`home-net\`, archived 2026-06-01 in \`habits-archive\`, ≈420 tokens)`. Titles of the archived sections matching the query (up to `archiveHintMax`, 5), read from the archive summary note — never their text. Nothing matches: a one-line pointer to the summary note. No archive summary: nothing added. |
+| 7 | `hideUnsupportedTools` | off | Removes, from `tools/list`, the tools a per-server table marks unsupported for the client that just said hello — never from a `tools/call`, which always reaches the real server untouched. |
 | — | `indexWarning` | off | Before the content of the **index** note when it is over `indexWarningTokens` (top-level key, default 2,000): `⚠ memglow: the index note "…" is ≈N tokens (index threshold T) and it is loaded at every session. Consider offering the user to trim it…`. Once per session. Replaces lever 1 for the index note when on. |
+
+### Lever 7 — `hideUnsupportedTools`: one client, one tool list
+
+Some memory servers expose tools that only work for one particular MCP client. basic-memory
+≥ 0.15 is one: its `search` and `fetch` tools (`src/basic_memory/mcp/tools/chatgpt_tools.py`) exist
+only to match the exact schema OpenAI's MCP connector for ChatGPT expects, and basic-memory's own
+`client_info_is_openai_mcp()` (`client_info.py`) rejects every other caller with
+`{"error": "Unsupported MCP client", …}` — yet the tool is listed to everyone, so an assistant that
+does not know better keeps calling it for nothing. In memglow's own benchmark (Claude Code + Haiku,
+[bench/RESULTS.md](../bench/RESULTS.md)), `search` was called in **197 of 210 runs**, always
+failing the same way.
+
+`hideUnsupportedTools` reproduces that exact rule instead of guessing one: for each session (one
+stdio process, or one HTTP `Mcp-Session-Id`), the proxy reads the `clientInfo` sent in `initialize`
+and, in the next `tools/list`, drops a tool when the client's **name or title** — trimmed,
+lower-cased — is not `openai-mcp` and does not start with `openai-mcp/` (the label OpenAI's MCP
+client actually sends; "ChatGPT" is the product name, not the wire value). A client that never
+sends a name or title is **never filtered** — unknown means cautious, not guilty. Calling a hidden
+tool anyway still reaches the real server: this lever only edits `tools/list`, it never fabricates
+an error or blocks a call. Several clients at once (e.g. Claude Code and ChatGPT talking to the
+same basic-memory over HTTP) each see their own list — no cross-session effect.
+
+Default table (`proxy.unsupportedTools` in the config, replaced whole, not merged, by any
+override):
+
+```json
+{ "basic-memory": { "search": ["openai-mcp"], "fetch": ["openai-mcp"] } }
+```
+
+The outer key is matched against the proxy's `--name` (case-insensitive, substring either way), so
+`--name basic-memory-mcp` still matches `"basic-memory"`. Add another server's tools, or loosen an
+allow list, by giving your own table — it replaces this one entirely, so repeat basic-memory's
+entry if you still want it.
+
+**Measured** ([bench/RESULTS.md](../bench/RESULTS.md) → "hideUnsupportedTools", Haiku, 31 runs):
+hiding `search` roughly halved how often Haiku attempted it (0.50 → 0.27 calls/run — not to zero:
+the model sometimes tries the name anyway from prior training-time familiarity with basic-memory's
+own tool pair), with accuracy unchanged. Every other measure (calls, tokens, time, cost) stayed
+inside this benchmark's noise floor except a small, real drop in output tokens. **Default: off**
+— the lever is zero-risk (pure removal from `tools/list`; a call that slips through is still
+relayed untouched), but the measured gain was not large or certain enough on this sample to flip
+memglow's own bar for an on-by-default lever. Turning it on is reasonable for a basic-memory setup
+behind a non-OpenAI client: `MEMGLOW_PROXY_HIDE_UNSUPPORTED=1`.
 
 > **Levers 4 and 5 change what the assistant receives. Measure answer quality before enabling
 > them**, not only the tokens saved: an assistant whose context was compacted may no longer have
@@ -191,6 +235,8 @@ sets `memoryDir`), or the file named by `MEMGLOW_CONFIG`:
     "toc": false,
     "archiveHint": false,
     "archiveHintMax": 5,
+    "hideUnsupportedTools": false,
+    "unsupportedTools": { "basic-memory": { "search": ["openai-mcp"], "fetch": ["openai-mcp"] } },
     "readTools": ["read_note", "view_note", "read_content", "fetch", "build_context"],
     "multiNoteTools": ["build_context"],
     "searchTools": ["search_notes", "search"],
@@ -206,7 +252,7 @@ Environment variables win over the file:
 
 | Variable | Meaning |
 |---|---|
-| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_INDEX_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
+| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_INDEX_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT`, `MEMGLOW_PROXY_HIDE_UNSUPPORTED` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
 | `MEMGLOW_PROXY_READ_TOOLS`, `MEMGLOW_PROXY_MULTI_NOTE_TOOLS`, `MEMGLOW_PROXY_SEARCH_TOOLS`, `MEMGLOW_PROXY_WRITE_TOOLS` | comma-separated tool names (defaults above: basic-memory's) |
 | `MEMGLOW_LARGE_NOTE_TOKENS` | the threshold (default 5000) |
 | `MEMGLOW_MEMORY_DIR` (or `MEMORY_DIR`) | the notes folder, if not in the config file |
@@ -214,9 +260,9 @@ Environment variables win over the file:
 | `MEMGLOW_PROXY_SAVINGS_FILE`, `MEMGLOW_PROXY_LOG` | `0` to stop writing the savings file / the stderr line |
 
 Without a notes folder, levers 2 and 3 stay silent and lever 1 estimates the size from the answer
-itself (without a theme). With all five levers off the proxy is a pure byte relay, exactly as in
-0.3. Sessions: one per proxy process in stdio mode (reset by `initialize`), one per
-`Mcp-Session-Id` in HTTP mode, where JSON answers the levers touch get a correct `Content-Length`
+itself (without a theme). With every lever off the proxy is a pure byte relay, exactly as in 0.3.
+Sessions: one per proxy process in stdio mode (reset by `initialize`), one per `Mcp-Session-Id` in
+HTTP mode, where JSON answers the levers touch get a correct `Content-Length`
 and server-sent events are rewritten event by event.
 
 ## Settings

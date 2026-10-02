@@ -149,6 +149,85 @@ round trip (`toc`) costs ≈ 1 s while saving 4,000 tokens of reading does not s
   (answer "You've hit your session limit", no model call) were discarded and re-run after the reset
   with the same plan (`--resume`).
 
+## hideUnsupportedTools (mini-bench, 2026-10-02)
+
+**Question.** basic-memory's own ChatGPT-compatibility tools, `search` and `fetch`
+(`src/basic_memory/mcp/tools/chatgpt_tools.py`), are always listed in `tools/list` but reject any
+caller that is not OpenAI's MCP client (`client_info_is_openai_mcp()`, `client_info.py`) — which is
+exactly what observation 5 above measured: Haiku called `search` in 197 of 210 Claude Code runs,
+always getting `"Unsupported MCP client"` back. Lever 7, `hideUnsupportedTools`, removes such a
+tool from `tools/list` for a client its config table says is not allowed to use it (default table:
+basic-memory's `search`/`fetch`, gated to `openai-mcp` — the exact rule read from basic-memory
+0.23's own source, not a guess). Does hiding it actually help, and does it cost anything?
+
+**What's different from the rest of this report — read before trusting the numbers.** This
+environment has no `docker`, `uvx` or `python3` available, so the real
+`ghcr.io/basicmachines-co/basic-memory` container could not be started. In its place, a small
+Node-only stand-in server (`fake-basic-memory.js`, not committed — built for this run only)
+re-implements, from basic-memory 0.23.2's actual source read on GitHub (quoted above): `read_note`
+/ `search_notes` (plain substring search, not basic-memory's real ranking) over a copy of the same
+225 generated notes `bench/generate.js` produces, and `search` / `fetch` with the **exact** gating
+rule and **exact** error payload (`{"results":[],"error":"Unsupported MCP client",...}`) copied
+from `chatgpt_tools.py`. It is not basic-memory, and this section's absolute numbers (tokens, time)
+are **not comparable** to the Haiku table above (different search quality, no real SQLite FTS);
+only the **B vs H comparison within this run** — same stand-in, same notes, same questions, only
+the lever flipped — is meaningful. The real, disposable-container protocol described in "How to
+reproduce" below still applies for anyone re-running this with docker available; this substitution
+is a limitation of the sandbox this run happened in, not a change to that protocol. The real
+production `basic-memory-server` container was never touched (confirmed `healthy` before and
+after); the real memory was never touched either (the stand-in only ever read a throw-away copy of
+the generated test notes, same as the rest of this report).
+
+**Protocol.** 10 of the 21 questions (`q01, q02, q05, q08, q09, q13, q16, q17, q19, q21` — a mix of
+small/large/link/none), × **B** (proxy, every lever off) and **H** (proxy, only
+`hideUnsupportedTools` on — isolating lever 7 against the same control the rest of this report
+uses) × 2 repetitions = 40 planned runs, Haiku only, `claude` CLI 2.1.283, same flags and clean
+environment as the rest of this report. Budget: **31 of 40 runs completed before the 0.60 $ cap
+for this run was reached** (total cost of this mini-bench: **0.615 $**; combined with ~0.04 $ of
+setup/smoke checks, **≈ 0.65 $ of the 1.00 $ budget given for this work** — no run ever failed
+before reaching the model, so the account's usage limit was never at risk here).
+
+| Variant | Correct | Tool calls | Input tokens (all) | Output tokens | Tool results ≈ tokens | Time (s) | Cost ($) | `search` tool calls |
+|---|---|---|---|---|---|---|---|---|
+| B (control) | 16/16 | 3.38 | 25,494 | 478.9 | 3,291 | 6.8 | 0.0205 | 8 (0.50/run) |
+| H (+ hideUnsupportedTools) | 15/15 | 3.20 (−7 % [−14, +5]) | 24,177 (−3 % [−8, +5]) | 468.1 (**−7 % [−10, −2]**) | 2,575 (−0 % [−2, +5]) | 7.2 (+5 % [−1, +12]) | 0.0192 (−2 % [−3, +1]) | 4 (0.27/run) |
+
+(Differences: ratio of per-question means against B, 95 % bootstrap interval over the 10 questions;
+**bold** = interval excludes 0 — `node bench/analyze.js`, same method as the rest of this report.)
+
+**Observations.**
+
+1. **The wasted call is reduced, not eliminated.** Hiding `search` from `tools/list` cut how often
+   Haiku attempted it by roughly half (0.50 → 0.27 calls per run) — but in 4 of the 15 `H` runs it
+   still emitted a `tools/call` for `search` even though the tool was never in its list. The most
+   likely explanation: Haiku has prior, training-time familiarity with basic-memory's own
+   `search`/`fetch` pair (the same pair this very report documents) and occasionally tries the name
+   anyway, the way a person might try a command they remember from a similar tool even after being
+   told it's gone. Each attempt still got basic-memory's real `"Unsupported MCP client"` answer (the
+   lever never fabricates a different one) and the model recovered via `search_notes` every time —
+   accuracy stayed 100 % on both sides.
+2. **Everything else is inside this report's established noise floor (≈ 10–15 %).** Tool calls
+   −7 %, input tokens −3 %, time +5 %, cost −2 % — all intervals include 0. Only output tokens
+   (−7 %, interval excludes 0) reaches significance, and it is a small effect on a small part of the
+   bill. On the large-note subset (where a wasted round trip costs the most context), `H` still
+   looks directionally better — fewer calls (3.33 vs 3.80), less tool-result text (≈3,759 vs
+   ≈4,861 tokens), lower input tokens (≈25,836 vs ≈29,604) — but with 9–10 runs per side this is
+   suggestive, not a confirmed effect.
+3. **No downside measured, and the lever cannot make an answer worse by construction**: it only
+   ever removes an item from `tools/list`; a client that calls the tool anyway is relayed untouched
+   (verified directly, not just inferred from this bench — see the lever's own unit/integration
+   tests), so the worst case is "no effect", not "broken".
+
+**Decision: default stays OFF** (`MEMGLOW_PROXY_HIDE_UNSUPPORTED` / `proxy.hideUnsupportedTools`
+unset → `false`). The stated bar was "ON only if the gain is net and correctness intact" — accuracy
+is intact, but across 31 runs only one of six measures reaches statistical significance here, and
+even that one is a modest −7 % on output tokens; the rest sit inside the noise this report already
+flags as unreliable at this sample size. That is not "no reason to use it" — the lever is zero-risk
+and the mechanism it targets is real and documented (conclusion 5, and basic-memory's own source),
+so turning it on for a setup that specifically uses basic-memory behind Claude Code (or any
+non-OpenAI client) is a reasonable, low-risk choice. It is just not large or certain enough, on
+this sample, to flip memglow's own default the way the stated rule requires.
+
 ## Cost of this benchmark
 
 5.36 $ at list price for 265 runs in total (pilot 6, Haiku 210, control 15, Sonnet 30, one

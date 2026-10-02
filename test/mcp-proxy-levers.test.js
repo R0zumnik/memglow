@@ -148,15 +148,98 @@ test("write crossing the threshold is flagged; unknown tools and errors pass thr
 
 test("all levers off: every response line is byte-identical to the upstream's", async () => {
   const fx = makeNotes();
-  const off = { MEMGLOW_PROXY_SIZE_WARNING: "0", MEMGLOW_PROXY_SEARCH_DETAILS: "false", MEMGLOW_PROXY_SUGGESTIONS: "off" };
+  const off = { MEMGLOW_PROXY_SIZE_WARNING: "0", MEMGLOW_PROXY_SEARCH_DETAILS: "false", MEMGLOW_PROXY_SUGGESTIONS: "off", MEMGLOW_PROXY_HIDE_UNSUPPORTED: "0" };
   const c = start(fx, off);
   const d = start(fx, {}, { direct: true });
   try {
-    const seq = [["tools/list", {}], ["tools/call", { name: "read_note", arguments: { identifier: "big" } }],
+    const seq = [["initialize", { clientInfo: { name: "claude-code", version: "2.1.283" } }], ["tools/list", {}],
+      ["tools/call", { name: "read_note", arguments: { identifier: "big" } }],
       ["tools/call", { name: "search_notes", arguments: { query: "body" } }], ["tools/call", { name: "read_note", arguments: { identifier: "alice" } }]];
     for (const [m, p] of seq) { await c.rpc(m, p); await d.rpc(m, p); }
     assert.deepStrictEqual(c.lines, d.lines);
+    const list = JSON.parse(c.lines[1]);
+    assert.ok(list.result.tools.some((t) => t.name === "search"), "hideUnsupportedTools off: basic-memory's ChatGPT tools still listed");
   } finally { await c.close(); await d.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("hideUnsupportedTools (opt-in): basic-memory's search/fetch hidden per client session, never for OpenAI's, never for an unknown client", async () => {
+  const fx = makeNotes();
+  const on = { MEMGLOW_PROXY_HIDE_UNSUPPORTED: "1" };
+  const names = (list) => list.result.tools.map((t) => t.name).sort();
+
+  // Claude Code: not the OpenAI MCP client → search/fetch hidden, everything else untouched.
+  const c1 = start(fx, on);
+  try {
+    await c1.rpc("initialize", { clientInfo: { name: "claude-code", version: "2.1.283" } });
+    const list1 = await c1.rpc("tools/list", {});
+    assert.deepStrictEqual(names(list1), ["build_context", "edit_note", "list_directory", "read_note", "search_notes", "write_note"]);
+  } finally { await c1.close(); }
+
+  // OpenAI's own MCP client (basic-memory's exact label, client_info_is_openai_mcp()): never hidden.
+  const c2 = start(fx, on);
+  try {
+    await c2.rpc("initialize", { clientInfo: { name: "openai-mcp", version: "1.0" } });
+    const list2 = await c2.rpc("tools/list", {});
+    assert.ok(names(list2).includes("search") && names(list2).includes("fetch"), "OpenAI MCP client keeps both tools");
+  } finally { await c2.close(); }
+
+  // A versioned OpenAI client ("openai-mcp/<version>") — same prefix rule basic-memory itself uses.
+  const c3 = start(fx, on);
+  try {
+    await c3.rpc("initialize", { clientInfo: { title: "openai-mcp/2.0" } });
+    const list3 = await c3.rpc("tools/list", {});
+    assert.ok(names(list3).includes("search") && names(list3).includes("fetch"), "openai-mcp/2.0 (via title) keeps both tools");
+  } finally { await c3.close(); }
+
+  // No clientInfo at all (never initialized, or an empty one): unknown → cautious → hide nothing.
+  const c4 = start(fx, on);
+  try {
+    const list4 = await c4.rpc("tools/list", {});
+    assert.ok(names(list4).includes("search") && names(list4).includes("fetch"), "unknown client: nothing hidden");
+  } finally { await c4.close(); }
+  const c5 = start(fx, on);
+  try {
+    await c5.rpc("initialize", { clientInfo: {} });
+    const list5 = await c5.rpc("tools/list", {});
+    assert.ok(names(list5).includes("search") && names(list5).includes("fetch"), "clientInfo with no name/title: unknown, nothing hidden");
+  } finally { await c5.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("hideUnsupportedTools: a hidden tool called anyway is still relayed to the real server, no fabricated error", async () => {
+  const fx = makeNotes();
+  const c = start(fx, { MEMGLOW_PROXY_HIDE_UNSUPPORTED: "1" });
+  try {
+    await c.rpc("initialize", { clientInfo: { name: "claude-code" } });
+    const list = await c.rpc("tools/list", {});
+    assert.ok(!list.result.tools.some((t) => t.name === "search"), "hidden from the list");
+    const r = await c.call("search", { query: "hello" });
+    assert.ok(!r.result.isError, "the call itself still succeeds, untouched");
+    assert.match(texts(r)[0], /^search-called:\{"query":"hello"\}$/, "reached the real upstream handler, no proxy-made error");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("hideUnsupportedTools: config override replaces the default table (not a merge)", async () => {
+  const fx = makeNotes();
+  fs.writeFileSync(path.join(fx.home, "memglow.config.json"), JSON.stringify({
+    memoryDir: fx.notes,
+    proxy: { hideUnsupportedTools: true, unsupportedTools: { "basic-memory": { list_directory: ["claude-code"] } } },
+  }));
+  const names = (list) => list.result.tools.map((t) => t.name).sort();
+
+  const allowed = start(fx, {});
+  try {
+    await allowed.rpc("initialize", { clientInfo: { name: "claude-code" } });
+    const list = await allowed.rpc("tools/list", {});
+    assert.ok(names(list).includes("list_directory"), "claude-code is in the overridden allow list: kept");
+    assert.ok(names(list).includes("search") && names(list).includes("fetch"), "default basic-memory entry replaced, not merged: search/fetch no longer gated");
+  } finally { await allowed.close(); }
+
+  const other = start(fx, {});
+  try {
+    await other.rpc("initialize", { clientInfo: { name: "cursor" } });
+    const list = await other.rpc("tools/list", {});
+    assert.ok(!names(list).includes("list_directory"), "cursor is not in the overridden allow list: hidden");
+  } finally { await other.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
 test("session dedupe (opt-in): unchanged re-read shortened, repeat or memglow_fresh gives it back, savings counted", async () => {
@@ -324,7 +407,37 @@ test("config: file `proxy` key, env overrides, clamping", () => {
     const def = L.proxyConfig({ MEMGLOW_HOME: path.join(fx.root, "nowhere") });
     assert.deepStrictEqual([def.sizeWarning, def.searchDetails, def.suggestions, def.dedupe, def.toc], [true, true, true, false, false]);
     assert.strictEqual(def.memoryDir, null);
+    // hideUnsupportedTools: off by default, basic-memory's search/fetch gated to openai-mcp by default.
+    assert.strictEqual(def.hideUnsupportedTools, false);
+    assert.deepStrictEqual(def.unsupportedTools, L.DEFAULT_UNSUPPORTED_TOOLS);
+    assert.deepStrictEqual(def.unsupportedTools["basic-memory"], { search: ["openai-mcp"], fetch: ["openai-mcp"] });
+    const hid = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_PROXY_HIDE_UNSUPPORTED: "1" });
+    assert.strictEqual(hid.hideUnsupportedTools, true);
+    assert.strictEqual(L.anyLever({ hideUnsupportedTools: true }), true, "hideUnsupportedTools alone is enough to turn levers on");
+    // A malformed or empty override falls back to the default table, not to an empty one.
+    fs.writeFileSync(path.join(fx.home, "memglow.config.json"), JSON.stringify({ proxy: { unsupportedTools: "nope" } }));
+    assert.deepStrictEqual(L.proxyConfig({ MEMGLOW_HOME: fx.home }).unsupportedTools, L.DEFAULT_UNSUPPORTED_TOOLS);
+    // A real override fully replaces the table (checked end to end in the proxy test above too).
+    fs.writeFileSync(path.join(fx.home, "memglow.config.json"), JSON.stringify({ proxy: { unsupportedTools: { other: { x: ["y"] } } } }));
+    assert.deepStrictEqual(L.proxyConfig({ MEMGLOW_HOME: fx.home }).unsupportedTools, { other: { x: ["y"] } });
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("hideUnsupportedTools: client-matching helpers mirror basic-memory's client_info_is_openai_mcp()", () => {
+  assert.strictEqual(L.clientInfoKnown(null), false);
+  assert.strictEqual(L.clientInfoKnown({}), false);
+  assert.strictEqual(L.clientInfoKnown({ name: "  " }), false);
+  assert.strictEqual(L.clientInfoKnown({ name: "claude-code" }), true);
+  assert.strictEqual(L.clientInfoKnown({ title: "x" }), true);
+  const allow = [L.OPENAI_MCP_CLIENT_NAME];
+  assert.strictEqual(L.clientInfoAllowed({ name: "openai-mcp" }, allow), true);
+  assert.strictEqual(L.clientInfoAllowed({ name: "OpenAI-MCP" }, allow), true, "case-insensitive");
+  assert.strictEqual(L.clientInfoAllowed({ name: "  openai-mcp  " }, allow), true, "trimmed");
+  assert.strictEqual(L.clientInfoAllowed({ name: "openai-mcp/1.2.3" }, allow), true, "versioned prefix");
+  assert.strictEqual(L.clientInfoAllowed({ title: "openai-mcp" }, allow), true, "title also checked");
+  assert.strictEqual(L.clientInfoAllowed({ name: "openai-mcp-but-not-really" }, allow), false, "no slash: not a prefix match");
+  assert.strictEqual(L.clientInfoAllowed({ name: "claude-code" }, allow), false);
+  assert.strictEqual(L.clientInfoAllowed(null, allow), false);
 });
 
 test("engine: no notes folder → levers needing metadata stay silent; a failing lever never breaks the relay", () => {
@@ -409,6 +522,49 @@ test("HTTP proxy with levers: JSON answer gets the suffix with a correct Content
     assert.match(data.result.content[1].text, /Alice `alice` · People\/friends/);
     const r3 = await call(3, "list_directory", {});
     assert.deepStrictEqual((await r3.json()).result.content, [{ type: "text", text: "permalink: people/alice\nhello" }], "other tools untouched");
+  } finally {
+    upstream.closeAllConnections(); upstream.close();
+    proxy.closeAllConnections(); proxy.close();
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test("hideUnsupportedTools over HTTP: two simultaneous sessions (Claude Code and ChatGPT) each get their own tools/list, no cross-talk", async () => {
+  const fx = makeNotes();
+  const cfg = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_MEMORY_DIR: fx.notes, MEMGLOW_DATA_DIR: fx.data, MEMGLOW_PROXY_HIDE_UNSUPPORTED: "1" });
+  const engine = L.createLevers({ config: cfg, index: L.createNoteIndex(cfg), savings: L.createSavings({ ...cfg, savingsFile: false, log: false }), serverName: "basic-memory" });
+  const TOOLS = [{ name: "read_note" }, { name: "search_notes" }, { name: "search" }, { name: "fetch" }];
+  const upstream = http.createServer((req, res) => {
+    let b = ""; req.on("data", (c) => (b += c));
+    req.on("end", () => {
+      const m = JSON.parse(b);
+      const body = m.method === "tools/list"
+        ? JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { tools: TOOLS } })
+        : JSON.stringify({ jsonrpc: "2.0", id: m.id, result: {} });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(body);
+    });
+  });
+  await new Promise((ok) => upstream.listen(0, "127.0.0.1", ok));
+  const proxy = createHttpProxy({ upstream: `http://127.0.0.1:${upstream.address().port}/mcp`, name: "basic-memory", onReport: () => {}, levers: engine });
+  await new Promise((ok) => proxy.listen(0, "127.0.0.1", ok));
+  const base = `http://127.0.0.1:${proxy.address().port}/mcp`;
+  const post = (sid, method, params, id = 1) => fetch(base, { method: "POST", headers: { "content-type": "application/json", "mcp-session-id": sid },
+    body: JSON.stringify({ jsonrpc: "2.0", id, method, params }) }).then((r) => r.json());
+  const names = (r) => r.result.tools.map((t) => t.name).sort();
+  try {
+    // Two different clients, two different Mcp-Session-Id values, initialized concurrently…
+    await Promise.all([
+      post("sess-claude", "initialize", { clientInfo: { name: "claude-code", version: "2.1.283" } }),
+      post("sess-chatgpt", "initialize", { clientInfo: { name: "openai-mcp" } }),
+    ]);
+    // …then both ask for tools/list at the same time: no cross-session effect either way.
+    const [listClaude, listChatgpt] = await Promise.all([post("sess-claude", "tools/list", {}), post("sess-chatgpt", "tools/list", {})]);
+    assert.deepStrictEqual(names(listClaude), ["read_note", "search_notes"], "Claude Code session: search/fetch hidden");
+    assert.deepStrictEqual(names(listChatgpt), ["fetch", "read_note", "search", "search_notes"], "ChatGPT session: untouched");
+    // Repeat tools/list on the Claude Code session again: still filtered, unaffected by the other session.
+    const again = await post("sess-claude", "tools/list", {});
+    assert.deepStrictEqual(names(again), ["read_note", "search_notes"]);
   } finally {
     upstream.closeAllConnections(); upstream.close();
     proxy.closeAllConnections(); proxy.close();

@@ -14,9 +14,11 @@
  * v0.4 levers (lib/proxy-levers.js; switches in memglow.config.json → "proxy", or MEMGLOW_PROXY_*):
  * size warning, richer search results and related-note suggestions (ON by default) only ADD a text
  * block before/after the server's own content; session read de-duplication and table-of-contents
- * first (OFF by default) may replace a read answer. With every lever off, bytes are relayed
- * unchanged, as before; with levers on, only whole JSON-RPC lines a lever rewrites differ. Nothing
- * is ever written in the notes folder.
+ * first (OFF by default) may replace a read answer; hideUnsupportedTools (OFF by default) removes,
+ * from `tools/list` and per client session, the tools a config table marks unsupported for that
+ * client (e.g. basic-memory's ChatGPT-only `search`/`fetch`). With every lever off, bytes are
+ * relayed unchanged, as before; with levers on, only whole JSON-RPC lines a lever rewrites differ.
+ * Nothing is ever written in the notes folder.
  *
  *   stdio:  memglow-mcp-proxy [--name basic-memory] -- uvx basic-memory mcp
  *   HTTP:   memglow-mcp-proxy --upstream http://127.0.0.1:8000/mcp --listen 127.0.0.1:8765 [--name x]
@@ -168,15 +170,17 @@ function sseRelay(write, transform) {
 
 /**
  * The v0.4 levers (lib/proxy-levers.js), or null when every lever is off (pure byte relay, as
- * before). Never throws: a broken config means "no levers".
+ * before). Never throws: a broken config means "no levers". `serverName` (the proxy's `--name`,
+ * or its guessed label) is only used by lever 7 (hideUnsupportedTools) to pick the right
+ * `unsupportedTools` table entry for the server actually being wrapped.
  */
-function setupLevers(env = process.env) {
+function setupLevers(env = process.env, serverName = "") {
   try {
     const config = levers.proxyConfig(env);
     if (!levers.anyLever(config)) return null;
     const index = levers.createNoteIndex(config);
     const savings = levers.createSavings(config);
-    const engine = levers.createLevers({ config, index, savings });
+    const engine = levers.createLevers({ config, index, savings, serverName });
     return { ...engine, savings, config };
   } catch (e) {
     process.stderr.write(`memglow-mcp-proxy: levers disabled (${e.message})\n`);
@@ -188,7 +192,7 @@ function runStdio(o) {
   if (!o.cmd.length) { process.stderr.write("memglow-mcp-proxy: nothing to run (usage: memglow-mcp-proxy -- <server command>)\n"); process.exit(2); }
   const server = o.name || o.cmd.join(" ").match(/[A-Za-z0-9_-]*(memory|obsidian|notes|filesystem)[A-Za-z0-9_-]*/i)?.[0] || "memory";
   const w = createWatcher({ server, source: o.source });
-  const lv = setupLevers();
+  const lv = setupLevers(process.env, server);
   const child = spawn(o.cmd[0], o.cmd.slice(1), { stdio: ["pipe", "pipe", "inherit"], shell: process.platform === "win32" });
   if (lv) {
     // Levers on: whole lines are relayed (rewritten only when a lever changes them).
@@ -248,7 +252,7 @@ function createHttpProxy(o) {
   const up = new URL(o.upstream);
   const lib = up.protocol === "https:" ? https : http;
   const server = o.name || up.hostname;
-  const lv = o.levers === undefined ? setupLevers() : o.levers; // tests pass their own (or null)
+  const lv = o.levers === undefined ? setupLevers(process.env, server) : o.levers; // tests pass their own (or null)
   return http.createServer((req, res) => {
     const w = createWatcher({ server, source: o.source, onReport: o.onReport });
     const sk = String(req.headers["mcp-session-id"] || "default");
@@ -333,7 +337,7 @@ function createHttpProxy(o) {
 if (require.main === module) {
   const o = parseArgs(process.argv.slice(2));
   if (o.help) {
-    process.stdout.write("usage:\n  memglow-mcp-proxy [--name NAME] -- <memory MCP server command>\n  memglow-mcp-proxy --upstream URL --listen HOST:PORT [--name NAME]\nlevers (v0.4): MEMGLOW_PROXY_SIZE_WARNING, _SEARCH_DETAILS, _SUGGESTIONS (default on), MEMGLOW_PROXY_DEDUPE, _TOC, _ARCHIVE_HINT (default off)\n  or memglow.config.json → \"proxy\": { ... } — see mcp-proxy/README.md\n");
+    process.stdout.write("usage:\n  memglow-mcp-proxy [--name NAME] -- <memory MCP server command>\n  memglow-mcp-proxy --upstream URL --listen HOST:PORT [--name NAME]\nlevers (v0.4): MEMGLOW_PROXY_SIZE_WARNING, _SEARCH_DETAILS, _SUGGESTIONS (default on), MEMGLOW_PROXY_DEDUPE, _TOC, _ARCHIVE_HINT, _HIDE_UNSUPPORTED (default off)\n  or memglow.config.json → \"proxy\": { ... } — see mcp-proxy/README.md\n");
     process.exit(0);
   }
   if (o.upstream) {
