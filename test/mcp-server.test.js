@@ -183,6 +183,20 @@ test("split_plan: honest 'no split needed' under the threshold, a real plan + En
   assert.ok(!big.result.content[0].text.includes("x".repeat(100)));
 });
 
+test("split_plan: \"sections\" (raw per-heading breakdown) and \"split\" (packed parts) always total the same — split only groups, it never drops or re-estimates", () => {
+  const h = harness(buildFixture());
+  const big = call(h, 1, "split_plan", { note: "big" });
+  const db = JSON.parse(big.result.content[0].text.match(/```json\n([\s\S]*)\n```/)[1]);
+  assert.deepStrictEqual(db.sections.map((s) => s.title), ["Part 1", "Part 2", "Part 3"]);
+  const sectionsTotal = db.sections.reduce((s, x) => s + x.tokens, 0);
+  const splitTotal = db.split.reduce((s, p) => s + p.tokens, 0);
+  assert.strictEqual(splitTotal, sectionsTotal, "packing into parts never changes the total token count");
+  // "no split needed" (small note): no body is read, so no "sections" key at all — never an empty one.
+  const small = call(h, 2, "split_plan", { note: "alpha" });
+  const ds = JSON.parse(small.result.content[0].text.match(/```json\n([\s\S]*)\n```/)[1]);
+  assert.ok(!("sections" in ds), "small note: split_plan does not read its body at all");
+});
+
 test("related_notes: links, sub-theme and co-usage combine; topic search over metadata only", () => {
   const dir = buildFixture();
   const dataDir = tmpDir("memglow-mcp-data-");
@@ -224,6 +238,27 @@ test("note_cost: tokens, threshold, status, and 7-day reads when counters exist"
   const r = call(noCounters, 3, "note_cost", { note: "alpha" });
   const d = JSON.parse(r.result.content[0].text.match(/```json\n([\s\S]*)\n```/)[1]);
   assert.strictEqual(d.reads7, null);
+});
+
+test("note_cost: per-section breakdown (lib/cost.js's sectionsOf), bodyTokens is EXACTLY the sum of sections — by construction, not a second rounded estimate", () => {
+  const h = harness(buildFixture());
+
+  const big = call(h, 1, "note_cost", { note: "big" });
+  const db = JSON.parse(big.result.content[0].text.match(/```json\n([\s\S]*)\n```/)[1]);
+  assert.deepStrictEqual(db.sections.map((s) => s.title), ["Part 1", "Part 2", "Part 3"]);
+  assert.ok(db.sections.every((s) => s.tokens > 0));
+  assert.strictEqual(db.bodyTokens, db.sections.reduce((s, x) => s + x.tokens, 0));
+  assert.ok(db.bodyTokens > db.threshold, "the big note's body alone is already over threshold");
+  // no filler text leaks: only titles and numbers
+  assert.ok(!big.result.content[0].text.includes("x".repeat(100)));
+
+  // a note with no "##" heading at all still gets a one-part breakdown (sectionsOf's own rule)
+  const alpha = call(h, 2, "note_cost", { note: "alpha" });
+  const da = JSON.parse(alpha.result.content[0].text.match(/```json\n([\s\S]*)\n```/)[1]);
+  assert.strictEqual(da.sections.length, 1);
+  assert.strictEqual(da.sections[0].title, "");
+  assert.strictEqual(da.bodyTokens, da.sections[0].tokens);
+  assert.ok(da.bodyTokens < da.tokens, "bodyTokens excludes the frontmatter that `tokens` (whole file) includes");
 });
 
 test("note resolution accepts a bare id, a .md path and an underscore/case variant", () => {

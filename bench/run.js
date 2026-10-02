@@ -22,6 +22,22 @@
  *
  * Point it ONLY at a throw-away memory server on a copy of the test notes (see "How to reproduce" in bench/RESULTS.md).
  * Writes one JSON line per run to --out; bench/analyze.js turns that into tables.
+ *
+ * --mode sessions (stage 0.4.1): several RELATED questions asked in order inside ONE `claude -p`
+ * call (one MCP session, same conversation) instead of one question per call — the only way to
+ * measure dedupe/toc/context-reuse, which only do anything across turns of the SAME session.
+ * Sessions are grouped by topic in bench/sessions.json (`--sessions <file>` to use another one);
+ * each still answers from bench/questions.json's `expect` regexes, now graded per question inside
+ * one combined answer. Same flags as above, plus:
+ *
+ *   node bench/run.js --mode sessions --dry-run [--sessions bench/sessions.json] [--variants A,C] [--reps 2]
+ *   node bench/run.js --mode sessions --upstream http://<host>:8000/mcp --memory-dir <dir> \
+ *        --out bench/results/sessions.jsonl [--variants A,C,D,E] [--reps 2] [--model haiku]
+ *
+ * `--dry-run` prints the run plan (sessions × variants × reps) and a cost estimate from the
+ * average `costUsd` of past single-question runs recorded in bench/results/*.jsonl — no `claude`
+ * call, no proxy, no network. A session's budget is still one `--budget-run` (per call, not per
+ * question inside it): raise it for topics with several questions, or watch the first few runs.
  */
 const fs = require("fs");
 const os = require("os");
@@ -51,7 +67,7 @@ const VARIANTS = {
 };
 
 function args(argv) {
-  const o = { variants: "A,B,C,D,E", reps: 2, model: "haiku", questions: "all", budgetRun: 0.3, budgetTotal: 5, seed: 1, timeoutS: 300 };
+  const o = { mode: "single", variants: "A,B,C,D,E", reps: 2, model: "haiku", questions: "all", budgetRun: 0.3, budgetTotal: 5, seed: 1, timeoutS: 300 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], v = () => argv[++i];
     if (a === "--check") o.check = true;
@@ -71,6 +87,9 @@ function args(argv) {
     else if (a === "--tag") o.tag = v(); // free label stored with each record
     else if (a === "--resume") o.resume = true; // skip (question, variant, rep) already completed in --out
     else if (a === "--keep-streams") o.keepStreams = path.resolve(v()); // save each raw stream-json transcript there
+    else if (a === "--mode") o.mode = v(); // "single" (default) or "sessions"
+    else if (a === "--sessions") o.sessionsFile = path.resolve(v()); // bench/sessions.json by default
+    else if (a === "--dry-run") o.dryRun = true; // --mode sessions only: print the plan + cost estimate, no claude call
   }
   return o;
 }
@@ -176,8 +195,171 @@ function parseStream(out) {
   return r;
 }
 
+// ---------------------------------------------------------------------------------------------
+// --mode sessions: several related questions, one `claude -p` call, one MCP session.
+
+const SESSIONS_FILE_DEFAULT = path.join(__dirname, "sessions.json");
+
+/** Prompt that asks every question of the session in order, graded line by line (see parseSessionAnswer). */
+function buildSessionPrompt(questions) {
+  const lines = questions.map((q, i) => `Q${i + 1}: ${q.q}`);
+  return "You will be asked several related questions in a row, from the user's notes, which you can reach only "
+    + "through the memory tools. Answer them IN ORDER, one per line, each starting with \"A<n>: \" where <n> is "
+    + "the question number, followed by the answer in one short sentence. Never skip a question: if its answer is "
+    + "not in the notes, say on its own line that you could not find it instead of guessing.\n\n" + lines.join("\n");
+}
+
+/**
+ * Grades a combined session answer against each question's `expect` regex. A line "A<n>: ..." is
+ * matched to question n (1-based); a question whose line is missing (the model did not number its
+ * answers) falls back to testing its regex against the WHOLE answer — lenient, so a plain assistant
+ * that ignores the numbering instruction is not unfairly marked wrong on every question.
+ * → { per: [{ id, answered, correct }], correctCount, total }
+ */
+function parseSessionAnswer(text, questions) {
+  const t = String(text || "");
+  const byIndex = new Map();
+  const re = /^A(\d+)\s*:\s*(.*)$/gim;
+  let m;
+  while ((m = re.exec(t))) byIndex.set(Number(m[1]), m[2]);
+  const per = questions.map((q, i) => {
+    const n = i + 1;
+    const line = byIndex.has(n) ? byIndex.get(n) : null;
+    const correct = new RegExp(q.expect, "i").test(line != null ? line : t);
+    return { id: q.id, answered: line != null, correct };
+  });
+  return { per, correctCount: per.filter((p) => p.correct).length, total: per.length };
+}
+
+/** bench/sessions.json (or `file`), resolved against `questions` (bench/questions.json) — throws on an unknown id. */
+function loadSessions(file, questions) {
+  const raw = JSON.parse(fs.readFileSync(file || SESSIONS_FILE_DEFAULT, "utf8"));
+  const byId = new Map((questions || []).map((q) => [q.id, q]));
+  const list = Array.isArray(raw.sessions) ? raw.sessions : [];
+  return list.map((s) => {
+    const ids = Array.isArray(s.questions) ? s.questions : [];
+    const qs = ids.map((id) => {
+      const q = byId.get(id);
+      if (!q) throw new Error(`bench sessions: session "${s.id}" refers to unknown question id "${id}"`);
+      return q;
+    });
+    if (!qs.length) throw new Error(`bench sessions: session "${s.id}" has no questions`);
+    return { id: String(s.id), topic: s.topic ? String(s.topic) : String(s.id), questions: qs };
+  });
+}
+
+/** (session × variant × repetition), shuffled with `seed` — same scheme as the single-question plan. */
+function planSessions(sessions, variants, reps, seed) {
+  const plan = [];
+  for (const s of sessions) for (const v of variants) for (let r = 1; r <= reps; r++) plan.push({ s, v, r });
+  const rnd = mulberry32(seed);
+  for (let i = plan.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [plan[i], plan[j]] = [plan[j], plan[i]]; }
+  return plan;
+}
+
+/** Average `costUsd` of past completed single-question runs in every *.jsonl of `dir` — or null (none found). */
+function avgCostPerQuestion(dir = path.join(__dirname, "results")) {
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl")); } catch { return null; }
+  let sum = 0, n = 0;
+  for (const f of files) {
+    let text;
+    try { text = fs.readFileSync(path.join(dir, f), "utf8"); } catch { continue; }
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      let rec;
+      try { rec = JSON.parse(line); } catch { continue; }
+      if (rec.exit === 0 && rec.subtype === "success" && typeof rec.costUsd === "number") { sum += rec.costUsd; n++; }
+    }
+  }
+  return n ? { avg: sum / n, samples: n } : null;
+}
+
+/** Human-readable plan + cost estimate for `--dry-run` (pure: takes the already-computed plan and avg). */
+function formatSessionPlan(plan, avgInfo) {
+  const bySession = new Map();
+  for (const { s } of plan) if (!bySession.has(s.id)) bySession.set(s.id, { topic: s.topic, questions: s.questions.length, runs: 0 });
+  for (const { s } of plan) bySession.get(s.id).runs++;
+  const totalQuestionTurns = plan.reduce((sum, { s }) => sum + s.questions.length, 0);
+  const lines = [`bench (sessions): ${plan.length} run(s) over ${bySession.size} session(s), ${totalQuestionTurns} question-turns total`];
+  for (const [id, e] of bySession) lines.push(`  ${id} (${e.topic}, ${e.questions} question${e.questions === 1 ? "" : "s"}) × ${e.runs} run(s)`);
+  if (avgInfo) {
+    const estimate = totalQuestionTurns * avgInfo.avg;
+    lines.push(`estimated cost ≈$${estimate.toFixed(3)} (avg ≈$${avgInfo.avg.toFixed(4)}/question from ${avgInfo.samples} historical single-question run(s) in bench/results/*.jsonl)`);
+  } else {
+    lines.push("no historical bench/results/*.jsonl found: cost cannot be estimated — run bench/run.js in single mode first, or set --budget-run/--budget-total and watch the first few runs");
+  }
+  return lines.join("\n");
+}
+
+async function mainSessions(o) {
+  // Question ids inside a session always resolve against the FULL set (bench/questions.json);
+  // `--questions` here picks which SESSIONS to run, by session id (default: all of them).
+  let sessions;
+  try { sessions = loadSessions(o.sessionsFile, QUESTIONS); } catch (e) { console.error(String(e.message || e)); process.exit(1); }
+  if (o.check) { process.exit(o.memoryDir ? (check(o.memoryDir) ? 1 : 0) : 0); }
+  if (o.questions !== "all") { const ids = new Set(o.questions.split(",")); sessions = sessions.filter((s) => ids.has(s.id)); }
+  const variants = o.variants.split(",").filter((v) => VARIANTS[v]);
+  const plan = planSessions(sessions, variants, o.reps, o.seed);
+  if (o.dryRun) { console.error(formatSessionPlan(plan, avgCostPerQuestion())); return; }
+  if (!o.upstream || !o.memoryDir || !o.out) { console.error("usage: see the header of bench/run.js (--mode sessions)"); process.exit(2); }
+  if (check(o.memoryDir)) { console.error("questions and notes disagree: fix before running"); process.exit(1); }
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-bench-sessions-"));
+  const rx = await receiver();
+  const endpoints = {}, procs = [];
+  for (const v of variants) {
+    if (!VARIANTS[v].proxy) { endpoints[v] = o.upstream; continue; }
+    const p = await startProxy(v, VARIANTS[v].proxy, o, rx, work);
+    endpoints[v] = p.url; procs.push(p.proc);
+  }
+  const configs = {};
+  for (const v of variants) {
+    configs[v] = path.join(work, `mcp-${v}.json`);
+    fs.writeFileSync(configs[v], JSON.stringify({ mcpServers: { [SERVER]: { type: "http", url: endpoints[v] } } }));
+  }
+  let spent = o.spent || 0, n = 0;
+  console.error(`bench (sessions): ${plan.length} runs, model ${o.model}, budget ${o.budgetTotal} $ (already spent ${spent.toFixed(3)} $), work ${work}`);
+  for (const { s, v, r } of plan) {
+    if (spent >= o.budgetTotal) { console.error(`bench: global budget reached (${spent.toFixed(3)} $) after ${n} runs — stopping`); break; }
+    const cwd = fs.mkdtempSync(path.join(work, "cwd-"));
+    const from = rx.got.length;
+    const res = await runClaude({ prompt: buildSessionPrompt(s.questions), model: o.model, mcpConfig: configs[v], cwd, budget: o.budgetRun, timeoutS: o.timeoutS });
+    await new Promise((ok) => setTimeout(ok, 400)); // let the proxy's detached reports land
+    const parsed = parseStream(res.out);
+    if (o.keepStreams) { fs.mkdirSync(o.keepStreams, { recursive: true }); fs.writeFileSync(path.join(o.keepStreams, `${s.id}-${v}-${r}-${o.model}.jsonl`), res.out); }
+    const reports = rx.got.slice(from).filter((x) => x.source === "bench-" + v.toLowerCase());
+    const engine = { calls: 0, totalMs: 0, byType: {} };
+    for (const x of reports) {
+      if (typeof x.durationMs !== "number") continue;
+      engine.calls++; engine.totalMs += x.durationMs;
+      (engine.byType[x.type] = engine.byType[x.type] || []).push(x.durationMs);
+    }
+    const grade = parseSessionAnswer(parsed.answer, s.questions);
+    const u = (parsed.result && parsed.result.usage) || {};
+    const cost = (parsed.result && parsed.result.total_cost_usd) || 0;
+    spent += cost; n++;
+    const rec = {
+      id: s.id, topic: s.topic, questionIds: s.questions.map((q) => q.id), variant: v, rep: r, model: o.model, tag: o.tag || null, t: new Date().toISOString(),
+      correct: grade.per.map((p) => p.correct), correctCount: grade.correctCount, total: grade.total,
+      answer: parsed.answer.slice(0, 1600),
+      costUsd: cost, durationMs: parsed.result ? parsed.result.duration_ms : res.wallMs, apiMs: parsed.result ? parsed.result.duration_api_ms : null, wallMs: res.wallMs,
+      turns: parsed.result ? parsed.result.num_turns : null, subtype: parsed.result ? parsed.result.subtype : "no-result", isError: parsed.result ? !!parsed.result.is_error : true,
+      tokens: { input: u.input_tokens || 0, output: u.output_tokens || 0, cacheCreate: u.cache_creation_input_tokens || 0, cacheRead: u.cache_read_input_tokens || 0 },
+      toolCalls: parsed.toolCalls, tools: parsed.tools, toolResultChars: parsed.toolResultChars, engine,
+      exit: res.code, stderr: res.code ? res.err.slice(0, 400) : undefined,
+    };
+    fs.appendFileSync(o.out, JSON.stringify(rec) + "\n");
+    console.error(`[${n}/${plan.length}] ${s.id} ${v}#${r} ${grade.correctCount}/${grade.total} correct calls=${rec.toolCalls} in=${rec.tokens.input + rec.tokens.cacheRead + rec.tokens.cacheCreate} out=${rec.tokens.output} ${(rec.durationMs / 1000).toFixed(1)}s $${cost.toFixed(4)} total $${spent.toFixed(3)}`);
+    if (rec.exit !== 0 && !rec.toolCalls && !rec.tokens.output) { console.error(`bench: run failed before reaching the model (${rec.answer.slice(0, 120) || rec.stderr || "no output"}) — stopping`); break; }
+  }
+  for (const p of procs) p.kill("SIGTERM");
+  rx.srv.close();
+  console.error(`bench (sessions): done, ${n} runs, ${spent.toFixed(3)} $ spent; proxy logs in ${work}`);
+}
+
 async function main() {
   const o = args(process.argv.slice(2));
+  if (o.mode === "sessions") return mainSessions(o);
   if (o.check) process.exit(check(o.memoryDir) ? 1 : 0);
   if (!o.upstream || !o.memoryDir || !o.out) { console.error("usage: see the header of bench/run.js"); process.exit(2); }
   if (check(o.memoryDir)) { console.error("questions and notes disagree: fix before running"); process.exit(1); }
@@ -249,4 +431,7 @@ async function main() {
 }
 
 if (require.main === module) main().catch((e) => { console.error(e); process.exit(1); });
-module.exports = { parseStream, check, VARIANTS, PROMPT };
+module.exports = {
+  parseStream, check, VARIANTS, PROMPT,
+  buildSessionPrompt, parseSessionAnswer, loadSessions, planSessions, avgCostPerQuestion, formatSessionPlan, SESSIONS_FILE_DEFAULT,
+};

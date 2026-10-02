@@ -282,6 +282,79 @@ test("session dedupe (opt-in): unchanged re-read shortened, repeat or memglow_fr
   }
 });
 
+test("per-client accounting: baseline tokens relayed per read, tallied per client bucket, BEFORE dedupe/toc shorten the answer", async () => {
+  const fx = makeNotes();
+  const c = start(fx, { MEMGLOW_PROXY_DEDUPE: "1", MEMGLOW_PROXY_SUGGESTIONS: "0" });
+  try {
+    await c.rpc("initialize", { clientInfo: { name: "claude-code", version: "2.1.283" } });
+    const full = rawNote(fx, "people/alice");
+    const fullTokens = Math.ceil(Buffer.byteLength(full, "utf8") / 4);
+    await c.call("read_note", { identifier: "alice" }); // full delivery
+    const stub = texts(await c.call("read_note", { identifier: "people/alice" })); // dedupe stub: a few tokens only
+    assert.match(stub[0], /unchanged/);
+    await c.close();
+    const sv = JSON.parse(fs.readFileSync(path.join(fx.data, "proxy-savings.json"), "utf8"));
+    const day = Object.values(sv.days)[0];
+    assert.ok(day.clients && day.clients["claude-code"], JSON.stringify(sv));
+    assert.strictEqual(day.clients["claude-code"].calls, 2, "both reads counted, even the shortened one");
+    // the SECOND call's baseline is the full note's size again (pre-dedupe), not the tiny stub that was actually sent
+    assert.ok(day.clients["claude-code"].tokens >= fullTokens * 2 - 2, JSON.stringify(day.clients));
+  } finally {
+    await c.close();
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test("per-client accounting: unknown client (no clientInfo sent) and an unlisted MCP client each get their own bucket", async () => {
+  const fx = makeNotes();
+  const c = start(fx); // one process (one file writer): no initialize yet, so clientInfo starts null
+  try {
+    await c.call("read_note", { identifier: "alice" }); // clientInfo still unset: "unknown"
+    await c.rpc("initialize", { clientInfo: { title: "SomeFutureTool/9.0" } });
+    await c.call("read_note", { identifier: "bob" });
+    await c.close();
+    const sv = JSON.parse(fs.readFileSync(path.join(fx.data, "proxy-savings.json"), "utf8"));
+    const day = Object.values(sv.days)[0];
+    assert.strictEqual(day.clients.unknown.calls, 1, JSON.stringify(day.clients));
+    assert.strictEqual(day.clients["SomeFutureTool/9.0"].calls, 1, JSON.stringify(day.clients));
+  } finally {
+    await c.close();
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test("clientBucket: known MCP client ids/labels matched case-insensitively, unlisted raw name kept, no name/title = unknown", () => {
+  assert.strictEqual(L.clientBucket({ name: "Cursor" }), "cursor");
+  assert.strictEqual(L.clientBucket({ name: "CLAUDE-CODE" }), "claude-code");
+  assert.strictEqual(L.clientBucket({ title: "GitHub Copilot" }), "copilot");
+  assert.strictEqual(L.clientBucket({ name: "some-other-tool" }), "some-other-tool");
+  assert.strictEqual(L.clientBucket({ name: "  " }), "unknown");
+  assert.strictEqual(L.clientBucket(null), "unknown");
+  assert.strictEqual(L.clientBucket({ name: "x".repeat(200) }).length, 60, "capped");
+});
+
+test("readClientSavings: sums `clients` across the window, ignores other days and malformed entries, null without a data folder", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-readclients-"));
+  const now = Date.UTC(2026, 9, 2, 12, 0, 0);
+  const today = new Date(now).toISOString().slice(0, 10);
+  const yesterday = new Date(now - 86400000).toISOString().slice(0, 10);
+  const tooOld = new Date(now - 30 * 86400000).toISOString().slice(0, 10);
+  fs.writeFileSync(path.join(dir, "proxy-savings.json"), JSON.stringify({
+    version: 1,
+    days: {
+      [today]: { clients: { "claude-code": { tokens: 100, calls: 2 } } },
+      [yesterday]: { clients: { "claude-code": { tokens: 50, calls: 1 }, cursor: { tokens: 10, calls: 1 } } },
+      [tooOld]: { clients: { cursor: { tokens: 99999, calls: 99 } } }, // outside the 7-day window: ignored
+      "not-a-day": { clients: { x: "not an object" } }, // malformed: ignored without throwing
+    },
+  }));
+  const r = L.readClientSavings(dir, { now, windowDays: 7 });
+  assert.deepStrictEqual(r, { days: 7, byClient: { "claude-code": { tokens: 150, calls: 3 }, cursor: { tokens: 10, calls: 1 } } });
+  assert.strictEqual(L.readClientSavings(null), null, "no data folder at all: null, not a throw");
+  assert.deepStrictEqual(L.readClientSavings(path.join(dir, "does-not-exist")), { days: 7, byClient: {} }, "unreadable file: empty, still valid");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("table of contents first (opt-in): outline, one section verbatim, full on demand", async () => {
   const fx = makeNotes();
   const c = start(fx, { MEMGLOW_PROXY_TOC: "1", MEMGLOW_PROXY_SUGGESTIONS: "0" });

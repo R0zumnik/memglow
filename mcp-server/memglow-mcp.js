@@ -235,12 +235,17 @@ function toolSplitPlan(ctx, args) {
       data: { id: rec.id, label: rec.label, tokens: rec.tokens, threshold: large, split: null },
     };
   }
-  const parts = packSections(sectionsOf(body), ctx.config.splitChunkTokens).map((p, i) => ({ part: i + 1, tokens: p.tokens, titles: p.titles.filter(Boolean) }));
+  // `sections`: the same per-heading breakdown note_cost returns (lib/cost.js's sectionsOf),
+  // before `split` packs CONSECUTIVE sections into ≈chunkTokens-sized parts. Both are built from
+  // the same list, so their totals always agree (checked in test/mcp-server.test.js) — `split`
+  // never drops or re-estimates a section, it only groups the numbers `sections` already has.
+  const sections = sectionsOf(body);
+  const parts = packSections(sections, ctx.config.splitChunkTokens).map((p, i) => ({ part: i + 1, tokens: p.tokens, titles: p.titles.filter(Boolean) }));
   return {
     summary: `"${rec.label}" is ≈${rec.tokens} tokens (over ${large}): split into ${parts.length} part(s) of ≈${ctx.config.splitChunkTokens} tokens each.`,
     data: {
       id: rec.id, label: rec.label, tokens: rec.tokens, threshold: large, chunkTokens: ctx.config.splitChunkTokens,
-      split: parts, copyPrompt: buildCopyPrompt(rec, parts, ctx.config.splitChunkTokens),
+      sections, split: parts, copyPrompt: buildCopyPrompt(rec, parts, ctx.config.splitChunkTokens),
     },
   };
 }
@@ -299,8 +304,21 @@ function toolNoteCost(ctx, args) {
   }
   const status = rec.tokens > large ? "too_large" : "ok";
   const data = { id: rec.id, label: rec.label, tokens: rec.tokens, threshold: large, status, reads7 };
+  // Section-level breakdown (lib/cost.js's sectionsOf, same cut as the Memory cost panel's split
+  // preview and split_plan's `sections`), for ANY note, not just an over-threshold one: where the
+  // tokens of THIS note concentrate. `bodyTokens` is defined as the sum of `sections`' own
+  // tokens — by construction, not a second, independently-rounded estimate — so it always equals
+  // that sum exactly (checked in test/mcp-server.test.js); it is usually a few tokens below
+  // `tokens` above, which also counts the frontmatter that `sections` (a BODY-only cut) excludes.
+  // No body to read (missing/unreadable file) → no `sections` key at all, not an empty one.
+  const body = ctx.memory.maskedBody(id);
+  if (body != null) {
+    data.sections = sectionsOf(body);
+    data.bodyTokens = data.sections.reduce((s, x) => s + x.tokens, 0);
+  }
   const summary = `"${rec.label}": ≈${rec.tokens} tokens (threshold ${large}) — ${status === "too_large" ? "too large" : "ok"}.`
-    + (reads7 == null ? " Reads over 7 days: unavailable (no activity counters)." : ` Reads over 7 days: ${reads7}.`);
+    + (reads7 == null ? " Reads over 7 days: unavailable (no activity counters)." : ` Reads over 7 days: ${reads7}.`)
+    + (data.sections ? ` ${data.sections.length} section(s), ≈${data.bodyTokens} tokens of body.` : "");
   return { summary, data };
 }
 
@@ -367,7 +385,7 @@ const TOOLS = [
   },
   {
     name: "split_plan",
-    description: "Propose how to split one note into smaller parts along its existing \"##\"-\"######\" sections, grouped to about the configured chunk size (same rule as memglow's Memory cost panel). Says honestly that no split is needed when the note is under the large-note threshold. Returns the plan and a ready-to-use English instruction for the assistant's OWN memory tool — memglow itself never edits notes.",
+    description: "Propose how to split one note into smaller parts along its existing \"##\"-\"######\" sections, grouped to about the configured chunk size (same rule as memglow's Memory cost panel). Returns both the raw per-section token breakdown (\"sections\") and the packed parts (\"split\") built from it, so the two always add up to the same total. Says honestly that no split is needed when the note is under the large-note threshold. Returns the plan and a ready-to-use English instruction for the assistant's OWN memory tool — memglow itself never edits notes.",
     inputSchema: {
       type: "object",
       properties: { note: { type: "string", minLength: 1, maxLength: 200, description: "Note id (file name without .md) or title." } },
@@ -391,7 +409,7 @@ const TOOLS = [
   },
   {
     name: "note_cost",
-    description: "Estimated token size of one note (≈ bytes / 4), the large-note threshold and whether the note is over it, and how many times it was read over the last 7 days when activity history is available.",
+    description: "Estimated token size of one note (≈ bytes / 4), the large-note threshold and whether the note is over it, how many times it was read over the last 7 days when activity history is available, and a per-section token breakdown (\"sections\", same \"##\"-\"######\" cut as split_plan) when the note's body can be read.",
     inputSchema: {
       type: "object",
       properties: { note: { type: "string", minLength: 1, maxLength: 200, description: "Note id (file name without .md) or title." } },

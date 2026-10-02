@@ -192,6 +192,27 @@ test("server: /api/activity feeds time to find and engine speed; /api/cost shows
   } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
+test("server: /api/cost exposes the MCP proxy's per-client token accounting (counts only, read fresh from proxy-savings.json)", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-sp2-"));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-spd2-"));
+  const config = loadConfig({ MEMORY_DIR: dir, MEMGLOW_DATA_DIR: dataDir, MEMGLOW_TOKEN: TOKEN }, os.tmpdir());
+  const memory = createMemory({ dir, config, pollMs: 500 });
+  const server = createServer(config, memory);
+  await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const before = await (await fetch(base + "/api/cost")).json();
+    assert.deepStrictEqual(before.clientTokens, { days: 7, byClient: {} }, "no proxy-savings.json yet: empty, not missing");
+
+    const today = new Date().toISOString().slice(0, 10);
+    fs.writeFileSync(path.join(dataDir, "proxy-savings.json"), JSON.stringify({
+      version: 1, days: { [today]: { clients: { "claude-code": { tokens: 1234, calls: 5 }, cursor: { tokens: 6, calls: 1 } } } },
+    }));
+    const after = await (await fetch(base + "/api/cost")).json();
+    assert.deepStrictEqual(after.clientTokens, { days: 7, byClient: { "claude-code": { tokens: 1234, calls: 5 }, cursor: { tokens: 6, calls: 1 } } });
+  } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
 test("panel: find time and engine speed blocks render, escape titles, show the alert", () => {
   const T = costPage.defaultCostT;
   assert.match(costPage.costFindTime(null, T), /No search counted/);
@@ -210,4 +231,22 @@ test("panel: find time and engine speed blocks render, escape titles, show the a
   assert.strictEqual(costPage.costDuration(null), "—");
   assert.match(costPage.costDuration(80000, "en"), /1\s?min 20\s?s/);
   assert.match(costPage.costRender({ read: { today: 0, days7: 0 }, written: { days7: 0 }, totals: { tokens: 0, notes: 0 }, top: [], tooLarge: [], neverRead: { available: false }, organisation: [], findTime: null, engineSpeed: null }, {}, T), /Time to find a note/);
+});
+
+test("panel: \"By AI tool\" tiny line — busiest client first, known ids get their product name, unknown/unlisted handled, nothing when there is no data", () => {
+  const T = costPage.defaultCostT;
+  assert.strictEqual(costPage.costClientTokens(null, T), "", "no clientTokens at all: nothing rendered");
+  assert.strictEqual(costPage.costClientTokens({ days: 7, byClient: {} }, T), "", "empty byClient: nothing rendered");
+  const html = costPage.costClientTokens({ days: 7, byClient: {
+    cursor: { tokens: 6, calls: 1 }, "claude-code": { tokens: 1234, calls: 5 }, unknown: { tokens: 3, calls: 1 }, "SomeFutureTool/9.0": { tokens: 2, calls: 1 },
+  } }, T);
+  assert.match(html, /By AI tool · 7 days:/);
+  assert.match(html, /Claude Code ≈ 1,234.*\(5 calls\)/, "busiest client (by tokens) listed first");
+  assert.match(html, /Cursor ≈ 6.*\(1 call\)/, "singular form for 1 call");
+  assert.match(html, /Unknown tool ≈ 3/, "the \"unknown\" bucket is translated, not shown as the literal id");
+  assert.match(html, /SomeFutureTool\/9\.0 ≈ 2/, "an unlisted MCP client's raw name is shown as sent");
+  assert.ok(html.indexOf("Claude Code") < html.indexOf("Cursor"), "sorted by tokens, descending");
+  assert.strictEqual(costPage.costClientLabel("claude-code", T), "Claude Code");
+  assert.strictEqual(costPage.costClientLabel("unknown", T), "Unknown tool");
+  assert.strictEqual(costPage.costClientLabel("future-tool", T), "future-tool");
 });
