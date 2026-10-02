@@ -162,6 +162,118 @@ test("CLI: memglow init --yes / uninstall in a fake home", async () => {
   } finally { h.done(); }
 });
 
+// ---- memglow's built-in memory rules, written into CLAUDE.md/AGENTS.md/… (not the MCP proxy) ----
+
+test("upsertRulesBlock: appends a new block, replaces an existing one, the rest of the file untouched", () => {
+  const block1 = installer.upsertRulesBlock("", "Rule A.");
+  assert.strictEqual(block1, `${installer.RULES_MARK_START}\nRule A.\n${installer.RULES_MARK_END}\n`);
+  const withPrefix = installer.upsertRulesBlock("# My project\n\nSome notes I wrote.\n", "Rule A.");
+  assert.match(withPrefix, /^# My project\n\nSome notes I wrote\.\n\n<!-- memglow:rules start -->/);
+  const replaced = installer.upsertRulesBlock(withPrefix, "Rule B, updated.");
+  assert.match(replaced, /^# My project\n\nSome notes I wrote\.\n\n<!-- memglow:rules start -->\nRule B, updated\.\n<!-- memglow:rules end -->\n$/);
+  assert.ok(!replaced.includes("Rule A."), "the old block is gone, not duplicated");
+});
+
+test("init: writeRules off by default (not interactive, no --write-rules): nothing written", async () => {
+  const h = fakeHome();
+  try {
+    const r = await installer.init({ home: h.home, agents: ["claude-code"] });
+    assert.deepStrictEqual(r.rules, []);
+    assert.ok(!fs.existsSync(path.join(h.home, ".claude", "CLAUDE.md")));
+  } finally { h.done(); }
+});
+
+test("init: writeRules true + confirm -> a replaceable block in CLAUDE.md, backed up, real config values, re-run replaces only the block", async () => {
+  const h = fakeHome();
+  const claudeMd = path.join(h.home, ".claude", "CLAUDE.md");
+  fs.writeFileSync(claudeMd, "# My own notes\nDo not touch this line.\n");
+  try {
+    const r = await installer.init({ home: h.home, agents: ["claude-code"], writeRules: true, confirm: async () => true });
+    assert.deepStrictEqual(r.rules, [{ id: "claude-code", file: claudeMd }]);
+    const text1 = fs.readFileSync(claudeMd, "utf8");
+    assert.match(text1, /^# My own notes\nDo not touch this line\./, "the rest of the file is untouched");
+    assert.match(text1, /<!-- memglow:rules start -->[\s\S]*memory-hygiene rules[\s\S]*<!-- memglow:rules end -->/);
+    assert.match(text1, /under 5000 tokens/, "real configuration values, not a placeholder");
+    assert.strictEqual(fs.readFileSync(claudeMd + ".memglow-backup", "utf8"), "# My own notes\nDo not touch this line.\n");
+
+    // Re-run (e.g. a reinstall): the block is replaced in place, the backup is NOT overwritten
+    // (it must still hold the ORIGINAL, pre-memglow content), and nothing is duplicated.
+    const r2 = await installer.init({ home: h.home, agents: ["claude-code"], writeRules: true, confirm: async () => true });
+    assert.strictEqual(r2.rules.length, 1);
+    const text2 = fs.readFileSync(claudeMd, "utf8");
+    assert.strictEqual((text2.match(/<!-- memglow:rules start -->/g) || []).length, 1, "never duplicated");
+    assert.match(text2, /^# My own notes\nDo not touch this line\./);
+    assert.strictEqual(fs.readFileSync(claudeMd + ".memglow-backup", "utf8"), "# My own notes\nDo not touch this line.\n", "backup still holds the ORIGINAL content");
+  } finally { h.done(); }
+});
+
+test("init: writeRules true but declined -> nothing written; a tool with no hook installed this run gets no file either", async () => {
+  const h = fakeHome();
+  try {
+    const r = await installer.init({ home: h.home, agents: ["claude-code"], writeRules: true, confirm: async () => false });
+    assert.deepStrictEqual(r.rules, []);
+    assert.ok(!fs.existsSync(path.join(h.home, ".claude", "CLAUDE.md")));
+    // codex was detected (fakeHome creates ~/.codex) but not in `agents`: no hook installed, so no rules file.
+    assert.ok(!fs.existsSync(path.join(h.home, ".codex", "AGENTS.md")));
+  } finally { h.done(); }
+});
+
+test("init: MEMGLOW_RULES=0 -> no rules text, writeRules is a no-op even if accepted", async () => {
+  const h = fakeHome();
+  const prev = process.env.MEMGLOW_RULES;
+  process.env.MEMGLOW_RULES = "0";
+  try {
+    const r = await installer.init({ home: h.home, agents: ["claude-code"], writeRules: true, confirm: async () => true });
+    assert.deepStrictEqual(r.rules, []);
+    assert.ok(!fs.existsSync(path.join(h.home, ".claude", "CLAUDE.md")));
+  } finally { if (prev === undefined) delete process.env.MEMGLOW_RULES; else process.env.MEMGLOW_RULES = prev; h.done(); }
+});
+
+test("uninstall: strips the rules block (keeps the rest), --restore-backups puts the original file back", async () => {
+  const h = fakeHome();
+  const claudeMd = path.join(h.home, ".claude", "CLAUDE.md");
+  fs.writeFileSync(claudeMd, "# My own notes\nDo not touch this line.\n");
+  await installer.init({ home: h.home, agents: ["claude-code"], writeRules: true, confirm: async () => true });
+  assert.match(fs.readFileSync(claudeMd, "utf8"), /memglow:rules start/);
+
+  const u = installer.uninstall({ home: h.home });
+  assert.ok(u.cleaned.includes(claudeMd));
+  const after = fs.readFileSync(claudeMd, "utf8");
+  assert.ok(!after.includes("memglow:rules"), "block removed");
+  assert.match(after, /^# My own notes\nDo not touch this line\./, "the rest kept");
+
+  // A SECOND home: the rules file memglow created from scratch (no prior CLAUDE.md) is removed
+  // entirely once stripped empty, not left as an empty file.
+  const h2 = fakeHome();
+  try {
+    await installer.init({ home: h2.home, agents: ["claude-code"], writeRules: true, confirm: async () => true });
+    const createdMd = path.join(h2.home, ".claude", "CLAUDE.md");
+    assert.ok(fs.existsSync(createdMd));
+    installer.uninstall({ home: h2.home });
+    assert.ok(!fs.existsSync(createdMd), "nothing memglow created from nothing is left behind");
+
+    // --restore-backups: when there WAS a backup (pre-existing file), it wins over stripping.
+    const claudeMd2 = path.join(h2.home, ".claude", "CLAUDE.md");
+    fs.writeFileSync(claudeMd2, "original content\n");
+    await installer.init({ home: h2.home, agents: ["claude-code"], writeRules: true, confirm: async () => true });
+    installer.uninstall({ home: h2.home, restoreBackups: true });
+    assert.strictEqual(fs.readFileSync(claudeMd2, "utf8"), "original content\n");
+  } finally { h2.done(); }
+  h.done();
+});
+
+test("CLI: memglow init --yes writes no rules file; --yes --write-rules does", async () => {
+  const h = fakeHome();
+  const { execFileSync } = require("child_process");
+  const bin = path.join(__dirname, "..", "bin", "memglow.js");
+  try {
+    execFileSync(process.execPath, [bin, "init", "--yes", "--home", h.home, "--agents", "claude-code"], { encoding: "utf8" });
+    assert.ok(!fs.existsSync(path.join(h.home, ".claude", "CLAUDE.md")), "--yes alone: nothing written");
+    execFileSync(process.execPath, [bin, "init", "--yes", "--write-rules", "--home", h.home, "--agents", "claude-code"], { encoding: "utf8" });
+    assert.match(fs.readFileSync(path.join(h.home, ".claude", "CLAUDE.md"), "utf8"), /memory-hygiene rules/);
+  } finally { h.done(); }
+});
+
 test("server falls back to ~/.memglow only when nothing else is configured", () => {
   const { withInstalledDefaults } = require("../server");
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-fb-"));

@@ -30,6 +30,9 @@ init options:
   --clients <list>    the AI tools you use (also chatgpt, other-mcp), saved for the page;
                       asked when interactive
   --wrap-mcp          also wrap Claude Desktop's memory MCP servers with the memglow proxy
+  --write-rules       add memglow's built-in memory rules to CLAUDE.md/AGENTS.md/GEMINI.md/…
+                      for the tools installed this run that do not go through the MCP proxy
+                      (asked, default yes, when interactive; with --yes, only with this flag)
   --docker            also write ~/.memglow/docker-compose.yml and .env
   --home <folder>     home folder to configure (default: yours)
 
@@ -45,6 +48,7 @@ function parse(argv) {
     const a = argv[i];
     if (a === "--yes" || a === "-y") o.yes = true;
     else if (a === "--wrap-mcp") o.wrapMcp = true;
+    else if (a === "--write-rules") o.writeRules = true;
     else if (a === "--docker") o.docker = true;
     else if (a === "--restore-backups") o.restoreBackups = true;
     else if (a === "--purge") o.purge = true;
@@ -165,18 +169,21 @@ async function cmdInit(o, io) {
   const agents = !o.agents || o.agents === "all" ? "all" : o.agents === "none" ? "none" : o.agents.split(",").map((s) => s.trim());
   let wrapMcp = !!o.wrapMcp;
   if (!wrapMcp && interactive) wrapMcp = true; // interactive: it will be asked
+  let writeRules = !!o.writeRules;
+  if (!writeRules && interactive) writeRules = true; // interactive: it will be asked (default yes)
   try {
     // The first-run choices (also offered by the page): asked when interactive; --clients sets the
     // tools without asking; --yes keeps the previous behaviour (nothing asked, nothing written).
     let choices = {};
     if (o.clients) choices.clients = o.clients === "none" ? [] : o.clients.split(",").map((x) => x.trim());
     else if (interactive) choices = await askChoices(io, { detected: installer.detectAgents(home).map((a) => a.id), docker: !!o.docker });
-    const r = await installer.init({ home, dir, port: o.port, agents, wrapMcp, docker: o.docker, confirm, clients: choices.clients, assistant: choices.assistant, secrets: choices.secrets });
+    const r = await installer.init({ home, dir, port: o.port, agents, wrapMcp, writeRules, docker: o.docker, confirm, clients: choices.clients, assistant: choices.assistant, secrets: choices.secrets });
     console.log(`\nmemglow is set up for ${r.notes}`);
     console.log(`  config and token: ${path.join(home, ".memglow")}`);
     for (const a of r.agents) console.log(`  ✓ ${a.id}: ${a.file}`);
     for (const s of r.skipped) console.log(`  – ${s.id}: ${s.why}`);
     for (const m of r.mcp) console.log(`  ✓ MCP proxy in front of ${m}`);
+    for (const rr of r.rules) console.log(`  ✓ memory rules added to ${rr.file}`);
     if (!r.agents.length && !r.skipped.length) console.log("  no AI tool detected: file changes are still picked up live (see README).");
     if (r.clients) console.log(`  AI tools: ${r.clients.join(", ") || "none"} (change them in the page: Settings → First-run setup)`);
     if (r.assistant) console.log(`  assistant: ${r.assistant.enabled ? "on, " + Object.keys(r.assistant.providers).join(", ") : "off"} (Settings → AI settings)`);
