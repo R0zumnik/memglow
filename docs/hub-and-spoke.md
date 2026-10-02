@@ -39,12 +39,25 @@ any note in at most two hops:
   carry the same rule in the ready-to-paste instructions they hand an assistant for splitting one
   large note.
 - `lib/hub-spoke.js` is the **detector**: a pure function, no file system, no network, that takes
-  notes (id, label, body) and the index note's id, and finds exactly where a memory drifts from the
-  shape above — a hub and its sub-notes, a redundant index entry, a sibling-listing line (flagged
-  `pure: true` when it is nothing but a label and a list of links, safe to delete outright; `pure:
-  false` when the links sit inside real prose and only a reader — human or AI — can tell whether
-  the reference is genuine), a sub-note missing its one-line uplink, a hub missing a line for one of
-  its notes.
+  notes (id, label, full raw text, folder) and the index note's id, and finds exactly where a
+  memory drifts from the shape above — a hub and its sub-notes, a redundant index entry, a
+  sibling-listing line (flagged `pure: true` when it is nothing but a label and a list of links,
+  safe to delete outright; `pure: false` when the links sit inside real prose and only a reader —
+  human or AI — can tell whether the reference is genuine), a sub-note missing its one-line
+  uplink, a hub missing a line for one of its notes.
+
+  **Conservative by design.** A hub/spoke relationship is only ever confirmed two ways: an
+  **explicit marker** on the sub-note (a `part_of:`/`parent:` frontmatter key, or a header-line
+  phrasing near the top of the body — "Part of … [[Hub]]", "Split on … from [[Hub]]", "Summary:
+  [[Hub]]", "Up: [[Hub]]" — trusted outright, no further proof asked), or, failing that, a narrow
+  **structural fallback** that additionally requires the sub-note be in the SAME FOLDER as the hub
+  and that every note linking to it, besides the index, be the hub or another confirmed sub-note —
+  closing off any note a sibling or an outsider also cites. Plain mutual linking between two
+  independent notes is never enough on its own. An earlier version used mutual links alone; tested
+  on a real 72-note memory it invented 33 "hubs" where there were really 4 — including turning the
+  user's own profile note into a "sub-note" of an unrelated feedback note, which would have removed
+  it from the index. The explicit-marker path exists so `lib/assistant/proposal.js`'s split (which
+  now writes `part_of:` into every new part's frontmatter) can be detected exactly, never guessed.
 - `lib/assistant/tidy.js` turns those findings into exact file edits: the deterministic ones
   (redundant index lines, pure sibling-listing lines, missing uplinks, missing hub lines) need no
   AI and spend no tokens; an ambiguous cross-link is only ever touched after the user's own AI

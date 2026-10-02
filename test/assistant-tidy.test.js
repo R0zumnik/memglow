@@ -24,9 +24,13 @@ function makeFake(mode = "tidy") {
 }
 
 // Same shape validated note by note in test/hub-spoke.test.js: one real hub ("project-x") with
-// three sub-notes, one of them already redundant in the index, a pure "Siblings:" line, an
-// ambiguous cross-link inside prose, a missing uplink and a missing hub line — plus a stand-alone
-// note that must stay exactly as it is.
+// four sub-notes EXPLICITLY marked `part_of: project-x` (lib/hub-spoke.js's conservative design:
+// a hub/spoke relationship is only ever confirmed through such a marker, or a narrow structural
+// fallback that would NOT apply here on its own — standalone-note's ordinary cross-link to
+// project-x-infra, on its own, is exactly the kind of citation that must never turn a note into a
+// "sub-note"). One of the four is already redundant in the index, one carries a pure "Siblings:"
+// line, one an ambiguous cross-link inside prose, one a missing uplink and one a missing hub line
+// — plus a stand-alone note that must stay exactly as it is.
 function hubSpokeMemory() {
   const dir = tmp("memglow-tidy-mem-");
   const write = (name, body) => fs.writeFileSync(path.join(dir, name + ".md"), body);
@@ -42,18 +46,18 @@ function hubSpokeMemory() {
     "- [[project-x-infra]]: infrastructure notes.",
     "- [[project-x-orphan]]: never links back (missing uplink).",
   ].join("\n") + "\n");
-  write("project-x-api", [
+  write("project-x-api", "---\npart_of: project-x\n---\n" + [
     "The API design.",
     "Back to [[project-x]].",
     "Siblings: [[project-x-orphan]], [[project-x-unlisted]]",
   ].join("\n") + "\n");
-  write("project-x-infra", [
+  write("project-x-infra", "---\npart_of: project-x\n---\n" + [
     "Infrastructure notes.",
     "Back to [[project-x]].",
     "As discussed in [[project-x-orphan]] and [[project-x-unlisted]], the deploy pipeline reuses the same cluster.",
   ].join("\n") + "\n");
-  write("project-x-orphan", "Some content with no backlink at all.\n");
-  write("project-x-unlisted", ["This note is about project X.", "See [[project-x]] for the summary."].join("\n") + "\n");
+  write("project-x-orphan", "---\npart_of: project-x\n---\nSome content with no backlink at all.\n");
+  write("project-x-unlisted", "---\npart_of: project-x\n---\n" + ["This note is about project X.", "See [[project-x]] for the summary."].join("\n") + "\n");
   write("standalone-note", ["Just a note on its own, no hub.", "Mentions [[project-x-infra]] once, in passing."].join("\n") + "\n");
   return dir;
 }

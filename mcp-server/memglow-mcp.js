@@ -163,7 +163,9 @@ function toolMemoryHealth(ctx) {
     try {
       const idx = notes.find((n) => n.theme === "index");
       const r = hubSpoke.detect({
-        notes: notes.map((n) => ({ id: n.id, label: n.label, body: ctx.memory.rawBody(n.id) || "" })),
+        // Full raw text (frontmatter included): declaredHubOf() needs the `part_of`/`parent` key
+        // and the header-line markers, both checked before any structural guess (lib/hub-spoke.js).
+        notes: notes.map((n) => { let text = ""; try { text = fs.readFileSync(path.join(ctx.config.memoryDir, n.rel), "utf8"); } catch { /* unreadable: no markers, no links */ } return { id: n.id, label: n.label, text, folder: n.folder || "" }; }),
         indexId: idx ? idx.id : null,
       });
       structure = r.counts;

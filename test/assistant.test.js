@@ -256,7 +256,7 @@ test("proposal validation: unit cases (paths, names, secrets, links, keys)", () 
   const ok = proposal.validate(goodProposal(r), r.ctx);
   assert.ok(ok.ok, JSON.stringify(ok.errors));
   const part = ok.files.find((f) => f.rel === "big-a.md");
-  assert.match(part.after, /^---\ntitle: "A"\ntheme: projects\nsubtheme: alpha\n---\n/, "group copied, no permalink");
+  assert.match(part.after, /^---\ntitle: "A"\npart_of: big\ntheme: projects\nsubtheme: alpha\n---\n/, "group copied, no permalink, part_of set for lib\/hub-spoke.js");
   assert.ok(part.after.includes("api_password: hunter2hunter2hunter2"), "secret restored");
   const orig = ok.files.find((f) => f.role === "original");
   assert.ok(orig.after.startsWith("---\ntitle: Big note\ntheme: projects\nsubtheme: alpha\npermalink: big\n---\n"), "frontmatter kept byte for byte");
