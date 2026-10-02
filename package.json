@@ -1,6 +1,6 @@
 {
   "name": "memglow",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "A live 3D view of your AI assistant's Markdown memory — watch notes light up as Claude, Codex, Gemini, Cursor, Copilot and others read, search and write them.",
   "license": "MIT",
   "main": "server.js",

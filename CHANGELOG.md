@@ -1,8 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-10-02
 
 ### Added
+
+- **Hub and spoke** ([docs/hub-and-spoke.md](docs/hub-and-spoke.md)): the memory index lists only
+  project summaries and stand-alone notes; a summary lists its notes; each note links back to its
+  summary rather than to all its siblings. Every index line is paid in every session and every
+  link in every neighbour lookup (≈ 530 bytes per link in a basic-memory `build_context` result),
+  while links do not make search faster. The rule is in the built-in memory rules and in every
+  prompt that restructures notes (the split copy prompt, the MCP `split_plan` prompt, the
+  assistant's split proposal); splits no longer link new notes to each other nor add them to the
+  index, and every part now carries `part_of: <summary>` in its frontmatter.
+- **Tidy** (`lib/hub-spoke.js`, `lib/assistant/tidy.js`): a fourth assistant job next to split,
+  regroup and archive. Conservative detection (explicit `part_of:` or *Split on / Part of / Up:*
+  markers, or an unambiguous structure); index lines pointing to parts, pure "Siblings:" lines and
+  missing links back are fixed without the AI; ambiguous in-text links go to your AI, keep or
+  remove only. Counts in the dashboard (**Structure**) and in the MCP `memory_health` result.
 
 - **Memory rules, built in and on by default** (`lib/memory-rules.js`): calibrated
   memory-hygiene rules (search before read/write, one note per topic, split large notes within

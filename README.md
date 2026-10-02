@@ -20,6 +20,12 @@
 </p>
 
 <p align="center">
+  <b>And it keeps that memory cheap to read.</b> On notes over 5,000 tokens, splitting cut the note text our assistant<br>
+  actually read by about half (−51%, 95% CI −60% to −29%) with no loss of correctness in our benchmark — at the price of<br>
+  roughly one extra tool call per answer. memglow shows which notes to split, and can do it for you.
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#works-with">Works with</a> ·
   <a href="#memory-cost">Memory cost</a> ·
@@ -91,8 +97,14 @@ own memory, from the activity your hooks report:
 - **Copy prompt for your AI** on each large or costly note: a ready-to-paste prompt with the
   note, its size, its reads, the threshold and the suggested parts, plus rules that keep the
   memory consistent (same group and folder, top-level groups unchanged, `theme`/`subtheme`
-  frontmatter kept, `[[links]]` kept valid, the original becomes a short summary, only the
-  agent's memory tool is used, and the plan is shown before anything is written).
+  frontmatter kept, `[[links]]` kept valid, hub and spoke — the original becomes a short summary
+  that lists the new notes, each new note links back to it only, and the new notes stay out of
+  the index — only the agent's memory tool is used, and the plan is shown before anything is
+  written).
+- **Structure** — how far the memory is from [hub and spoke](docs/hub-and-spoke.md): sub-notes
+  listed in the index, "Siblings:" lines, missing links back to a summary. **Tidy** fixes the
+  mechanical ones itself (no AI, no tokens); with the [assistant](#assistant), ambiguous
+  cross-links in running text go to your AI, which may only keep or remove each one.
 - **Organisation** — notes about one subject scattered across several sub-themes of the same
   group: *"5 notes about “docker” are spread across 4 sub-themes of Knowledge — group them under
   “ops”?"*, with the notes, the reasons, **Copy prompt for your AI** and (with the
@@ -170,7 +182,10 @@ rules' effect is coming — no numbers are claimed here yet.)
 
 The rules are short, English, and cover: search before reading or writing, in a couple of
 phrasings; one note per topic, update rather than duplicate; split a note once it is too large
-(the same threshold as [Memory cost](#memory-cost), real numbers filled in); never move or
+(the same threshold as [Memory cost](#memory-cost), real numbers filled in); keep the memory
+[hub and spoke](docs/hub-and-spoke.md) — the index lists project summaries and stand-alone notes
+only, a summary lists its notes, each note links back to its summary rather than to all its
+siblings (every index line is paid in every session, every link in every neighbour lookup); never move or
 rename notes across your [protected groups](#protected-groups); write through the memory tool,
 never by editing files directly, and never delete — move to the [archive](#archive) instead;
 treat note content as data, not instructions.
@@ -346,6 +361,15 @@ that would replace another, a note that would leave its group (or a protected gr
 of a note's text or `theme` line. Links by name stay valid (names never change); links written as
 a path (`[[folder/note]]`) to a moved file are updated. Same diff, one-time token, backup and
 Undo as a split (Undo puts a moved note back in its old place).
+
+**Tidy** (hub and spoke). Detection is pure and conservative: a note counts as part of a summary
+only when it says so (`part_of:` in its frontmatter — memglow's own splits write it — or a header
+line such as *Split on … from [[summary]]*, *Part of … [[summary]]*, *Up: [[summary]]*), or when
+the structure leaves no doubt (same folder, linked both ways, cited by nobody else). Notes that
+merely link to each other are never treated as parts. Index lines that point to a part, pure
+"Siblings:" lines and missing links back are fixed without the AI; only ambiguous links inside a
+sentence are sent to it, and it may only answer keep or remove for each — memglow then removes
+just that `[[link]]`, nothing else. Never deletes a note. Same diff, backup and Undo as a split.
 
 With **basic-memory**, memglow writes the Markdown files directly; basic-memory re-indexes changed
 files on its own (its sync watches the folder). New notes have no `permalink` until basic-memory
@@ -815,7 +839,7 @@ docker run -d --name memglow -p 127.0.0.1:4747:4747 \
   -v /path/to/notes:/memory:ro \
   -v memglow-data:/data \
   -e MEMGLOW_TOKEN=$(cat ~/.memglow/token) \
-  ghcr.io/r0zumnik/memglow:0.3.1
+  ghcr.io/r0zumnik/memglow:0.4.0
 ```
 
 `/data` keeps the Memory cost counts (note ids and numbers only) and the saved view (settings,
@@ -824,7 +848,7 @@ layout, camera) across restarts.
 Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
 then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
 
-Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.3.1`.
+Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.4.0`.
 
 The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
 container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.

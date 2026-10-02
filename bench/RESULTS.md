@@ -349,9 +349,9 @@ part, but reaching it costs a second read.
    again.
 
 **A real, complementary data point (read-only, no cost) — but only 1–2 days of hindsight.** On
-Florent's actual memory, `project-memglow` was split on 2026-10-01 (per Florent: ≈15,500 tokens →
+the author's own memory, `project-memglow` was split on 2026-10-01 (per the author: ≈15,500 tokens →
 a ≈1,200-token summary + 4 parts of 2,400–4,900 tokens: `project-memglow-{roadmap,releases,history,launch}`).
-Real counters (`data/memoire-compteurs.json` on the NAS) and file sizes:
+Real counters (the author's own activity counters) and file sizes:
 
 | Day | Reads of the (now-)summary | Reads of `-roadmap` | Note on size |
 |---|---|---|---|
@@ -367,7 +367,7 @@ split and the day after (50+ writes), so there is no way to separate "tokens sav
 from "tokens added by the work that followed" using these counters alone — the synthetic bench's
 fixed-content design exists precisely to isolate that. What the real numbers do show cleanly: the
 split note was read far more right after splitting (18 reads of one part in a single day) than the
-unsplit note ever was (1 read the day before), consistent with Florent's own project work moving
+unsplit note ever was (1 read the day before), consistent with the author's own project work moving
 into it; and two of the four parts have already grown large enough, on their own, to be flagged by
 Memory cost again — splitting once does not mean a part stays small.
 
