@@ -250,6 +250,7 @@ test("regression: a dense ring of stand-alone notes never becomes a hub; only th
 
 test("isPureSiblingLine: labels, bullets and separators are all tolerated", () => {
   assert.strictEqual(isPureSiblingLine("Siblings: [[a]], [[b]]"), true);
+  assert.strictEqual(isPureSiblingLine("Siblings: [[a]], [[b]], [[c]]."), true);
   assert.strictEqual(isPureSiblingLine("- See also: [[a]] · [[b]]"), true);
   assert.strictEqual(isPureSiblingLine("**Related:** [[a]] and [[b]]"), true);
   assert.strictEqual(isPureSiblingLine("This note and [[a]] and [[b]] share a root cause."), false);
