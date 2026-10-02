@@ -398,6 +398,68 @@ copies and sanity-checks the questions against them (no `claude` call, no cost).
 `bench/`, never point this at a real memory: the copies live in a fresh `os.tmpdir()` folder,
 deleted at the end unless `--keep` is passed.
 
+## Multi-question sessions (`bench/run.js --mode sessions`, stage 0.4.1, 2026-10-02)
+
+Point 4 of the short answer above ("dedupe needs long sessions to be judged") could not actually
+be measured by the runs in this report: every run so far is **one question per `claude -p` call**,
+so dedupe, `toc`'s section-on-demand escape hatch and any future context-reuse lever never get a
+second turn of the same MCP session to do anything with.
+
+`node bench/run.js --mode sessions` asks several RELATED questions in order inside ONE `claude -p`
+call instead — same proxy, same variants (A–E, H), same budget/seed/resume machinery, only the
+prompt and the grading change. Sessions are grouped by topic in `bench/sessions.json`: `kestrel`,
+`harbor`, `orchard` and `lantern` each share a note across their questions on purpose (the second
+question can reuse what the first already read in the same session); `ops-reference` and `clients`
+group otherwise-unrelated facts, as a baseline for sessions with nothing to reuse. The combined
+prompt asks for one `"A<n>: "`-prefixed line per question, in order; `parseSessionAnswer` grades
+each line against its own question's `expect` regex (falling back to the whole answer when a line
+is missing, so a model that ignores the numbering is not unfairly marked wrong on everything).
+
+```bash
+node bench/run.js --mode sessions --dry-run                              # plan + cost estimate only, no claude call
+node bench/run.js --mode sessions --upstream http://127.0.0.1:8123/mcp --memory-dir /tmp/mg-bench/notes \
+  --out bench/results/sessions.jsonl --variants A,C,D,E --reps 2 --model haiku --budget-total 5
+```
+
+`--dry-run` prints the run plan and a cost estimate (sessions × variants × reps, × average
+`costUsd` of every past successful single-question run already recorded in `bench/results/*.jsonl`)
+— useful to size `--budget-run`/`--budget-total` before spending anything: a 5-question session
+costs roughly 5× a single-question run, so the single-question defaults (`--budget-run 0.30`) are
+too tight for the bigger sessions here. Not yet run for a dollar figure in this report — building
+and unit-testing the harness was the point of stage 0.4.1; the actual A/B numbers are for the levers
+that use it (dedupe today, context-reuse levers of stage 0.4.2).
+
+## Tokenizer accuracy (`bench/tokenizer-check.js`, stage 0.4.1, 2026-10-02)
+
+memglow estimates tokens as `ceil(bytes / 4)` everywhere (`lib/cost.js`), never pretending to be a
+real tokenizer. `node bench/tokenizer-check.js bench/results/*.jsonl` checks how far that estimate
+is from the REAL token counts Claude Code reports at the end of each bench run (`usage.input_tokens`
++ `cache_creation_input_tokens` + `cache_read_input_tokens`), bucketed by question `kind` (a proxy
+for note size: `small`/`large`/`link`/`none`).
+
+**Honest limit, found while building this: the existing result files cannot give a clean per-note
+tokenizer error ratio.** Every recorded run keeps only the FINAL, SESSION-TOTAL usage (cumulative
+across every turn — Claude Code's own `result.usage` is the sum for the whole `claude -p` call, not
+per API call) and `toolResultChars` (the sum of every tool result's character count in that run,
+also session-total). Neither is the size of one note paired with the token delta it alone caused:
+the total also contains the system prompt, the ~12 MCP tool schemas, the user prompt, and —
+because each turn resends the growing conversation — every PRIOR turn's assistant text and tool
+results again, repeated through prompt caching. What is actually missing to do this properly: the
+per-turn `usage` of each individual API call (available in the raw `stream-json` transcript, each
+`assistant` message carries its own `usage`), kept alongside the exact tool-result text that turn
+received as input. `bench/run.js` only keeps that with `--keep-streams <dir>`, and no run in this
+repository's `bench/results/*.jsonl` was produced with that flag — the raw transcripts were never
+saved. Re-running the whole benchmark with `--keep-streams` only to get this would cost real $ for
+a measurement task, out of scope here.
+
+Given that, `tokenizer-check.js` reports the best available comparison, clearly labeled as an upper
+bound, not a per-note accuracy figure: for each run, `estimateTokens(toolResultChars)` (what
+memglow's formula would guess for all the tool-result text of that run) against the run's total
+real input tokens (which is always bigger, by the constant-ish overhead above) — grouped by `kind`
+and printed as a ratio, plus the gap in tokens. Re-run it after a `--keep-streams` session to get
+the real per-call figure; the script says so in its own `--help`/header, and prints the caveat
+above before any number.
+
 ## Cost of this benchmark
 
 5.36 $ at list price for 265 runs in total (pilot 6, Haiku 210, control 15, Sonnet 30, one

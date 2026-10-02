@@ -1,0 +1,12 @@
+{
+  "_about": "Multi-question sessions for `node bench/run.js --mode sessions` (stage 0.4.1 of the v0.5 engine roadmap): each session groups a few questions of bench/questions.json that are asked IN ORDER inside the SAME claude -p call (one MCP session), so dedupe/toc/context-reuse levers have something to reuse across turns. `questions` are ids from bench/questions.json, checked at load time (unknown id = hard error). Topics 'kestrel', 'harbor', 'orchard' and 'lantern' share a note across their questions on purpose (the second question can reuse what the first already read); 'ops-reference' and 'clients' group otherwise-unrelated questions from the same demo memory, as a baseline for how much a session helps when there is nothing to reuse.",
+  "sessions": [
+    { "id": "kestrel", "topic": "Kestrel project", "questions": ["q01", "q07", "q21"] },
+    { "id": "harbor", "topic": "Harbor project", "questions": ["q08", "q19"] },
+    { "id": "orchard", "topic": "Orchard project", "questions": ["q17", "q20"] },
+    { "id": "lantern", "topic": "Lantern project", "questions": ["q10", "q16"] },
+    { "id": "ops-reference", "topic": "Unrelated reference facts", "questions": ["q04", "q05", "q11", "q12", "q14"] },
+    { "id": "clients", "topic": "Unrelated client facts", "questions": ["q02", "q03", "q06", "q09", "q18"] },
+    { "id": "reference-2", "topic": "Glossary and onboarding", "questions": ["q13", "q15"] }
+  ]
+}
