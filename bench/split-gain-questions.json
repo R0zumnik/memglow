@@ -1,0 +1,11 @@
+{
+  "_about": "New factual questions for bench/split-gain.js, aimed at sections of the 9 large notes (>5,000 tokens) that bench/questions.json does not already cover. Same schema as bench/questions.json: `expect` is a case-insensitive regex the final answer must match; `notes` are the notes that hold the answer. All facts are deterministic (bench/generate.js, seed 42) or fixed content of demo/memory (reference-incident-log) — verified against the actually generated files, not guessed.",
+  "questions": [
+    { "id": "s01", "kind": "large", "q": "What is our account number with Drift Hosting?", "expect": "DR-32850", "notes": ["reference-vendor-catalog"] },
+    { "id": "s02", "kind": "large", "q": "What is our account number with Rook Security?", "expect": "RO-91779", "notes": ["reference-vendor-catalog"] },
+    { "id": "s03", "kind": "large", "q": "In the network inventory, what is the name of the switch in rack A?", "expect": "sw-a-02", "notes": ["reference-network-inventory"] },
+    { "id": "s04", "kind": "large", "q": "According to the API catalogue, what is the rate limit of the Maps API?", "expect": "\\b2900\\b", "notes": ["reference-api-catalog"] },
+    { "id": "s05", "kind": "large", "q": "At the Lantern review meeting of 2 October 2025, were change-request costs already added to the original fixed price?", "expect": "no\\b|not(?: yet)? added|separately", "notes": ["log-meetings-2025"] },
+    { "id": "s06", "kind": "large", "q": "How many minutes did it take to fix the Git server incident of 11 August 2025?", "expect": "\\b29\\b", "notes": ["reference-incident-log"] }
+  ]
+}

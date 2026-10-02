@@ -228,6 +228,176 @@ so turning it on for a setup that specifically uses basic-memory behind Claude C
 non-OpenAI client) is a reasonable, low-risk choice. It is just not large or certain enough, on
 this sample, to flip memglow's own default the way the stated rule requires.
 
+## Split gain (`bench/split-gain.js`, 2026-10-02)
+
+**Question.** The "Memory cost" panel suggests splitting a note over 5,000 tokens into parts of
+≈2,000 tokens each. Memory cost itself never claims a saving ("estimate", "memglow promises no
+saving" — `lib/cost.js`). Does splitting actually reduce what a real assistant reads, calls and
+pays for to answer a question that lives in one of those notes — and does it cost anything in
+calls, latency or correctness?
+
+**What's different from the rest of this report — read before trusting the numbers.** This run
+had no `docker`, `uvx` or `python3` available (checked: `which docker uvx python3` empty), so the
+real `ghcr.io/basicmachines-co/basic-memory` container used above could not be started. In its
+place, a small Node-only stand-in server is built directly into `bench/split-gain.js`
+(`startFakeMemory`, not a separate file, not committed as its own artifact): `read_note` /
+`search_notes` (plain case-insensitive **substring** search — a query must appear as one
+contiguous run of characters in the note, unlike basic-memory's real word-based SQLite FTS) plus
+the same always-listed, always-erroring ChatGPT-only `search`/`fetch` pair as
+`test/fixtures/fake-memory-mcp.js` (ported from basic-memory 0.23's `chatgpt_tools.py`), and the
+same `structuredContent` wrapping real basic-memory uses — the exact mechanism the proxy fix at
+the top of this report depends on. This is a **limitation of this run's sandbox**, not a change to
+the protocol, exactly like the hideUnsupportedTools mini-bench above. Consequence seen in the data:
+the weak substring search caused a handful of search misses on both sides (4 wrong answers out of
+71, see below) that real basic-memory's FTS would likely have avoided, and neither side's Haiku
+ever called the ChatGPT-only `search`/`fetch` tools (0 of 71 runs) — unlike the 197/210 in the main
+Haiku table above, so the "wasted call" tax described in observation 5 is absent here. **Only the
+BEFORE vs AFTER comparison within this run is meaningful**; absolute tool-call and token counts are
+not comparable to the tables above. The real `basic-memory-server` container and the real memory
+were never touched (confirmed `healthy` before and after; the stand-in only ever read a throw-away
+copy of `bench/generate.js`'s fictional notes).
+
+**Protocol.** Same 225 fictional notes as the rest of this report (`bench/generate.js`, seed 42,
+≈103,000 tokens, 9 notes over 5,000 tokens), in two disposable copies:
+
+- **BEFORE** — untouched.
+- **AFTER** — the 9 large notes split by code, deterministically (no AI, no cost, reproducible
+  byte-for-byte): `lib/cost.js`'s own `sectionSpans` cut into sections, packed in order into parts
+  of at most 2,000 tokens (the same greedy rule as `lib/cost.js packSections`, the rule
+  `lib/assistant/proposal.js` suggests to the AI for the real, AI-proposed split). Each part becomes
+  its own note next to the original, with its `theme`/`subtheme` frontmatter copied verbatim; the
+  original note's id and filename are **kept**, only its body is replaced by a short summary
+  linking to every part — exactly what `lib/assistant/proposal.js` does for the real feature, so
+  every existing `[[link]]` to the note keeps resolving with no rewrite needed (the real feature's
+  optional `linkUpdates`, redirecting a link to a specific part, is itself optional — `[]` is a
+  valid answer there too — and out of scope for a deterministic, AI-free split). Checked, the same
+  way the real validator does, that every non-blank line of the original body reappears in a part
+  before writing anything: all 9 notes split cleanly, 0 lines lost. Resulting parts: 935–2,014
+  tokens; summaries: 125–279 tokens (97% smaller than the original on average — before/after detail
+  in the table below).
+- **Questions**: the 21 of `bench/questions.json` + 6 new ones in `bench/split-gain-questions.json`,
+  aimed at sections of the large notes those 21 don't already cover (two more vendor-catalogue
+  accounts, a second rack in the network inventory, a second API's rate limit, a distractor meeting
+  outcome, a specific incident-log entry) — every fact checked against the actually generated files
+  (seed 42 is reproducible: verified byte-identical across two runs), not guessed.
+- **Client**: the real `claude -p` CLI, Haiku only, restricted, same flags as `bench/run.js`
+  (clean environment, empty working folder, `--strict-mcp-config`, one `memory` server, write tools
+  disallowed, `--no-session-persistence`). **Proxy levers fixed at the C defaults** (sizeWarning +
+  searchDetails + suggestions on, dedupe/toc off) **on both conditions** — only the memory changes.
+- Plan: 27 questions × {before, after} × 2 repetitions = 108 calls, shuffled with a fixed seed, one
+  at a time, budget checked before each call.
+- **Budget: a hard $1.50 cap** (shared with this run's own setup/smoke checks, ≈$0.044). **71 of 108
+  planned runs completed before the cap** (budget is checked before a run starts, so the run in
+  flight when the cap was crossed still finished: **$1.524 actually spent, 1.6% over the $1.50
+  target** — the same post-hoc-check overshoot the hideUnsupportedTools mini-bench above describes).
+  No run ever failed before reaching the model (no account usage-limit hit, so nothing was
+  discarded). Coverage is uneven across the shuffle: every question got at least one run on at
+  least one side, but several got **0 runs on one side** (q09, q11, q14, q17: 0 "after"; q05, q07,
+  q12: 0 "before") — those rows are simply absent from the per-kind tables below rather than
+  guessed.
+
+**Results.** Differences: ratio of per-question means, AFTER vs BEFORE, with a 95% bootstrap
+interval over questions (paired where both sides have the question); **bold** = interval excludes
+0. Read anything below the ≈10–15% noise floor this report's own A/B relay check establishes as
+unreliable at this sample size — the small/none row below, where BEFORE and AFTER are *byte-identical*
+notes, is this run's own illustration of that floor.
+
+| | n (before/after) | Correct | Tool calls | Input tokens | Output tokens | Note text received (≈tokens) | Time (s) | Cost ($) |
+|---|---|---|---|---|---|---|---|---|
+| **All questions** | 36/35 | 33/36, 34/35 | 3.9 → 4.5 (+10% [−2,+22]) | 28,639 → 30,420 (+2% [−7,+11]) | 539 → 587 (+6% [−1,+14]) | 3,365 → 1,647 (**−51% [−60,−29]**) | 8.4 → 8.9 (+2% [−7,+12]) | 0.0219 → 0.0198 (**−10% [−16,−1]**) |
+| Large-note questions | 18/16 | 16/18, 15/16 | 3.7 → 4.9 (**+23% [+10,+35]**) | 28,578 → 33,509 (+8% [−6,+23]) | 521 → 631 (**+13% [+3,+22]**) | 5,095 → 2,557 (**−50% [−63,−25]**) | 8.2 → 9.5 (+6% [−7,+21]) | 0.0246 → 0.0221 (−12% [−22,+3]) |
+| New questions (s01–s06) | 9/9 | 8/9, 8/9 | 3.9 → 5.0 (**+24% [+9,+39]**) | 29,750 → 33,785 (+8% [−10,+27]) | 535 → 638 (+13% [−1,+24]) | 4,984 → 2,593 (−47% [−63,+13]) | 8.4 → 9.7 (+11% [−5,+29]) | 0.0247 → 0.0224 (−9% [−24,+17]) |
+| Link questions | 8/7 | 8/8, 7/7 | 4.1 → 4.4 (+13% [−6,+36]) | 29,110 → 30,510 (+6% [−5,+17]) | 559 → 587 (+10% [−7,+30]) | 2,515 → 1,624 (−54% [−61,+6]) | 8.6 → 8.9 (+8% [−11,+35]) | 0.0206 → 0.0197 (**−10% [−15,−2]**) |
+| Small/none (sanity: notes untouched) | 10/12 | 9/10, 12/12 | 4.2 → 4.1 (−9% [−28,+10]) | 28,372 → 26,250 (**−11% [−19,−2]**) | 556 → 528 (−7% [−13,+1]) | 930 → 446 (−44% [−70,+45]) | 8.6 → 8.1 (−8% [−18,+3]) | 0.0179 → 0.0168 (**−7% [−13,−0]**) |
+
+Tool calls by tool, totalled: `search_notes` 96 before / 94 after, `read_note` 44 before / 63
+after, `list_directory` 1/1, `search`/`fetch` 0/0. Reading one more note per answer after the split
+(1.22 → 1.80 `read_note` calls per run) is exactly the mechanism: the summary points at the right
+part, but reaching it costs a second read.
+
+**Observations — honest, not oversold.**
+
+1. **The core effect is real and large: about half the note text, for about the same cost.** Over
+   all questions, the text an assistant actually receives from the memory tools drops **51%**
+   (interval excludes 0), and cost drops **10%** (interval excludes 0) — Haiku's output stays short
+   regardless of how much it read, so halving the input text it has to read shows up in cost even
+   though input *tokens* barely move (+2%, not significant: the extra tool-call overhead and
+   Claude Code's own context roughly cancel the saved note text in the token count, the same
+   pattern the `toc` lever shows in the main report above — but here the saving is structural, not a
+   per-call lever, and it is already in place before the question is asked).
+2. **It costs one extra round trip, and that shows most where it matters most.** On the 18
+   large-note questions specifically, tool calls rise **23%** and output tokens **13%** (both
+   intervals exclude 0) — the model reads the summary, follows a link to the right part, and often
+   restates more context in its answer. Net cost on that subset alone is directionally down (−12%)
+   but the interval [−22%, +3%] does not exclude 0: unlike the "all questions" row, this is not a
+   confirmed saving by itself, only consistent with one.
+3. **No loss of correctness detected** — if anything the opposite, 34/35 (97%) after vs 33/36 (92%)
+   before, but neither this direction nor its reverse would be meaningful at n≈35 per side. All 4
+   wrong answers trace to the stand-in's weak substring search missing a multi-word query (verified
+   by re-reading the note: the fact was present on both sides every time), not to anything the split
+   removed or hid — one question (s06) failed on both BEFORE and AFTER for the same search-quality
+   reason, which is itself evidence the two conditions were treated symmetrically by the harness.
+4. **The "sanity" row is this bench's own noise floor, and it is not flat.** Small/none questions
+   point at notes that are byte-identical between BEFORE and AFTER, yet input tokens read **−11%**
+   and cost **−7%** (both intervals exclude 0) on the AFTER side. Nothing about those specific notes
+   changed; what changed is the corpus around them (36 extra split-part files), which can shift
+   which notes a substring search turns up first. Treat differences under this report's established
+   ≈10–15% noise band with the same skepticism here, and note that this stand-in's simplistic search
+   makes that band, if anything, wider than with real basic-memory's FTS.
+5. **A split is not a one-time fix** (see the real `project-memglow` figures below): a part that
+   keeps being written to can grow back past the point where Memory cost would suggest splitting it
+   again.
+
+**A real, complementary data point (read-only, no cost) — but only 1–2 days of hindsight.** On
+Florent's actual memory, `project-memglow` was split on 2026-10-01 (per Florent: ≈15,500 tokens →
+a ≈1,200-token summary + 4 parts of 2,400–4,900 tokens: `project-memglow-{roadmap,releases,history,launch}`).
+Real counters (`data/memoire-compteurs.json` on the NAS) and file sizes:
+
+| Day | Reads of the (now-)summary | Reads of `-roadmap` | Note on size |
+|---|---|---|---|
+| 2026-09-30 (day before) | 1 | — (didn't exist yet) | note was ≈15,500 tokens; 13 writes that same day |
+| 2026-10-01 (split day) | 2 | 18 | 23+12+1+14 = 50 writes across the 4 parts that same day |
+| 2026-10-02 (today, partial) | 0 so far | 0 so far | — |
+
+Current sizes (2026-10-02): summary 5,346 B (≈1,337 tokens), `-history` 17,670 B (≈4,418),
+`-launch` 21,575 B (≈5,394 — **back above the 5,000-token split threshold**), `-releases` 33,304 B
+(≈8,326), `-roadmap` 34,677 B (≈8,669). **Honestly: this is not a clean before/after measurement.**
+Unlike the synthetic bench above, production content kept changing heavily on the very day of the
+split and the day after (50+ writes), so there is no way to separate "tokens saved by splitting"
+from "tokens added by the work that followed" using these counters alone — the synthetic bench's
+fixed-content design exists precisely to isolate that. What the real numbers do show cleanly: the
+split note was read far more right after splitting (18 reads of one part in a single day) than the
+unsplit note ever was (1 read the day before), consistent with Florent's own project work moving
+into it; and two of the four parts have already grown large enough, on their own, to be flagged by
+Memory cost again — splitting once does not mean a part stays small.
+
+**Proposed README benefit phrase** (not overselling the parts of this result that aren't
+significant): *"On notes over 5,000 tokens, splitting cut the note text our assistant actually read
+by about half (−51%, 95% CI −60% to −29%) with no loss of correctness in our benchmark — at the
+price of roughly one extra tool call per answer."* A shorter, more conservative variant for a
+one-line claim: *"Splitting a 5,000+-token note roughly halves the memory text an assistant has to
+read to answer a question from it, in our benchmark."*
+
+**Limits** (in addition to the stand-in caveats above): 71 of 108 planned runs (uneven coverage per
+question, see above); 1–2 repetitions, not the full 2 everywhere; no repeated-identical-condition
+control run in this mini-bench to measure this exact harness's own noise floor (borrowed from the
+main report's A/B check instead); the deterministic split used here has no AI judgment, so it never
+produces `linkUpdates` and never rewords anything — a real, AI-proposed split might group sections
+differently or write a more useful summary, for better or worse; single-fact questions again, so
+a subtle loss of answer quality (as opposed to a wrong answer) would not be detected.
+
+**Cost of this mini-bench.** $1.524 at list price for 71 runs (plus the free `--dry-run` checks and
+one $0.032 two-run smoke test counted in that total), against a $1.50 target — 1.6% over, because
+the budget is checked before a run starts, not after (same mechanism, same honest overshoot, as the
+hideUnsupportedTools mini-bench above).
+
+**How to reproduce.** `node bench/split-gain.js --out bench/results/split-gain.jsonl
+[--budget-total 1.5] [--budget-run 0.05] [--reps 2] [--model haiku] [--seed 1]
+[--questions all|q01,s01] [--dry-run]` — `--dry-run` only generates and splits the two disposable
+copies and sanity-checks the questions against them (no `claude` call, no cost). Like the rest of
+`bench/`, never point this at a real memory: the copies live in a fresh `os.tmpdir()` folder,
+deleted at the end unless `--keep` is passed.
+
 ## Cost of this benchmark
 
 5.36 $ at list price for 265 runs in total (pilot 6, Haiku 210, control 15, Sonnet 30, one
