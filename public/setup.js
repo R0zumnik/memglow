@@ -86,6 +86,16 @@ var EN_SETUP = {
   "aiset.usageTokens": "≈ {inTok} tokens sent, {outTok} received (30 days)",
   "aiset.usageCost": "estimated {c7} (7 days), {c30} (30 days)",
   "aiset.usageSub": "included in your subscription", "aiset.usageLocal": "free (on this machine)", "aiset.usageNoPrice": "no price set",
+  "aiset.rules": "Memory rules",
+  "aiset.rulesIntro": "memglow's built-in memory-hygiene rules, delivered automatically to your assistant through the MCP proxy and memglow's own MCP server. Calibrated on real use — most people never need to change them.",
+  "aiset.rulesEnabled": "Deliver these rules",
+  "aiset.rulesExtra": "Extra rules (one per line, added to the built-in ones)",
+  "aiset.rulesOverride": "Replace entirely (advanced): your own text instead of the built-in rules",
+  "aiset.rulesPreview": "Preview — exact text sent",
+  "aiset.rulesPreviewOff": "Off: nothing is sent.",
+  "aiset.rulesReset": "Reset to the built-in rules",
+  "aiset.rulesEnvLocked": "Turned off by the environment variable MEMGLOW_RULES.",
+  "setup.rulesOnRecommended": "on (recommended) — adjustable later in Settings → AI settings.",
   "aiset.save": "Save", "aiset.close": "Close",
   "aiset.err.secret-field": "a key can only be saved with its own “Save key” button",
   "aiset.err.destination-change-needs-local": "changing the address of a provider that has a key needs this computer, or a password and HTTPS",
@@ -300,6 +310,63 @@ function setupRenderTuning(s, vals, T) {
     }).join("") + '</select></label></fieldset>';
 }
 
+/**
+ * First-run wizard, step 2 (Assistant): a short, read-only notice — memglow's built-in memory
+ * rules are on by default and already being delivered, with a one-click preview of the exact
+ * text. Full editing (extra lines, override, turning it off) lives in Settings → AI settings
+ * (setupRenderRules below), not repeated here: the wizard stays short.
+ */
+function setupRenderRulesNotice(s, T) {
+  T = T || defaultSetupT;
+  var r = s.rules || { enabled: true, preview: "", envDisabled: false };
+  var on = r.enabled !== false && !r.envDisabled;
+  return '<div class="mg-setup__rulesnotice mg-setup__hint">' +
+    '<p class="mg-setup__hint"><strong>' + sEsc(T("aiset.rules")) + ':</strong> ' +
+    sEsc(on ? T("setup.rulesOnRecommended") : T("aiset.rulesEnvLocked")) + '</p>' +
+    (on ? '<details class="mg-setup__rules-preview"><summary>' + sEsc(T("aiset.rulesPreview")) + '</summary><pre class="mg-setup__code">' +
+      sEsc(r.preview || "") + '</pre></details>' : '') +
+    '</div>';
+}
+
+/**
+ * Memory rules (AI settings only): on by default, calibrated built-in rules — see
+ * lib/memory-rules.js. `vals` = { enabled, extra (array), override } currently typed (falls back
+ * to the saved `s.rules`); the preview shown is always `s.rules.preview`/`defaultPreview` from the
+ * server (the exact text it would send right now), not recomputed in the browser.
+ */
+function setupRenderRules(s, vals, T) {
+  T = T || defaultSetupT;
+  var r = s.rules || { enabled: true, extra: [], override: "", preview: "", defaultPreview: "", envDisabled: false, limits: {} };
+  vals = vals || r;
+  var enabled = vals.enabled !== false;
+  var preview = enabled ? (r.envDisabled ? "" : r.preview || "") : "";
+  return '<fieldset class="mg-setup__tuning mg-setup__rules"><legend>' + sEsc(T("aiset.rules")) + '</legend>' +
+    '<p class="mg-setup__hint">' + sEsc(T("aiset.rulesIntro")) + '</p>' +
+    (r.envDisabled ? '<p class="mg-setup__note mg-setup__note--warn">' + sEsc(T("aiset.rulesEnvLocked")) + '</p>' : "") +
+    '<label class="mg-setup__check"><input type="checkbox" data-r="enabled"' + (enabled ? " checked" : "") + (r.envDisabled ? " disabled" : "") + '> ' + sEsc(T("aiset.rulesEnabled")) + '</label>' +
+    '<label class="mg-setup__field"><span>' + sEsc(T("aiset.rulesExtra")) + '</span><textarea class="mg-setup__input" data-r="extra" rows="3">' +
+    sEsc((vals.extra || []).join("\n")) + '</textarea></label>' +
+    '<label class="mg-setup__field"><span>' + sEsc(T("aiset.rulesOverride")) + '</span><textarea class="mg-setup__input" data-r="override" rows="5">' +
+    sEsc(vals.override || "") + '</textarea></label>' +
+    '<details class="mg-setup__rules-preview"><summary>' + sEsc(T("aiset.rulesPreview")) + '</summary><pre class="mg-setup__code">' +
+    sEsc(preview || T("aiset.rulesPreviewOff")) + '</pre></details>' +
+    '<button type="button" class="bn-btn bn-btn--quiet" data-act="rules-reset">' + sEsc(T("aiset.rulesReset")) + '</button>' +
+    '</fieldset>';
+}
+
+/** What the rules fieldset holds → the body of PUT /api/setup (rules part). `inputs` = [data-r]. */
+function setupCollectRules(inputs) {
+  var out = { enabled: true, extra: [], override: "" };
+  Array.prototype.forEach.call(inputs || [], function (el) {
+    var k = el.getAttribute("data-r");
+    if (!k || el.disabled) return;
+    if (k === "enabled") { out.enabled = !!el.checked; return; }
+    if (k === "extra") { out.extra = String(el.value || "").split("\n").map(function (x) { return x.trim(); }).filter(Boolean); return; }
+    if (k === "override") { out.override = String(el.value || ""); return; }
+  });
+  return out;
+}
+
 /** Usage box: requests and estimated cost per provider (from memglow's own counts). */
 function setupRenderUsage(s, T) {
   T = T || defaultSetupT;
@@ -384,6 +451,7 @@ if (typeof module !== "undefined" && module.exports) {
     sEsc: sEsc, EN_SETUP: EN_SETUP, resolveTextSetup: resolveTextSetup, defaultSetupT: defaultSetupT,
     setupClientHelp: setupClientHelp, setupRenderClients: setupRenderClients, setupProviderFields: setupProviderFields,
     setupRenderProviders: setupRenderProviders, setupRenderTuning: setupRenderTuning, setupRenderUsage: setupRenderUsage,
+    setupRenderRules: setupRenderRules, setupCollectRules: setupCollectRules, setupRenderRulesNotice: setupRenderRulesNotice,
     setupStateFrom: setupStateFrom, setupCollectProviders: setupCollectProviders, setupCollectTuning: setupCollectTuning,
     setupErrorText: setupErrorText, setupKeyLine: setupKeyLine, setupPrivacy: setupPrivacy,
   };
@@ -406,6 +474,7 @@ if (typeof module !== "undefined" && module.exports) {
   var clientsTicked = null;  // wizard step 1
   var wState = null, aState = null; // provider forms: wizard, AI settings
   var tuning = null;
+  var rules = null; // memory rules, typed in AI settings (null: use the saved s.rules)
   var reloadAfter = false;   // the assistant was turned on or off: the page must be reloaded
 
   var el = function (id) { return document.getElementById(id); };
@@ -437,7 +506,7 @@ if (typeof module !== "undefined" && module.exports) {
     el("mg-setup-step").textContent = T("setup.stepOf", { n: step, total: 3 });
     el("mg-setup-steptitle").textContent = T(step === 1 ? "setup.step1" : "setup.step2");
     el("mg-setup-intro").textContent = T(step === 1 ? "setup.step1Intro" : "setup.step2Intro");
-    el("mg-setup-body").innerHTML = step === 1 ? setupRenderClients(s, clientsTicked, origin, T) : setupRenderProviders(s, wState, false, T);
+    el("mg-setup-body").innerHTML = step === 1 ? setupRenderClients(s, clientsTicked, origin, T) : (setupRenderRulesNotice(s, T) + setupRenderProviders(s, wState, false, T));
     el("mg-setup-back").hidden = step === 1;
     el("mg-setup-next").textContent = T(step === 2 ? "setup.finish" : "setup.next");
   }
@@ -572,28 +641,42 @@ if (typeof module !== "undefined" && module.exports) {
 
   // ---- AI settings ----
   function renderAiset() {
-    el("mg-llmset-body").innerHTML = setupRenderProviders(s, aState, true, T) + setupRenderTuning(s, tuning, T) + setupRenderUsage(s, T);
+    el("mg-llmset-body").innerHTML = setupRenderProviders(s, aState, true, T) + setupRenderTuning(s, tuning, T) + setupRenderRules(s, rules, T) + setupRenderUsage(s, T);
   }
   el("mg-llmset-body").addEventListener("change", function (e) {
     var t = e.target;
     if (!t) return;
+    if (t.getAttribute && t.getAttribute("data-r")) {
+      rules = setupCollectRules(el("mg-llmset-body").querySelectorAll("[data-r]"));
+      keepTyped(aState, "mg-llmset-body");
+      renderAiset();
+      return;
+    }
     if (t.getAttribute && t.getAttribute("data-t")) {
       if (t.getAttribute("data-t") === "allowMissingLines") { tuning = Object.assign({}, tuning, setupCollectTuning(el("mg-llmset-body").querySelectorAll("[data-t]"))); keepTyped(aState, "mg-llmset-body"); renderAiset(); }
       return;
     }
     if (handleProviderChange(t, aState, "mg-llmset-body")) renderAiset();
   });
-  el("mg-llmset-body").addEventListener("click", function (e) { handleProviderClick(e, aState, "mg-llmset-body", false); });
+  el("mg-llmset-body").addEventListener("click", function (e) {
+    var b = e.target && e.target.closest ? e.target.closest('button[data-act="rules-reset"]') : null;
+    if (b) { rules = { enabled: true, extra: [], override: "" }; keepTyped(aState, "mg-llmset-body"); tuning = Object.assign({}, tuning, setupCollectTuning(el("mg-llmset-body").querySelectorAll("[data-t]"))); renderAiset(); return; }
+    handleProviderClick(e, aState, "mg-llmset-body", false);
+  });
   el("mg-llmset-form").addEventListener("submit", function (e) {
     e.preventDefault();
     var st = el("mg-llmset-status");
     say(st, T("setup.saving"));
     var wasOn = !!s.assistant.enabled;
-    var body = { assistant: setupCollectProviders(aState, el("mg-llmset-body").querySelectorAll("[data-p][data-f]")), tuning: setupCollectTuning(el("mg-llmset-body").querySelectorAll("[data-t]")) };
+    var body = {
+      assistant: setupCollectProviders(aState, el("mg-llmset-body").querySelectorAll("[data-p][data-f]")),
+      tuning: setupCollectTuning(el("mg-llmset-body").querySelectorAll("[data-t]")),
+      rules: setupCollectRules(el("mg-llmset-body").querySelectorAll("[data-r]")),
+    };
     req("PUT", api, body).then(function (j) {
       s = j;
       aState = setupStateFrom(s, false);
-      tuning = null;
+      tuning = null; rules = null;
       renderAiset();
       say(st, T("setup.saved"));
       if (!!j.assistant.enabled !== wasOn || reloadAfter) setTimeout(function () { window.location.reload(); }, 600);
@@ -617,7 +700,7 @@ if (typeof module !== "undefined" && module.exports) {
   }
   function openAiset() {
     load().then(function () {
-      aState = setupStateFrom(s, false); tuning = null;
+      aState = setupStateFrom(s, false); tuning = null; rules = null;
       tile.hidden = false;
       renderAiset();
       say(el("mg-llmset-status"), "");
@@ -634,7 +717,12 @@ if (typeof module !== "undefined" && module.exports) {
   document.addEventListener("memglow:language", function () {
     if (!s) return;
     if (!wiz.hidden) { if (step === 1) clientsTicked = wizardClients(); else keepTyped(wState, "mg-setup-body"); renderWizard(); }
-    if (!tile.hidden) { keepTyped(aState, "mg-llmset-body"); tuning = Object.assign({}, tuning, setupCollectTuning(el("mg-llmset-body").querySelectorAll("[data-t]"))); renderAiset(); }
+    if (!tile.hidden) {
+      keepTyped(aState, "mg-llmset-body");
+      tuning = Object.assign({}, tuning, setupCollectTuning(el("mg-llmset-body").querySelectorAll("[data-t]")));
+      rules = Object.assign({}, rules, setupCollectRules(el("mg-llmset-body").querySelectorAll("[data-r]")));
+      renderAiset();
+    }
   });
   if (cfg.setupPending) openWizard();
 })();
