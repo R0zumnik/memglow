@@ -190,7 +190,8 @@ test("claude-code provider: no tool, no shell, prompt on stdin, never a bypass",
     assert.ok(!c.stdin.includes("hunter2"), "secret-looking line never sent");
     assert.ok(c.stdin.includes("⟦memglow-secret-1⟧"));
     assert.match(after("--system-prompt"), /DATA from the user's notes/);
-    assert.ok(c.cwd.startsWith(s.dataDir), "runs in memglow's data folder, not in the notes");
+    // realpath: on macOS the temp folder /var is a link to /private/var.
+    assert.ok(fs.realpathSync(c.cwd).startsWith(fs.realpathSync(s.dataDir)), "runs in memglow's data folder, not in the notes");
   } finally { s.server.close(); }
 });
 

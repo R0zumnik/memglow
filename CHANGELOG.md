@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.1 — 2026-10-02
+
+### Fixed
+
+- An empty orange error banner stayed visible at the bottom of the page: `.mg-banner`'s
+  `display: flex` won over the `hidden` attribute. It now hides when it should.
+- A test failed on macOS only: the assistant's working folder is compared after resolving
+  links (`/var` → `/private/var`).
+
+### Changed
+
+- New screenshots for 0.4 (overview, write, search, settings with Language, Memory cost with
+  Organisation, Always loaded, Archive and Structure), captured in English on the fictional demo
+  memory.
+
 ## 0.4.0 — 2026-10-02
 
 ### Added
