@@ -255,8 +255,10 @@ function costSplitPrompt(n, c, names) {
   lines.push("- Do not create, rename or remove top-level groups" + (groups.length ? " (" + groups.join(", ") + ")" : "") + ".");
   if (c.protectedGroups && c.protectedGroups.length) lines.push("- Protected groups — never move notes across these groups: " + c.protectedGroups.join(", ") + ".");
   lines.push("- Keep the `theme` and `subtheme` (or `sous_theme`) frontmatter keys on every new note, with the original values.");
-  lines.push("- Keep every [[link]] valid: update the links that pointed to the moved content, and link the new notes to each other where it helps.");
-  lines.push("- The original note becomes a short summary that links to the new notes, or is removed once nothing links to it any more.");
+  lines.push("- Keep every [[link]] valid: update the links that pointed to the moved content.");
+  lines.push("- Hub and spoke, to read as few tokens as possible: the original note becomes a short summary that lists each new note with one line saying what it holds.");
+  lines.push("- Each new note links back to that summary only. No list of sibling notes; link another note only when the text really refers to it.");
+  lines.push("- Do not add the new notes to the memory index: only the summary stays there.");
   lines.push("- Use only your memory tool (the one you normally use to read and write these notes). Do not edit the files any other way.");
   lines.push("- First show me the plan (new note names and titles, which sections go where, which links change), then wait for my OK before writing.");
   return lines.join("\n");

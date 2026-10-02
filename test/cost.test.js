@@ -167,7 +167,7 @@ test("page: the copy prompt carries the note, the numbers, the split and the rul
   assert.match(p, /Suggested split into 4 notes/);
   assert.match(p, /1\. Q1 <img src=x onerror=alert\(1\)> — ≈ 1,50\d tokens/, "plain text, not HTML");
   assert.match(p, /4\. Q4 — ≈ 1,50\d tokens/, "K numbered blocks");
-  for (const rule of [/same group \(Knowledge base\) and the same folder/, /top-level groups \(People, Knowledge base\)/, /\[\[link\]\] valid/, /`theme` and `subtheme`/, /short summary .* or is removed/, /only your memory tool/, /plan .* BEFORE writing|show me the plan/i]) assert.match(p, rule);
+  for (const rule of [/same group \(Knowledge base\) and the same folder/, /top-level groups \(People, Knowledge base\)/, /\[\[link\]\] valid/, /`theme` and `subtheme`/, /short summary that lists each new note/, /links back to that summary only/, /Do not add the new notes to the memory index/, /only your memory tool/, /plan .* BEFORE writing|show me the plan/i]) assert.match(p, rule);
   const without = page.costSplitPrompt({ id: "x", label: "X", tokens: 6000, reads7: 1, readTokens7: 6000 }, { largeNoteTokens: 5000, chunkTokens: 2000 });
   assert.match(without, /group consecutive ## sections/);
   assert.match(without, /Read 1 time in the last 7 days,/, "no 'counted since' without a partial week");
