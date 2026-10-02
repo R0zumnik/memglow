@@ -160,3 +160,17 @@ test("mobile: search behind the magnifier — opens with focus, folds on second 
   focused = null; timers.forEach((f) => f()); timers = [];
   assert.ok(!fold.isOpen(), "leaving the field folds");
 });
+
+test("mobile: first-run set-up and AI settings — one column, full-width fields, 16 px inputs under 640 px", () => {
+  const css = read("public/app.css");
+  const i = css.lastIndexOf("@media (max-width: 640px) {");
+  const block = css.slice(i, css.indexOf("\n}", i));
+  assert.ok(i > css.indexOf(".mg-setup__field {"), "after the base rules, so it wins");
+  assert.match(block, /\.mg-setup__field \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(block, /\.mg-setup__input \{[^}]*font-size: 16px/);
+  assert.match(block, /\.mg-setup__btns \.bn-btn[^{]*\{[^}]*flex: 1 1 auto/);
+  assert.match(css, /\.mg-setup__code \{[^}]*overflow-wrap: anywhere/, "long commands wrap, no sideways scroll");
+  const html = read("public/index.html");
+  assert.match(html, /id="mem-llmset" data-i18n="settings.aiSettings"/);
+  assert.match(read("public/setup.js"), /closeOptions\(\); openLlmset|closeOptions\(\); open/, "the settings sheet closes when a tile opens");
+});

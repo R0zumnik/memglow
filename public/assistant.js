@@ -67,6 +67,7 @@ var EN_AI = {
   "ai.destLocal": "Local model — nothing leaves your machine ({dest}).",
   "ai.destRemote": "Your note will be sent to {dest}{model}.", "ai.destModelSuffix": " (model {model})",
   "ai.destCli": "Your note will be sent through your {label} (to Anthropic, or wherever your CLI is set up to send it).",
+  "ai.consent": "I agree to send this to {dest}.",
   "ai.providerLabel": "AI", "ai.splitTitleQuestion": "Split {label}?", "ai.regroupTitleQuestion": "Regroup: {label}",
   "ai.askMsg": "The note is sent to the AI, which answers with a proposal. Nothing is written until you approve the exact changes. Lines that look like secrets are replaced by placeholders first.",
   "ai.regroupAskMsg": "Only the titles, descriptions, sub-themes and folders of these notes are sent to the AI — never their text. It answers with a proposal; memglow only changes sub-theme lines (or moves a file inside the same group), and nothing is written until you approve the exact changes.",
@@ -270,6 +271,16 @@ function aiDestination(p, T) {
   return '<p class="mg-ai__dest" id="mg-ai-dest">' + aiEsc(T("ai.destCli", { label: p.label })) + '</p>';
 }
 
+/**
+ * The confirmremote setting (Settings → AI settings, on by default off
+ * this machine): a box to tick before Propose is enabled. "" when not needed.
+ */
+function aiConsent(p, T) {
+  T = T || defaultAiT;
+  if (!p || p.local || !p.confirmRemote) return "";
+  return '<label class="mg-ai__extra mg-ai__consent" id="mg-ai-consent-row"><input type="checkbox" id="mg-ai-consent"> ' + aiEsc(T("ai.consent", { dest: p.destination || p.label })) + '</label>';
+}
+
 /** `providers` = the status list, `current` = the default provider id, `kind` = "split" (default) or "regroup". */
 function aiAskForm(noteId, label, providers, current, kind, T) {
   if (typeof kind === "function") { T = kind; kind = "split"; } // (…, current, T) form
@@ -285,15 +296,15 @@ function aiAskForm(noteId, label, providers, current, kind, T) {
   var titleParts = aiSplitAround(T, regroup ? "ai.regroupTitleQuestion" : "ai.splitTitleQuestion", "label");
   return '<p class="mg-ai__title">' + aiEsc(titleParts[0]) + '<strong>' + aiEsc(label || noteId) + '</strong>' + aiEsc(titleParts[1]) + '</p>' +
     '<p class="mg-ai__msg">' + aiEsc(T(regroup ? "ai.regroupAskMsg" : "ai.askMsg")) + '</p>' +
-    picker + aiDestination(sel, T) +
+    picker + aiDestination(sel, T) + aiConsent(sel, T) +
     '<label class="mg-ai__extra">' + aiEsc(T("ai.extraLabel")) + '<textarea id="mg-ai-extra" maxlength="1000" rows="2"></textarea></label>' +
-    '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="propose" data-kind="' + (regroup ? "regroup" : "split") + '" data-note="' + aiEsc(noteId) + '"' + (sel ? ' data-provider="' + aiEsc(sel.id) + '"' : '') + '>' + aiEsc(T("ai.propose")) + '</button><button type="button" class="bn-btn" data-ai="close">' + aiEsc(T("ai.notNow")) + '</button></div>';
+    '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="propose" data-kind="' + (regroup ? "regroup" : "split") + '" data-note="' + aiEsc(noteId) + '"' + (sel ? ' data-provider="' + aiEsc(sel.id) + '"' : '') + (aiConsent(sel, T) ? " disabled" : "") + '>' + aiEsc(T("ai.propose")) + '</button><button type="button" class="bn-btn" data-ai="close">' + aiEsc(T("ai.notNow")) + '</button></div>';
 }
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     aiArchiveGain: aiArchiveGain, aiEsc: aiEsc, aiRenderJob: aiRenderJob, aiRenderHistory: aiRenderHistory, aiRenderProviders: aiRenderProviders,
-    aiAskForm: aiAskForm, aiDiff: aiDiff, aiDestination: aiDestination, aiNum: aiNum,
+    aiAskForm: aiAskForm, aiConsent: aiConsent, aiDiff: aiDiff, aiDestination: aiDestination, aiNum: aiNum,
     EN_AI: EN_AI, resolveTextAi: resolveTextAi, defaultAiT: defaultAiT,
     mgBannerKind: mgBannerKind, mgErrorBanner: mgErrorBanner, mgClearBanner: mgClearBanner
   };
@@ -368,11 +379,17 @@ if (typeof module !== "undefined" && module.exports) {
   }
   // Another AI picked in the form: say where the note will go before the click on Propose.
   root.addEventListener("change", function (e) {
+    var btn = root.querySelector('[data-ai="propose"]');
+    if (e.target && e.target.id === "mg-ai-consent") { if (btn) btn.disabled = !e.target.checked; return; }
     if (!e.target || e.target.id !== "mg-ai-provider") return;
     var p = providerOf(e.target.value);
     var dest = document.getElementById("mg-ai-dest");
     if (dest && p) dest.outerHTML = aiDestination(p, T);
-    var btn = root.querySelector('[data-ai="propose"]');
+    var old = document.getElementById("mg-ai-consent-row");
+    if (old) old.parentNode.removeChild(old);
+    var consent = aiConsent(p, T);
+    if (consent) { var d2 = document.getElementById("mg-ai-dest"); if (d2) d2.insertAdjacentHTML("afterend", consent); }
+    if (btn) btn.disabled = !!consent;
     if (btn && p) btn.setAttribute("data-provider", p.id);
   });
 
@@ -388,6 +405,9 @@ if (typeof module !== "undefined" && module.exports) {
     asking = null;
     var body = { sections: req.sections, ai: !!req.ai };
     if (req.ai && st && st.provider) body.provider = st.provider.id;
+    // confirmRemote (AI settings): the archive review sends titles and a few lines.
+    var dp = req.ai && st && st.provider ? providerOf(st.provider.id) : null;
+    if (dp && aiConsent(dp, T) && typeof window.confirm === "function" && !window.confirm(T("ai.consent", { dest: dp.destination || dp.label }))) return Promise.resolve();
     if (root.scrollIntoView) root.scrollIntoView({ behavior: "smooth", block: "start" });
     return post("archive", body).then(function (o) { if (st) { st.job = o.job; render(); } else load(); }).catch(fail);
   }

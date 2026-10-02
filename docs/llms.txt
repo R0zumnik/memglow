@@ -12,6 +12,8 @@ memglow has an optional assistant, off by default (`assistant.enabled` or `MEMGL
 
 memglow has an archive tier: sections of notes that were neither read, found by a search nor edited for months (105 days by default, and only once that much activity history exists) are listed in Memory cost and can be moved, word for word, to an archive note of the same theme, leaving a one-line link in the original note and one line per section in a compact archive summary. Reads are counted per whole note, so that criterion is per note for reads and searches and per section for edits. The move is offered as a copyable prompt, or — with the assistant on — built by memglow itself (optionally after the AI reviews which sections to keep live), validated (nothing lost, same theme, no overwrite, valid links), shown as a diff and applied only after a one-time confirmation, with a backup and Undo. The assistant should search the live memory first and consult the archive only when nothing was found: `memglow-mcp`'s read-only `archive_lookup` tool and the proxy's optional archive hint (off by default) point to matching archived sections by title, never their text.
 
+At first run the page asks which AI tools the user works with (several), whether to turn the optional assistant on and with which providers (Claude Code subscription with no API key, Anthropic API, OpenAI-compatible APIs, Ollama or LM Studio on the machine), and which groups to protect; every step can be skipped and run again from Settings, and Settings → AI settings keeps every provider setting (model, max output tokens, temperature where supported, time limit, cost cap, ask-before-sending) with a usage estimate. Environment variables win over the page, the page over memglow.config.json. A key can be typed in the page only from the same computer, or with a password over HTTPS; it is stored in a mode-600 file, never sent back to the browser and never logged.
+
 The view (settings, bubble layout, camera) is saved on the memglow instance, in its own data folder, so every browser and device that opens the same instance shows the same view.
 
 The interface ships in 8 languages (English, French, German, Spanish, Brazilian Portuguese, Japanese, Korean, Simplified Chinese), auto-detected from the browser and switchable any time in Settings; product names and AI-facing prompts always stay in English.
@@ -20,7 +22,7 @@ memglow reads a folder of Markdown notes read-only: a basic-memory knowledge bas
 
 ## Install
 
-- `npx memglow init` — detects the notes folder and the installed AI tools, installs their hooks, creates an activity token.
+- `npx memglow init` — detects the notes folder and the installed AI tools, asks which tools you use and whether to turn the assistant on, installs their hooks, creates an activity token (`--docker` also writes a compose file and `.env`).
 - `npx memglow` — starts the viewer on http://127.0.0.1:4747
 - Docker: `ghcr.io/r0zumnik/memglow` (linux/amd64 and linux/arm64), notes folder mounted read-only on `/memory`.
 - npm package: https://www.npmjs.com/package/memglow

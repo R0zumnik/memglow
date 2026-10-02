@@ -248,7 +248,7 @@ test("http: key sources — env (default or named), mode-600 file; readable file
   assert.ok(bad.error && !bad.error.includes(KEY), "a key put in apiKeyEnv is refused without echoing it");
   const f = path.join(d, "assistant-api-key");
   fs.writeFileSync(f, KEY + "\n", { mode: 0o600 }); fs.chmodSync(f, 0o600);
-  assert.deepStrictEqual(H.apiKey({ env: {}, dataDir: d }), { key: KEY, source: "file" });
+  assert.deepStrictEqual(H.apiKey({ env: {}, dataDir: d }), { key: KEY, source: "file", name: "assistant-api-key" });
   if (process.platform !== "win32") {
     for (const mode of [0o644, 0o640, 0o604]) {
       fs.chmodSync(f, mode);

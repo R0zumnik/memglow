@@ -30,12 +30,16 @@
   "archiveAfterDays": 105,
   "archive": { "folder": "archive", "summaryNote": "archive-summary", "maxSuggestions": 20, "minSectionTokens": 100 },
   "pollMs": 2000,
+  "clients": ["claude-code", "codex"],
+  "trustProxy": false,
   "assistant": {
     "enabled": false,
     "provider": "claude-code",
     "timeoutMinutes": 10,
     "backup": "auto",
-    "anthropic": { "model": "claude-sonnet-5-5", "maxTokens": 32000 },
-    "openai-compatible": { "preset": "ollama", "model": "llama3.1" }
+    "claude-code": { "model": "sonnet", "maxBudgetUsd": 0.5 },
+    "anthropic": { "model": "claude-sonnet-5-5", "maxTokens": 32000, "timeoutMinutes": 5, "confirmRemote": true },
+    "openai-compatible": { "preset": "mistral", "model": "mistral-large-latest", "temperature": 0.2 },
+    "ollama": { "model": "llama3.1" }
   }
 }

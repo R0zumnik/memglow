@@ -4,6 +4,34 @@
 
 ### Added
 
+- **First-run set-up** (`public/setup.js`, `lib/setup.js`, `lib/clients.js`): the first time the
+  page opens (npx or Docker), three skippable steps — *Your AI tools* (several; pre-ticked from what
+  `memglow init` detected; exact instructions per tool, Docker-aware), *Assistant (optional)* (off /
+  on, one or several providers, model, address, key, Test connection, where notes go) and *Your big
+  themes* (the protected groups screen). Run again from Settings → First-run setup. Saved in
+  `setup.json` in the data folder; **environment > page > memglow.config.json**. The tools chosen
+  are readable by the MCP proxy (`lib/clients.js readClients`).
+- **Settings → AI settings**: default and configured providers (add / remove), key status, Test
+  connection, model (known names + validated free entry), address / preset, max output tokens,
+  temperature (only where supported), time limit, cost cap (`maxBudgetUsd` for Claude Code, max
+  tokens × price for APIs), *Always ask before sending a note to this provider* (on by default off
+  this machine), the assistant's own settings (too-large threshold, part size, lines allowed to go
+  missing with a warning, backup) and a 7/30-day usage box with an estimated cost (no external call).
+- **Keys typed in the page**: only from this computer or with `MEMGLOW_PASSWORD` + HTTPS
+  (`MEMGLOW_TRUST_PROXY=1` behind an HTTPS reverse proxy); their own route, one mode-600 file per
+  provider, never sent back or logged, *Remove key*. Per-provider variables
+  `MEMGLOW_ASSISTANT_API_KEY_<PROVIDER>`.
+- **Claude Code subscription (no API key)**: the `claude-code` provider is named as such; model
+  aliases (`opus`, `sonnet`, `haiku`, `fable`…) or a full id; `CLAUDE_CODE_OAUTH_TOKEN` (from
+  `claude setup-token`) from the environment or the page, given only to the `claude` child process.
+  Docker: "not available in this container" said plainly, and an image variant
+  `--build-arg CLAUDE_CODE=1` (+≈230 MB, installed at build time, auto-update off).
+- **Ollama and LM Studio as providers of their own** (`ollama`, `lmstudio`), configurable next to a
+  cloud `openai-compatible` one; Test connection lists the local server's models.
+- **`memglow init`** asks the same questions (tools, assistant, providers, model; API key typed
+  without echo, never for Docker); `--clients <list>`; `--docker` writes the choices in `.env`
+  with the key lines commented out. `--yes` unchanged.
+
 - **Memory cost → Time to find a note · 7 days** (`lib/find-time.js`): from the activity memglow
   already receives, for each search the first read by the same actor (source + machine + channel)
   within 2 minutes — median time to the note, median steps, share of searches with no read after,

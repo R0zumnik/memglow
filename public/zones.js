@@ -151,7 +151,10 @@ if (typeof module !== "undefined" && module.exports) {
       body.innerHTML = zonesRender(z, T);
       var postponed = false;
       try { postponed = window.sessionStorage.getItem(LATER_KEY) === "1"; } catch (e) { postponed = false; }
-      if (show || (!z.defined && !postponed)) {
+      // While the first-run set-up is pending, it opens this screen itself as its step 3.
+      var setupPending = false;
+      try { setupPending = JSON.parse(document.getElementById("memglow-config").textContent).setupPending === true; } catch (e) { setupPending = false; }
+      if (show || (!z.defined && !postponed && !setupPending)) {
         root.hidden = false;
         say(z.defined ? (z.source === "config" ? "zones.statusConfig" : "zones.statusSaved") : "zones.statusNone", null, false);
       }
@@ -194,6 +197,11 @@ if (typeof module !== "undefined" && module.exports) {
   later.addEventListener("click", function () {
     try { window.sessionStorage.setItem(LATER_KEY, "1"); } catch (e) { /* private mode */ }
     root.hidden = true;
+    document.dispatchEvent(new CustomEvent("memglow:zones-done"));
+  });
+  // Step 3 of the first-run set-up (public/setup.js).
+  document.addEventListener("memglow:zones-open", function () {
+    load(true).then(function () { if (root.scrollIntoView) root.scrollIntoView({ behavior: "smooth", block: "start" }); });
   });
   if (open) open.addEventListener("click", function () {
     load(true).then(function () { if (root.scrollIntoView) root.scrollIntoView({ behavior: "smooth", block: "start" }); });
