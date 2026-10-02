@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- README: a screenshot of the Assistant panel (a real split proposal, nothing applied), and the
+  Claude Code requirement spelled out (recent enough to have `--restricted`; older ones are refused
+  with an "update it with `claude update`" message).
+
 ## 0.4.1 — 2026-10-02
 
 ### Fixed

@@ -75,6 +75,9 @@
   <tr>
     <td colspan="2"><img src="docs/assets/screenshot-cost.png" alt="The Memory cost panel: tokens read, the most expensive notes, a large note with its sections and a split suggestion"><br><sub><b>Memory cost</b> — which notes cost the most tokens, which to split, a ready prompt for your AI.</sub></td>
   </tr>
+  <tr>
+    <td colspan="2"><img src="docs/assets/screenshot-assistant.png" alt="The Assistant panel: a split proposal with memglow's checks, the token gain, the diff of the original note and the new notes, and Apply / Discard buttons"><br><sub><b>The Assistant</b> — your own Claude Code proposes the split, memglow checks it and shows the exact diff; nothing is written until you apply.</sub></td>
+  </tr>
 </table>
 
 <sub>Captured from the fictional demo memory in <code>demo/memory</code>.</sub>
@@ -272,8 +275,9 @@ Any other OpenAI-compatible server works with `baseUrl` instead of `preset` (mem
 dontAsk` with a deny-all permission rule, no session saved, the prompt on stdin (never on the
 command line, never through a shell), in an empty folder of memglow's data folder. Options:
 `command` (path to `claude`), `model`, `maxBudgetUsd`, `timeoutMinutes` (default 10). Claude Code
-must be installed and signed in (run `claude` once in a terminal). The panel lists the providers it
-detects and says clearly when one is missing.
+must be installed and signed in (run `claude` once in a terminal), and recent enough to have
+`--restricted`: memglow checks `claude --help` and refuses an older one ("This Claude Code is too old… Update it with
+`claude update`."). The panel lists the providers it detects and says clearly when one is missing.
 
 **HTTP providers** (`anthropic`, `openai-compatible`) — examples:
 
