@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Multi-question bench sessions** (`bench/run.js --mode sessions`, `bench/sessions.json`): several
+  related questions asked in order inside ONE `claude -p` call (one MCP session), the only way to
+  measure dedupe/toc/context-reuse across turns — a single-question-per-call bench never gives them
+  a second turn to do anything with. `--dry-run` prints the run plan and a cost estimate (from past
+  single-question runs already in `bench/results/*.jsonl`) without calling `claude` at all.
+  Documented in `bench/RESULTS.md`.
+- **Tokenizer accuracy check** (`bench/tokenizer-check.js`): compares `estimateTokens` (`ceil(bytes
+  / 4)`, `lib/cost.js`) against the real token counts already recorded in `bench/results/*.jsonl`,
+  by question `kind` and by the holder note's real size (regenerated locally and deterministically
+  with `bench/generate.js` — no network, no model call). Reports it honestly as an upper bound: the
+  recorded runs keep only session-total figures, never the token delta one tool result alone
+  caused — what is actually missing to do better (and why it is not re-measured here) is spelled
+  out in the script's header and in `bench/RESULTS.md`.
+- **Per-client token accounting in the MCP proxy** (`lib/proxy-levers.js`): `createSavings` now
+  also tallies the baseline tokens relayed per client (`clientInfo.name`/`title` from `initialize`,
+  bucketed by `lib/clients.js`'s known ids, or "unknown" when neither was sent), per calendar day,
+  in `proxy-savings.json`. Exposed read-only (counts only, never note content) in `GET /api/cost`
+  (`clientTokens`, last 7 days) and shown as a tiny "By AI tool" line under Memory engine speed in
+  the Memory cost panel (`public/cost.js`); translated in all 8 shipped languages.
+- **Section-level cost in the MCP server**: `note_cost` now returns a per-section token breakdown
+  (`sections`, reusing `lib/cost.js`'s `sectionsOf`) for any note whose body can be read, plus
+  `bodyTokens` (defined as the sum of `sections`' own tokens, so it always matches by construction);
+  `split_plan` returns the same raw `sections` alongside its packed `split` parts, whose totals
+  always agree with `sections`' — packing only groups the numbers, it never drops or re-estimates
+  one.
+
 ## 0.4.0 — 2026-10-02
 
 ### Added
