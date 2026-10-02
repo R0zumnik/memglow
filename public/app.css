@@ -50,6 +50,7 @@ a { color: var(--bn-accent-teal); }
   color: var(--bn-ink);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
+.mg-banner[hidden] { display: none; }
 .mg-banner__msg { margin: 0; font-size: 13px; font-weight: 600; }
 .mg-banner__btn { flex: none; }
 
