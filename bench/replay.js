@@ -54,6 +54,7 @@ const path = require("path");
 const crypto = require("crypto");
 const L = require("../lib/proxy-levers");
 const LA = require("../lib/learned-aliases");
+const NC = require("../lib/negative-cache");
 const { estimateTokens } = require("../lib/cost");
 
 const ROOT = path.join(__dirname, "..");
@@ -96,11 +97,13 @@ const LEVER_ENV = {
   multiQuery: "MEMGLOW_PROXY_MULTI_QUERY",
   aliases: "MEMGLOW_PROXY_ALIASES",
   learnAliases: "MEMGLOW_PROXY_LEARN_ALIASES",
+  negativeCache: "MEMGLOW_PROXY_NEGATIVE_CACHE",
+  indexHint: "MEMGLOW_PROXY_INDEX_HINT",
 };
 const LEVER_NAMES = Object.keys(LEVER_ENV);
 // The shipped defaults (lib/proxy-levers.js DEFAULTS), named here explicitly so this file keeps
 // working unchanged even if that module's own defaults ever drift.
-const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false, multiQuery: true, aliases: true, learnAliases: true };
+const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false, multiQuery: true, aliases: true, learnAliases: true, negativeCache: false, indexHint: false };
 // multiQuery (lever 9, 0.4.2.2b): "no read in between, within 2 min" — see mergeSearchBursts below.
 const MULTI_QUERY_GAP_MS = 2 * 60 * 1000;
 
@@ -368,7 +371,8 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
   const index = L.createNoteIndex(config);
   const savings = L.createSavings(config, () => {});
   const aliasStore = LA.createAliasStore(config);
-  const engine = L.createLevers({ config, index, savings, serverName: "basic-memory", aliasStore });
+  const negativeCacheStore = NC.createNegativeCacheStore(config);
+  const engine = L.createLevers({ config, index, savings, serverName: "basic-memory", aliasStore, negativeCacheStore });
   const upstream = makeUpstream(notesDir);
   const memory = index._memory();
 
@@ -379,6 +383,11 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
   // normalizeCalls above. Stay at 0 for every fixture that never sets those fields.
   let aliasSearches = 0, aliasHits = 0, droppedCalls = 0;
   const lastHintedNote = new Map(); // session -> the note id the MOST RECENT `expect` search found, or null
+  // Lever 11 (negativeCache, 0.4.2.6) — `dropIfHinted` without `expect`: a retry search is
+  // unnecessary once the MOST RECENT search in this session already carried the negativeCache
+  // hint (see bench/replay-negative-cache.jsonl). Independent of the alias-specific tracking
+  // above: a fixture that never triggers this lever just never sets this true.
+  const lastNegativeCacheHinted = new Map();
 
   function sessionState(key) {
     let s = sessions.get(key);
@@ -406,7 +415,7 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
     // `dropIfHinted`: this exact retry search is unnecessary once the note it is about was
     // already found by this session's most recent `expect` search — no upstream call, nothing
     // counted, modelling the turn the model never has to spend.
-    if (ev.dropIfHinted && ev.expect && lastHintedNote.get(ev.session) === ev.expect) { droppedCalls++; continue; }
+    if (ev.dropIfHinted && ((ev.expect && lastHintedNote.get(ev.session) === ev.expect) || lastNegativeCacheHinted.get(ev.session))) { droppedCalls++; continue; }
     if (memory) memory.scan(); // deterministic: metadata is never stale across a synchronous replay
     const s = sessionState(ev.session);
     const reqId = nextId++;
@@ -436,6 +445,9 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
       const found = deliveredText.includes(ev.expect);
       if (found) aliasHits++;
       lastHintedNote.set(ev.session, found ? ev.expect : null);
+    }
+    if (config.searchTools.includes(ev.tool)) {
+      lastNegativeCacheHinted.set(ev.session, deliveredText.includes("memglow: this search found nothing you used last time"));
     }
 
     if (config.readTools.includes(ev.tool)) {

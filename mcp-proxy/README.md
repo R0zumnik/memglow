@@ -115,6 +115,8 @@ about. Rules, for every lever:
 | 8 | `alreadyLoaded` | off | A single-note read (never `build_context` or another `multiNoteTools` entry) of a note memglow knows is loaded into the context at the start of **every** session — the index note(s), or an `alwaysLoaded` entry (see `README.md`'s "Always loaded" cost, `lib/always-loaded.js`) that resolves to a note — gets `memglow: "<label>" (≈N tokens) is already in your context — it is loaded at the start of every session and has not changed since this session began (sha <8 hex chars>). Use it from there. To get the full text anyway, call again with "memglow_fresh": true.` instead of its content, for as long as the note's file (read directly off disk) matches the hash captured at the start of the session. A note that changed meanwhile is never stubbed: its full, current text comes back with one extra line saying so. |
 | 9 | `multiQuery` | **on** | A search tool call carrying `memglow_queries` (2-4 extra phrasings, up to `MULTI_QUERY_MAX` total, added to the search tools' schemas in `tools/list`) is sent upstream as ONE call per phrasing — sequentially, the original query first — instead of the assistant spending a separate turn on each one. Hits are merged, deduped by note id (found by more phrasings ranks higher), capped to the biggest single phrasing's own hit count, and returned as ONE result: in the upstream's own format when safe (plain-text hits reassembled from the server's own blocks), else a compact listing of whatever note ids resolve; a later phrasing's failed call fails the whole thing open to the FIRST phrasing's own result — what a plain single search would have returned. `memglow_queries` is always stripped before a call reaches the server, even with this lever off. |
 | 10 | `aliases` + `learnAliases` | **on** | **`learnAliases`** (0.4.2.3, "query log"): when a search is followed, in the SAME session within 2 minutes and before another search, by a single-note read of a note NOT in that search's own results, the query's significant words (lowercased, EN+FR stop-words dropped, ≥ 3 letters, secret-masked) are learned as aliases of that note, with a count — in one small local file, `learned-aliases.json` (mode 600, bounded to `aliasesMax` = 2,000 entries, oldest dropped). Nothing is ever sent anywhere. **`aliases`** (0.4.2.4, "learned aliases"): on a LATER search, a note whose learned aliases match ≥ 2 of the query's words (or 1 alias seen ≥ 2 times), and that is not already among this search's own results, is added at the TOP of the answer — the upstream's own per-hit row shape when the answer is plain text, else one compact line `memglow: likely relevant — <label> (<id>), learned from your past searches`. Never removes a result, never duplicates a note already present; an alias whose note no longer exists is forgotten. The two switches are independent (recording vs. using what was recorded). Since 0.4.2.5, a search carrying lever 9's own `memglow_queries` no longer bypasses this lever: it learns from every phrasing's words and can inject into the merged result too. **On by default since 0.4.2.5** — see that stage's section below for why a lever that costs slightly MORE raw tokens now ships on. |
+| 11 | `negativeCache` | off | A search in a session not followed by a read (of anything) within 2 minutes, or superseded first by another search or a write in the same session, is remembered, locally, as "futile" for the live memory's current FINGERPRINT (note count + latest mtime — `lib/negative-cache.js`). A LATER search with the same significant words, while the fingerprint is unchanged, gets one line PREPENDED: `memglow: this search found nothing you used last time (<date>); the memory has not changed since.` The results that follow are always relayed right after, unchanged — this never hides anything. Any write anywhere changes the fingerprint, invalidating every remembered entry at once. A single switch gates both recording and using it. Off by default — see 0.4.2.6 below: a clear win on its own dedicated fixture (one dropped retry call), but `bench/replay-heavy.jsonl` triggers the hint for real on a naturally recurring search with no call saved there to offset it, since that fixture was never built to model the dropped turn. |
+| 12 | `indexHint` | off | A search whose own results are ONLY the index note, or a read of the index itself while `alreadyLoaded` (lever 8) is off, gets a suffix: `memglow: the index already says:` followed by up to 3 lines of the index's OWN text (secret-masked, each capped to 160 characters) that mention one of the query's significant words — grepped, not summarised. The read case reuses lever 10's own "search right before a read" correlation to know what to grep for; no recent search at all → nothing added. Never replaces the note's own content. Off by default: a pure, unconditional add wherever it fires — same bucket as `searchDetails`/`suggestions`/`archiveHint`. |
 | — | `indexWarning` | off | Before the content of the **index** note when it is over `indexWarningTokens` (top-level key, default 2,000): `⚠ memglow: the index note "…" is ≈N tokens (index threshold T) and it is loaded at every session. Consider offering the user to trim it…`. Once per session. Replaces lever 1 for the index note when on. |
 
 ### Stage 0.4.2.2 — "lean defaults"
@@ -334,6 +336,52 @@ could neither learn from a multi-phrasing search nor inject into one. Fixed in
 phrasing's significant words (not just the main query's), and the same injection rule applies to
 the merged result.
 
+### Stage 0.4.2.6 — "negative cache + the index already answers"
+
+Two more owner-log-motivated levers, both OFF by default. The owner's own log: 12 of 40 searches
+led to NO READ AT ALL — not a wrong pick, nothing opened afterwards — and the index note was read
+in full 6 times (≈16k tokens), each time without knowing in advance whether it actually answered
+the question at hand.
+
+**`negativeCache`** (lever 11, [`lib/negative-cache.js`](../lib/negative-cache.js)): a search not
+followed by a read (of anything) within 2 minutes in the same session, or superseded first by
+another search or a write, is remembered as "futile" against the live memory's current
+FINGERPRINT (note count + latest mtime, cheap, no new read of any note). A later search sharing
+the same significant words, while the fingerprint is unchanged, gets one line PREPENDED —
+`memglow: this search found nothing you used last time (<date>); the memory has not changed
+since.` — and the results that follow are always relayed right after, unchanged: this never hides
+anything, only adds a line. Any write anywhere bumps the fingerprint, invalidating every
+remembered entry at once.
+
+Re-run against the same merge rule as lever 10 (`--each`, 0 violations AND effective tokens `<=`
+off's AND (raw tokens `<=` off's OR calls `<` off's)) on `bench/replay-demo.jsonl`,
+`bench/replay-heavy.jsonl`, `bench/replay-aliases.jsonl` and a new, dedicated
+[`bench/replay-negative-cache.jsonl`](../bench/replay-negative-cache.jsonl): a no-op on the first
+two general fixtures and on `replay-aliases.jsonl`; on its own dedicated fixture, a dropped retry
+call (modelled with the existing `dropIfHinted` mechanism — see `bench/README.md`) makes its
+effective tokens 31,013 vs `off`'s 35,990, a clear win, at +23 raw tokens. But on
+`bench/replay-heavy.jsonl` a naturally recurring search ("storefront", searched again later in the
+same session with nothing having changed) genuinely matches an earlier futile verdict and gets the
+hint FOR REAL — +52 raw AND effective tokens there, with no call saved to offset it, because that
+fixture was never built with a `dropIfHinted` retry modelling the model actually skipping the
+repeat. The rule needs every tested file to pass, and this one real, unmodelled cost is enough to
+keep it off by default — exactly the "measure honestly: it only saves if the model then stops
+searching" caution this lever was built with.
+
+**`indexHint`** (lever 12): a search whose own results are ONLY the index note, or a read of the
+index itself while lever 8 (`alreadyLoaded`) is off, gets a suffix — `memglow: the index already
+says:` followed by up to 3 lines of the index's OWN text (secret-masked, each capped to 160
+characters) that mention one of the query's significant words, grepped straight off the already
+cached note body, never summarised. The read case reuses lever 10's own "search right before a
+read" correlation (`s.lastSearch`) to know what to grep for; with no recent search at all, nothing
+is added — never a bare "says:" line with nothing after it. Measured the same way: a pure,
+unconditional ADD everywhere it fires (demo +96, heavy +391, its own fixture +78 tokens; a no-op
+only on `replay-aliases.jsonl`, which never reads the index) — same bucket as
+`searchDetails`/`suggestions`/`archiveHint`, so it ships off too.
+
+Both remain fully available: `MEMGLOW_PROXY_NEGATIVE_CACHE=1` / `"proxy": { "negativeCache": true
+}`, `MEMGLOW_PROXY_INDEX_HINT=1` / `"proxy": { "indexHint": true }`.
+
 ### Examples
 
 (Levers 2 and 3 are off by default since stage 0.4.2.2 — these examples assume they were turned
@@ -398,6 +446,9 @@ sets `memoryDir`), or the file named by `MEMGLOW_CONFIG`:
     "aliases": true,
     "learnAliases": true,
     "aliasesMax": 2000,
+    "negativeCache": false,
+    "negativeCacheMax": 1000,
+    "indexHint": false,
     "readTools": ["read_note", "view_note", "read_content", "fetch", "build_context"],
     "multiNoteTools": ["build_context"],
     "searchTools": ["search_notes", "search"],
@@ -417,7 +468,7 @@ Environment variables win over the file:
 
 | Variable | Meaning |
 |---|---|
-| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_INDEX_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT`, `MEMGLOW_PROXY_HIDE_UNSUPPORTED`, `MEMGLOW_PROXY_ALREADY_LOADED`, `MEMGLOW_PROXY_MULTI_QUERY`, `MEMGLOW_PROXY_ALIASES`, `MEMGLOW_PROXY_LEARN_ALIASES` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
+| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_INDEX_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT`, `MEMGLOW_PROXY_HIDE_UNSUPPORTED`, `MEMGLOW_PROXY_ALREADY_LOADED`, `MEMGLOW_PROXY_MULTI_QUERY`, `MEMGLOW_PROXY_ALIASES`, `MEMGLOW_PROXY_LEARN_ALIASES`, `MEMGLOW_PROXY_NEGATIVE_CACHE`, `MEMGLOW_PROXY_INDEX_HINT` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
 | `MEMGLOW_PROXY_READ_TOOLS`, `MEMGLOW_PROXY_MULTI_NOTE_TOOLS`, `MEMGLOW_PROXY_SEARCH_TOOLS`, `MEMGLOW_PROXY_WRITE_TOOLS` | comma-separated tool names (defaults above: basic-memory's) |
 | `MEMGLOW_LARGE_NOTE_TOKENS` | the threshold (default 5000) |
 | `MEMGLOW_MEMORY_DIR` (or `MEMORY_DIR`) | the notes folder, if not in the config file |

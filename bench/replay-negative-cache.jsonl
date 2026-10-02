@@ -1,0 +1,7 @@
+{"session":"neg-1","tool":"search_notes","args":{"query":"memory index"},"t":1}
+{"session":"neg-1","tool":"read_note","args":{"identifier":"MEMORY"},"t":2}
+{"session":"neg-2","tool":"search_notes","args":{"query":"xylophone parade marching"},"t":3}
+{"session":"neg-2","tool":"search_notes","args":{"query":"registry"},"t":4}
+{"session":"neg-2","tool":"read_note","args":{"identifier":"knowledge-docker-registry"},"t":5}
+{"session":"neg-3","tool":"search_notes","args":{"query":"xylophone parade marching"},"t":6}
+{"session":"neg-3","tool":"search_notes","args":{"query":"xylophone parade marching"},"t":7,"dropIfHinted":true}

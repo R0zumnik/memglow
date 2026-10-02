@@ -49,6 +49,12 @@ node bench/replay.js --turn-tokens 8000                 # a different per-call o
   every other fixture) and `dropIfHinted` (a retry search skipped entirely — no call, nothing
   counted — once the session's most recent `expect` search already found that exact note,
   modelling "a later re-search that becomes unnecessary once the note is already there").
+  `bench/replay-negative-cache.jsonl` (stage 0.4.2.6) is for the `negativeCache`/`indexHint`
+  levers: a search superseded with no read, then read-redeemed, then a dedicated session where
+  the SAME search recurs once the memory is unchanged — `dropIfHinted` there works WITHOUT
+  `expect` (it has nothing to do with a note id): the retry is dropped whenever the most recent
+  search in that session already carried the `negativeCache` hint text, tracked the same way as
+  the `expect`-based case but independently of it (see `runConfig`'s `lastNegativeCacheHinted`).
 - `--with a,b,c` adds a configuration: the shipped **defaults** (sizeWarning + multiQuery +
   aliases + learnAliases — see 0.4.2.2b and 0.4.2.5 below) with levers `a`, `b`, `c` also forced
   on. Repeat the flag for more rows. A name prefixed with `-` forces that lever OFF instead (e.g.
@@ -57,7 +63,8 @@ node bench/replay.js --turn-tokens 8000                 # a different per-call o
 - `--turn-tokens n` (0.4.2.5, default 5000) sets the per-call overhead used for the **effective
   tokens** column — see that stage's section below.
 - `--each` adds one row per lever (sizeWarning, indexWarning, searchDetails, suggestions, dedupe,
-  toc, archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery, aliases, learnAliases), each ALONE against the `off`
+  toc, archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery, aliases, learnAliases,
+  negativeCache, indexHint), each ALONE against the `off`
   baseline (every other lever off) — unlike `--with`, which starts from the shipped defaults. This
   is the per-lever "does it add or save tokens, and how much" breakdown used to decide, lever by
   lever, whether to keep it as shipped, shorten its text, or turn it off by default (see
@@ -237,3 +244,43 @@ teaches EVERY phrasing's words, not just the main query; a learned candidate is 
 multi-phrasing search's own merged result; `applyAliasesToSearch` unit-tested on its own) and
 `test/bench-replay.test.js` (`--turn-tokens` parsing, `summarize`'s `effectiveTokens`/
 `effSavingsAbs` arithmetic, including the `turnTokens = 0` no-op case).
+
+### Stage 0.4.2.6 — "negative cache + the index already answers"
+
+Two new levers (11 `negativeCache`, 12 `indexHint`; `lib/negative-cache.js` + `lib/proxy-levers.js`),
+re-run against the SAME 0.4.2.5 merge rule, `--each` (each ALONE vs `off`) on all four
+levers-relevant fixtures — the three above plus a new, dedicated
+[`bench/replay-negative-cache.jsonl`](replay-negative-cache.jsonl):
+
+| fixture | `negativeCache` alone (raw / effective, vs off) | `indexHint` alone (raw / effective, vs off) |
+|---|---|---|
+| replay-demo.jsonl | 0 / 0 (no-op) | +96 / +96 |
+| replay-heavy.jsonl | +52 / +52 (hint fires for real, no call saved to offset it) | +391 / +391 |
+| replay-aliases.jsonl | 0 / 0 (no-op) | 0 / 0 (no-op, never reads the index) |
+| replay-negative-cache.jsonl | +23 / **-4977** (1 call dropped — see below) | +78 / +78 |
+
+`indexHint` never saves a call anywhere it fires — same bucket as `searchDetails`/`suggestions`/
+`archiveHint` (stage 0.4.2.2): the rule fails outright, so it **ships off**.
+
+`negativeCache` is the more interesting case. Its own dedicated fixture (`neg-3` session: the same
+search, once answered "no" and once repeated after nothing changed) models the win EXACTLY like
+`bench/replay-aliases.jsonl` modelled lever 10's at 0.4.2.4 — a `dropIfHinted` retry search that is
+unnecessary once the first repeat already carried the negativeCache hint (tracked without `expect`,
+see the file list above): calls 7 → 6, raw tokens 990 → 1013 (+23), effective 35,990 → 31,013, a
+clear win. But `bench/replay-heavy.jsonl` was built for OTHER levers (`multiQuery`'s search
+bursts), and it happens to contain a genuinely recurring search ("storefront", searched again
+later in the same session after nothing changed) that trips the SAME hint for real — +52 raw AND
+effective tokens there, because that fixture has no matching `dropIfHinted` retry to model the
+model actually skipping the repeat. The merge rule requires EVERY tested file to pass, and this
+one real, unmodelled cost on `replay-heavy.jsonl` is enough on its own: **`negativeCache` ships
+off**, same shape as `aliases` at 0.4.2.4 before its own dedicated fixture (and the effective-
+tokens rule) made the case for turning it on. Flipping it on later would need either a broader
+fixture that models the dropped retries a real session would have, or accepting the honest
+trade-off as is.
+
+Tests: `test/negative-cache.test.js` (pure pieces — `normalizedKey`, `memoryFingerprint`,
+`recordFutileEntries`, `lookupFutileEntry`, `forgetStaleEntries` — plus the one fs-touching
+`createNegativeCacheStore`: atomic write, mode 600, bounded, invalidation on write) and
+`test/negative-cache-levers.test.js` (integration through `createLevers`: futile-then-hinted,
+read-redeemed, write-invalidated, never leaks query text, both `indexHint` cases, and the
+`alreadyLoaded` interaction).

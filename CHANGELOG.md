@@ -1,5 +1,115 @@
 # Changelog
 
+## 0.4.2.6 — internal (not published)
+
+"Negative cache + the index already answers."
+
+### Added
+
+- **MCP proxy: lever 11, `negativeCache`**, OFF by default (see Changed below). The owner's own
+  log: 12 of 40 searches led to NO READ AT ALL — not a wrong pick, nothing opened afterwards. A
+  search in a session not followed by a read (of anything) within `ALIAS_LEARN_WINDOW_MS` (2
+  minutes), or superseded first by another search or a write in the same session, is remembered,
+  locally, as "futile" against the live memory's current FINGERPRINT — note count + latest
+  mtime, `lib/negative-cache.js`'s `memoryFingerprint`, cheap and derived straight from the note
+  index's own graph cache, no new read of any note. A LATER search sharing the same normalized,
+  significant words (`lib/learned-aliases.js` `significantWords`, reused unchanged), while the
+  fingerprint is unchanged, gets one line PREPENDED: `memglow: this search found nothing you used
+  last time (<date>); the memory has not changed since.` **The results are always kept, never
+  hidden** — this lever only ever adds a line, same correctness rule as every other lever. Any
+  write anywhere bumps the fingerprint, invalidating every remembered entry at once
+  ("invalidate on any write" — deliberately global, not per-note).
+  - A single switch (`negativeCache`) gates both recording and using it — unlike lever 10's two
+    independent switches: this is only ever a one-line, never-hides-anything nudge, so there is
+    no "quietly keep learning while the hint is paused" case worth a second knob here.
+  - Pure logic in `lib/negative-cache.js` (`normalizedKey`, `memoryFingerprint`,
+    `recordFutileEntries`, `lookupFutileEntry`, `forgetStaleEntries`, and the one fs-touching
+    piece, `createNegativeCacheStore` — same atomic-write/mode-600/bounded shape as
+    `lib/learned-aliases.js`'s `createAliasStore`, file `negative-cache.json` next to
+    `learned-aliases.json`). Wiring in `lib/proxy-levers.js`: `createNoteIndex` gained
+    `fingerprint()` (cached alongside the rest of its derived graph cache); `createLevers` gained
+    a session field `pendingNegative` and a shared `finalizePending()` helper called from
+    `handleSearch` (a new search supersedes whatever was pending), `handleRead` (any read redeems
+    it, in time or too late), `handleWrite` (a write supersedes it too, then forces a rescan and
+    prunes stale entries), and from LRU session eviction and a new `engine.negativeCache
+    .flushPending()` (called on process exit in `mcp-proxy/memglow-mcp-proxy.js`, alongside
+    `savings.flush()`/`aliasStore.flush()`) — so a search that is simply never followed by
+    anything else in its session is still settled as futile, not silently lost.
+  - **Known gap**: a search merged by lever 9 (`multiQuery`, `memglow_queries`) bypasses
+    `handleSearch` entirely (`multiQuery.run()` answers the whole burst outside the normal
+    `clientMessage`/`serverMessage` cycle — same limitation lever 10 had before 0.4.2.5), so this
+    lever neither learns from nor hints into a MERGED multi-phrasing call; only a lone search
+    (no burst) goes through it. Left as is for this stage — see CHANGELOG 0.4.2.5 for how lever
+    10 closed the equivalent gap, a template for doing the same here later.
+- **MCP proxy: lever 12, `indexHint`**, OFF by default (see Changed below). The owner's own log:
+  the index note was read in full 6 times (≈16k tokens), each time without knowing in advance
+  whether it actually answered the question. A search whose own results are ONLY the index note,
+  or a read of the index itself while lever 8 (`alreadyLoaded`) is off, gets a suffix: `memglow:
+  the index already says:` followed by up to 3 lines of the index's OWN text (secret-masked via
+  `lib/memory.js`'s `maskedBody`, each capped to 160 characters) that mention one of the query's
+  significant words — grepped, never summarised, and never replacing the note's own content. The
+  read case reuses lever 10's own "search right before a read" correlation (`s.lastSearch`,
+  extended to populate even with `learnAliases` off, as long as `indexHint` is on) to know what to
+  grep for; with no recent search at all, nothing is added — never a bare "says:" line with
+  nothing after it. New `indexHintLines`/`indexHintBlock`/`INDEX_HINT_MAX_LINES`/
+  `INDEX_HINT_LINE_MAX` in `lib/proxy-levers.js`, exported for testing.
+
+### Changed
+
+- **`bench/replay.js`**: new fixture
+  [`bench/replay-negative-cache.jsonl`](../bench/replay-negative-cache.jsonl) (3 sessions, 7
+  calls) built specifically to exercise lever 11 — a search superseded with no read (futile), a
+  second search redeemed by a read (not futile), then a dedicated session where the SAME search
+  recurs once the memory is unchanged. `dropIfHinted` now also works WITHOUT `expect` (which is
+  alias-specific, "a note id this search is about"): a new `lastNegativeCacheHinted` map tracks,
+  per session, whether the MOST RECENT search's delivered text carried the negativeCache hint
+  line, and a marked retry is dropped when either that OR the existing `expect`-based condition
+  holds — additive, so every previously-recorded number for `bench/replay-demo.jsonl`,
+  `bench/replay-heavy.jsonl` and `bench/replay-aliases.jsonl` is unchanged (verified: this lever
+  is off by default, and the hint text never appears when it is off, so the new tracking is
+  always `false` for every existing fixture/configuration unless `negativeCache` is explicitly
+  turned on). `SHIPPED_DEFAULTS`/`LEVER_ENV` gained the two new lever names.
+- **Levers 11/12 both ship OFF by default**, decided by the SAME merge rule 0.4.2.5 introduced (0
+  violations AND effective tokens `<=` off's AND (raw tokens `<=` off's OR calls `<` off's)),
+  `--each` on `bench/replay-demo.jsonl`, `bench/replay-heavy.jsonl`, `bench/replay-aliases.jsonl`
+  and the new `bench/replay-negative-cache.jsonl`:
+
+  | fixture | `negativeCache` alone (raw / effective, vs off) | `indexHint` alone (raw / effective, vs off) |
+  |---|---|---|
+  | replay-demo.jsonl | 0 / 0 (no-op) | +96 / +96 |
+  | replay-heavy.jsonl | +52 / +52 (hint fires for real, no call saved to offset it) | +391 / +391 |
+  | replay-aliases.jsonl | 0 / 0 (no-op) | 0 / 0 (no-op, never reads the index) |
+  | replay-negative-cache.jsonl | +23 / **-4977** (1 call dropped) | +78 / +78 |
+
+  `indexHint` never saves a call anywhere it fires — same bucket as
+  `searchDetails`/`suggestions`/`archiveHint` (0.4.2.2): the rule fails outright. `negativeCache`
+  WINS decisively on its own dedicated fixture (same shape as lever 10 at 0.4.2.5: 1 fewer call,
+  +23 raw tokens, a clear win on effective tokens), exactly matching "measure honestly: it only
+  saves if the model then stops searching" — but `bench/replay-heavy.jsonl` (built for OTHER
+  levers, not retrofitted for this one) contains a genuinely recurring search that trips the same
+  hint for real, with no corresponding dropped retry to offset the cost. The rule needs every
+  tested file to pass; this one real, unmodelled cost on `replay-heavy.jsonl` is enough, so it
+  ships off too — both fully available via `MEMGLOW_PROXY_NEGATIVE_CACHE=1` /
+  `MEMGLOW_PROXY_INDEX_HINT=1` (or `"proxy": { "negativeCache": true }` / `{ "indexHint": true }`).
+
+### Tests
+
+- `test/negative-cache.test.js` — pure pieces (`normalizedKey`, `memoryFingerprint`,
+  `recordFutileEntries`, `lookupFutileEntry`, `forgetStaleEntries`) and `createNegativeCacheStore`
+  (disabled without a folder/switch, atomic write, mode 600, bounded, malformed file treated as
+  empty, and invalidation on write: a fingerprint change drops every entry, not just one note's).
+- `test/negative-cache-levers.test.js` — integration through `lib/proxy-levers.js`'s
+  `createLevers` (no process spawn, hand-crafted upstream answers, same pattern as lever 10's own
+  "never duplicated" test): a search superseded with no read is recorded futile and later hinted
+  with the results always kept after it; a read within the window redeems a search (no later
+  hint); a REAL write on disk invalidates a previously-recorded futile verdict; the hint never
+  carries a fragment of a secret-looking query; the lever off end to end; a broken index/store
+  never breaks the relay; both `indexHint` cases (search-returns-only-index,
+  read-right-after-a-search), no match → nothing added, no recent search → nothing added, and the
+  `alreadyLoaded` interaction (that read is stubbed by lever 8 instead, so `indexHint`'s own text
+  never appears on it).
+- `npm test` green (438 tests).
+
 ## 0.4.2.5 — internal (not published)
 
 "Count the turns; aliases learn from multi-phrasing searches."
