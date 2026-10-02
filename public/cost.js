@@ -95,6 +95,15 @@ var EN_COST = {
   "arch.gain": "{sections} · live memory {saved} tokens smaller (each section leaves a one-line link) · archive summary + {line} tokens",
   "arch.sectionCount": { one: "{n} section", other: "{n} sections" },
   "arch.copyFailed": "Copy failed: select the sections again",
+  "cost.structure": "Structure · hub and spoke",
+  "struct.none": "Nothing to tidy: this memory already follows hub and spoke.",
+  "struct.hubs": { one: "{n} hub", other: "{n} hubs" },
+  "struct.indexRedundant": { one: "{n} index line already covered by its hub", other: "{n} index lines already covered by their hub" },
+  "struct.siblingLines": { one: "{n} note links to several of its hub's other notes", other: "{n} notes link to several of their hub's other notes" },
+  "struct.pureSiblingLines": "{n} removable outright, no AI needed",
+  "struct.missingUplinks": { one: "{n} note missing its link back to the hub", other: "{n} notes missing their link back to the hub" },
+  "struct.missingHubLines": { one: "{n} hub missing a line for one of its notes", other: "{n} hubs missing a line for one of their notes" },
+  "struct.doIt": "Tidy into hub and spoke",
   "common.reload": "Reload", "common.retry": "Retry",
   "error.connectionLost": "Connection lost. Check your network and retry.",
   "error.unauthorized": "Unauthorized. Reload the page to sign in again.",
@@ -580,6 +589,33 @@ function costArchiveGain(chosen, T) {
   }, { line: costTokens(line) });
 }
 
+// ---- Structure tier (lib/hub-spoke.js): hub-and-spoke drift ----
+
+/**
+ * Structure block: how far this memory has drifted from hub and spoke (lib/hub-spoke.js counts,
+ * never a note's text — see docs/hub-and-spoke.md), and the button that starts the "Tidy into hub
+ * and spoke" job. `s` = /api/cost's `structure` ({ counts: {...} } or null).
+ */
+function costStructure(s, T) {
+  T = T || defaultCostT;
+  if (!s || !s.counts) return '<p class="mg-cost__empty">' + costEsc(T("cost.notAvailable")) + '</p>';
+  var c = s.counts;
+  var drift = c.indexRedundant + c.siblingLines + c.missingUplinks + c.missingHubLines;
+  if (!drift) return '<p class="mg-cost__empty">' + costEsc(T("struct.none")) + '</p>';
+  var rows = [];
+  rows.push(T("struct.hubs", { n: c.hubs }));
+  if (c.indexRedundant) rows.push(T("struct.indexRedundant", { n: c.indexRedundant }));
+  if (c.siblingLines) rows.push(T("struct.siblingLines", { n: c.siblingLines }) + (c.pureSiblingLines ? " (" + T("struct.pureSiblingLines", { n: c.pureSiblingLines }) + ")" : ""));
+  if (c.missingUplinks) rows.push(T("struct.missingUplinks", { n: c.missingUplinks }));
+  if (c.missingHubLines) rows.push(T("struct.missingHubLines", { n: c.missingHubLines }));
+  var list = '<ul class="mg-cost__list mg-cost__list--compact">' + rows.map(function (r) { return '<li>' + costEsc(r) + '</li>'; }).join("") + '</ul>';
+  var btns = costAssistant
+    ? '<div class="mg-arch__btns"><button type="button" class="bn-btn mg-cost__copy" data-tidy="1">' + costEsc(T("struct.doIt")) + '</button>' +
+      '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-tidy-ai="1">' + costEsc(T("cost.doWith", { name: costProvider || T("arch.yourAi") })) + '</button></div>'
+    : "";
+  return list + btns;
+}
+
 /** The whole panel body, or a short message when there is nothing to show. `T` defaults to the
     page's current language (or this file's English copy outside a browser — see defaultCostT). */
 function costRender(c, colors, T) {
@@ -601,11 +637,12 @@ function costRender(c, colors, T) {
   html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.engineSpeed")) + '</figcaption>' + costEngineSpeed(c.engineSpeed, T) + '</figure>';
   html += '</div>';
   if (c.archive) html += '<figure class="mg-cost__block mg-arch" id="mg-arch"><figcaption>' + costEsc(T("cost.archive", { n: costNumber(c.archive.afterDays) })) + '</figcaption>' + costArchive(c.archive, colors, T) + '</figure>';
+  if (c.structure) html += '<figure class="mg-cost__block mg-struct" id="mg-struct"><figcaption>' + costEsc(T("cost.structure")) + '</figcaption>' + costStructure(c.structure, T) + '</figure>';
   return html;
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costPercent: costPercent, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, costDuration: costDuration, costFindTime: costFindTime, costEngineSpeed: costEngineSpeed, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT, mgBannerKind: mgBannerKind, mgErrorBanner: mgErrorBanner, mgClearBanner: mgClearBanner };
+  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costStructure: costStructure, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costPercent: costPercent, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, costDuration: costDuration, costFindTime: costFindTime, costEngineSpeed: costEngineSpeed, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT, mgBannerKind: mgBannerKind, mgErrorBanner: mgErrorBanner, mgClearBanner: mgClearBanner };
 }
 
 (function () {
@@ -779,6 +816,11 @@ if (typeof module !== "undefined" && module.exports) {
       }
       var keys = chosen.map(function (s) { return s.key; });
       try { document.dispatchEvent(new CustomEvent("memglow:archive", { detail: { sections: keys, ai: arch.hasAttribute("data-archive-ai") } })); } catch (e3) { /* old browser */ }
+      return;
+    }
+    var tidy = t.closest && t.closest("[data-tidy],[data-tidy-ai]");
+    if (tidy) {
+      try { document.dispatchEvent(new CustomEvent("memglow:tidy", { detail: { ai: tidy.hasAttribute("data-tidy-ai") } })); } catch (e4) { /* old browser */ }
       return;
     }
     var btn = t.closest && t.closest("[data-copy]");

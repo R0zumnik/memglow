@@ -18,7 +18,9 @@
  * the tools say so plainly instead of guessing.
  *
  * Five read-only tools, no write tool:
- *   memory_health   folder-wide overview: notes too large, costliest to read, never read, index size
+ *   memory_health   folder-wide overview: notes too large, costliest to read, never read, index size,
+ *                   hub-and-spoke drift (lib/hub-spoke.js: redundant index lines, sibling-listing
+ *                   lines, missing uplinks/hub lines — counts only, never a note's text)
  *   split_plan      a deterministic split suggestion for one note, or an honest "no split needed"
  *   related_notes   notes related to a note (links, sub-theme, co-usage) or to a free-text topic
  *   note_cost       token estimate, 7-day reads and status for one note
@@ -39,6 +41,7 @@ const memoryRules = require("../lib/memory-rules");
 const { estimateTokens, sectionsOf, packSections, dayOf, daysBefore, WINDOW_DAYS } = require("../lib/cost");
 const { rankRelated } = require("../lib/related");
 const organise = require("../lib/organise");
+const hubSpoke = require("../lib/hub-spoke");
 const { readZones } = require("../lib/zones");
 const { measureFiles, alwaysLoadedCost } = require("../lib/always-loaded");
 const archive = require("../lib/archive");
@@ -152,6 +155,21 @@ function toolMemoryHealth(ctx) {
     sessionsPerDay: ctx.config.sessionsPerDay || 5, indexWarningTokens: ctx.config.indexWarningTokens || 2000,
   });
   const alwaysLoaded = { perSession: al.perSession, sessionsPerDay: al.sessionsPerDay, sessionsSource: al.sessionsSource, perDay: al.perDay, files: al.files, tips: al.tips.map((t) => t.text) };
+
+  // Hub-and-spoke structure (lib/hub-spoke.js): counts only, never a note's text — see
+  // docs/hub-and-spoke.md and lib/memory-rules.js for the rule itself.
+  let structure = null;
+  if (ctx.memory.rawBody) {
+    try {
+      const idx = notes.find((n) => n.theme === "index");
+      const r = hubSpoke.detect({
+        notes: notes.map((n) => ({ id: n.id, label: n.label, body: ctx.memory.rawBody(n.id) || "" })),
+        indexId: idx ? idx.id : null,
+      });
+      structure = r.counts;
+    } catch { structure = null; }
+  }
+
   const data = {
     available: true,
     totals: cost.totals,
@@ -162,6 +180,7 @@ function toolMemoryHealth(ctx) {
     mostExpensive7d,
     neverRead30d,
     countersAvailable: ctx.haveCounters,
+    structure,
   };
 
   const lines = [`${cost.totals.notes} note(s), ≈${cost.totals.tokens} tokens total.`];
@@ -173,6 +192,11 @@ function toolMemoryHealth(ctx) {
   else lines.push(ctx.haveCounters ? "No reads recorded in the last 7 days." : "No activity counters yet (nothing read through the hooks or the MCP proxy): reading-cost figures are unavailable.");
   lines.push(`Loaded at every session: ≈${al.perSession} tokens × ${al.sessionsPerDay} sessions/day ≈ ${al.perDay} tokens/day.`);
   if (neverRead30d) lines.push(`${neverRead30d.total} note(s) never read in the last 30 days${neverRead30d.total > 10 ? " (top 10 shown)" : ""}.`);
+  if (structure) {
+    lines.push((structure.indexRedundant + structure.siblingLines + structure.missingUplinks + structure.missingHubLines) > 0
+      ? `Hub and spoke: ${structure.hubs} hub(s), ${structure.indexRedundant} redundant index line(s), ${structure.siblingLines} sibling list(s) (${structure.pureSiblingLines} removable outright), ${structure.missingUplinks} missing uplink(s), ${structure.missingHubLines} missing hub line(s).`
+      : `Hub and spoke: ${structure.hubs} hub(s), nothing to tidy.`);
+  }
   return { summary: lines.join(" "), data };
 }
 
@@ -181,10 +205,12 @@ function buildCopyPrompt(rec, parts, chunk) {
   return [
     `Split the note "${rec.label}" (id: ${rec.id}) into ${parts.length} smaller notes of about ${chunk} tokens each, along its existing sections:`,
     list,
-    `Keep each part's original heading and content, preserve its [[wikilinks]] and its frontmatter `
-      + `(theme/subtheme), and link the parts to each other and back to "${rec.label}" if you keep it `
-      + `as an index. Use your own memory/file tool to create and edit the notes — memglow never `
-      + `modifies notes itself.`,
+    `Keep each part's original heading and content, preserve its [[wikilinks]] and its frontmatter (theme/subtheme).`,
+    `Hub and spoke, to read as few tokens as possible: turn "${rec.label}" into a short summary that lists each `
+      + `new note with one line saying what it holds. Each new note links back to that summary only — no list of `
+      + `sibling notes; link another note only when the text really refers to it. Do not add the new notes to the `
+      + `memory index: only the summary stays there.`,
+    `Use your own memory/file tool to create and edit the notes — memglow never modifies notes itself.`,
   ].join("\n");
 }
 

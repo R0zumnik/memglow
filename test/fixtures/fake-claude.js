@@ -49,6 +49,16 @@ process.stdin.on("end", () => {
     out({ type: "result", subtype: "success", is_error: false, result: JSON.stringify(answer) });
     return;
   }
+  // Tidy review (lib/assistant/tidy.js): remove the FIRST candidate link of every ambiguous line.
+  if (input.includes("<lines>")) {
+    const items = [...input.matchAll(/^\[(x\d+)\] note "[^"]*" \(sub-note of hub "[^"]*"\) · candidate links: ((?:\[\[[^\]]+\]\](?:, )?)+)/gm)]
+      .map((x) => ({ id: x[1], links: [...x[2].matchAll(/\[\[([^\]]+)\]\]/g)].map((y) => y[1]) }));
+    const answer = mode === "tidy-bad"
+      ? { remove: [{ id: "x99", links: ["nope"] }], notes: "?" }
+      : { remove: items.map((it) => ({ id: it.id, links: it.links.slice(0, 1) })), notes: "Removed the sibling-listing noise." };
+    out({ type: "result", subtype: "success", is_error: false, result: JSON.stringify(answer) });
+    return;
+  }
   const m = /<note>\n([\s\S]*?)\n<\/note>/.exec(input);
   const id = /Note id: (\S+)/.exec(input)[1];
   const body = m ? m[1] : "";

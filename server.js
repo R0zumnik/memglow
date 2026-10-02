@@ -23,6 +23,7 @@ const setupLib = require("./lib/setup");
 const organise = require("./lib/organise");
 const { measureFiles, alwaysLoadedCost } = require("./lib/always-loaded");
 const archive = require("./lib/archive");
+const hubSpoke = require("./lib/hub-spoke");
 const { createFindTime } = require("./lib/find-time");
 const { createEngineSpeed, cleanDuration } = require("./lib/engine-speed");
 
@@ -264,6 +265,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
     const opts = { since: counters.since(), largeNoteTokens: config.largeNoteTokens, chunkTokens: config.splitChunkTokens };
     const first = withOrganisation(computeCost(counters.days(), notes, Date.now(), opts));
     first.archive = archiveNow(notes);
+    first.structure = structureNow(notes);
     if (!config.showBodies) return first;
     const bodies = {};
     for (const n of first.tooLarge.concat(first.top).slice(0, COST_SECTIONS_MAX)) {
@@ -273,6 +275,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
     }
     const out = withOrganisation(computeCost(counters.days(), notes, Date.now(), { ...opts, bodies }));
     out.archive = first.archive;
+    out.structure = first.structure;
     return out;
   }
   /**
@@ -319,6 +322,28 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
     }));
   }
   let archiveCache = null, archiveKey = "";
+  /**
+   * Hub-and-spoke structure (lib/hub-spoke.js): COUNTS only, never a note's text or even the one
+   * line a finding is about — the dashboard just needs "N sub-notes in the index · M sibling
+   * lists" to show a "Tidy" button; the lines themselves are only read when that job actually
+   * starts (lib/assistant/tidy.js), through the same secret-masked diff every other job shows.
+   */
+  function structureNow(notes) {
+    if (!memory.rawBody) return null;
+    const key = memory.version();
+    if (structureCache && key === structureKey) return structureCache;
+    structureKey = key;
+    const idx = notes.find((n) => n.theme === "index");
+    let report;
+    try {
+      report = hubSpoke.detect({
+        notes: notes.map((n) => ({ id: n.id, label: n.label, body: memory.rawBody(n.id) || "" })),
+        indexId: idx ? idx.id : null,
+      });
+    } catch { report = null; }
+    return (structureCache = report ? { counts: report.counts } : null);
+  }
+  let structureCache = null, structureKey = "";
   // Titles only (never note content): the label of a note id, or null if it is gone.
   function findTimeNow() {
     const labels = new Map((memory.costNotes() || []).map((n) => [n.id, n.label]));
@@ -563,6 +588,10 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
             if (body.kind === "regroup") {
               const sid = typeof body.suggestion === "string" && /^rg-[0-9a-f]{12}$/.test(body.suggestion) ? body.suggestion : "";
               r = assistant.proposeRegroup(sid, { extra: typeof body.extra === "string" ? body.extra : "", provider: typeof body.provider === "string" ? body.provider.slice(0, 40) : "" });
+              break;
+            }
+            if (body.kind === "tidy") {
+              r = assistant.proposeTidy({ ai: body.ai === true, provider: typeof body.provider === "string" ? body.provider.slice(0, 40) : "" });
               break;
             }
             r = assistant.propose(String(body.note || ""), { extra: typeof body.extra === "string" ? body.extra : "", provider: typeof body.provider === "string" ? body.provider.slice(0, 40) : "" }); break;

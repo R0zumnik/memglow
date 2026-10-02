@@ -637,6 +637,8 @@ a { color: var(--bn-accent-teal); }
 /* Archive block (dormant sections) */
 .mg-arch { margin-top: var(--bn-space-4); }
 .mg-arch__hint { margin: 0 0 var(--bn-space-2); font-size: 12px; color: var(--bn-ink-dim); max-width: 760px; }
+/* Structure block (hub-and-spoke drift, lib/hub-spoke.js) */
+.mg-struct { margin-top: var(--bn-space-4); }
 /* Time to find a note, memory engine speed (public/cost.js costFindTime / costEngineSpeed) */
 .mg-cost__figs--three { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 4px; }
 .mg-cost__figs--three .mg-cost__fig-val { font-size: 18px; }

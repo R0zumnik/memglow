@@ -44,7 +44,7 @@ var EN_AI = {
   "ai.archiveGain": "Live memory: {saved} tokens fewer to read ({live}). Archive summary: ≈ {summaryTokens} tokens for {lines}.",
   "ai.lineCount": { one: "{n} line", other: "{n} lines" },
   "ai.keptLive": "Kept live by the AI",
-  "ai.splitTitle": "Split {label}", "ai.regroupTitle": "Regroup {label}", "ai.archiveTitle": "Archive {label}",
+  "ai.splitTitle": "Split {label}", "ai.regroupTitle": "Regroup {label}", "ai.archiveTitle": "Archive {label}", "ai.tidyTitle": "Tidy {label}",
   "ai.asking": "Asking {who} for a proposal… {chars} characters received. It has no tool and writes nothing.",
   "ai.askingArchive": "Asking {who} which sections to archive… {chars} characters received. It has no tool and writes nothing.",
   "ai.cancel": "Cancel", "ai.discard": "Discard", "ai.retry": "Ask again",
@@ -53,6 +53,7 @@ var EN_AI = {
   "ai.checked": "memglow checked it: nothing lost, same folder and group, no note replaced or deleted, protected groups respected. Exact changes:",
   "ai.checkedRegroup": "memglow checked it: same group, note texts unchanged (only the sub-theme line), no note replaced or deleted, protected groups respected. Exact changes:",
   "ai.checkedArchive": "memglow checked it: every moved section is in its archive note word for word, the original notes can be rebuilt exactly, each archive note is in the same theme, nothing is overwritten or deleted, every link points to an existing note, protected groups respected. Exact changes:",
+  "ai.checkedTidy": "memglow checked it: only the targeted lines changed, nothing else in a note's body, no note created or deleted, protected groups respected. Exact changes:",
   "ai.apply": "Apply this plan",
   "ai.applyHint": "Apply backs up the notes first (git snapshot if your memory is a git repository, otherwise a copy in memglow's data folder); if the backup fails, nothing is written.",
   "ai.applying": "Backing up and writing…",
@@ -197,7 +198,8 @@ function aiRenderJob(j, providerLabel, T) {
   var who = aiEsc(providerLabel || T("ai.theAi"));
   var regroup = j.kind === "regroup";
   var arch = j.kind === "archive";
-  var titleParts = aiSplitAround(T, arch ? "ai.archiveTitle" : regroup ? "ai.regroupTitle" : "ai.splitTitle", "label");
+  var tidy = j.kind === "tidy";
+  var titleParts = aiSplitAround(T, arch ? "ai.archiveTitle" : regroup ? "ai.regroupTitle" : tidy ? "ai.tidyTitle" : "ai.splitTitle", "label");
   var title = '<p class="mg-ai__title">' + aiEsc(titleParts[0]) + '<strong>' + aiEsc(j.note && j.note.label) + '</strong>' + aiEsc(titleParts[1]) + '</p>';
   if (j.state === "running") {
     return title + '<p class="mg-ai__msg">' + T(arch ? "ai.askingArchive" : "ai.asking", { who: who, chars: '<span class="mg-ai__chars" id="mg-ai-chars">' + aiNum(j.chars) + '</span>' }) + '</p>' +
@@ -214,7 +216,7 @@ function aiRenderJob(j, providerLabel, T) {
   if (j.state === "proposed") {
     return title + (j.notes ? '<p class="mg-ai__notes">' + T("ai.aiNotes", { who: who, notes: aiEsc(j.notes) }) + '</p>' : '') + (arch ? aiArchiveGain(j.archive, T) + aiKeep(j.keep, T) : aiGain(j.gain, T)) +
       aiList(j.warnings, "mg-ai__warnings") +
-      '<p class="mg-ai__msg">' + aiEsc(T(arch ? "ai.checkedArchive" : regroup ? "ai.checkedRegroup" : "ai.checked")) + '</p>' +
+      '<p class="mg-ai__msg">' + aiEsc(T(arch ? "ai.checkedArchive" : regroup ? "ai.checkedRegroup" : tidy ? "ai.checkedTidy" : "ai.checked")) + '</p>' +
       (j.files || []).map(function (f) { return aiDiff(f, T); }).join("") +
       '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="apply">' + aiEsc(T("ai.apply")) + '</button><button type="button" class="bn-btn" data-ai="cancel">' + aiEsc(T("ai.discard")) + '</button></div>' +
       '<p class="mg-ai__hint">' + aiEsc(T("ai.applyHint")) + '</p>';
@@ -415,6 +417,21 @@ if (typeof module !== "undefined" && module.exports) {
     var d = e.detail || {};
     if (!Array.isArray(d.sections) || !d.sections.length) return;
     archive({ sections: d.sections.map(String), ai: d.ai === true });
+  });
+
+  // Tidy into hub and spoke (Memory cost → Structure block, lib/hub-spoke.js / lib/assistant/tidy.js).
+  // Deterministic fixes need no AI; ambiguous cross-links are only reviewed when `ai` is true.
+  function tidy(req) {
+    asking = null;
+    var body = { ai: !!req.ai };
+    if (req.ai && st && st.provider) body.provider = st.provider.id;
+    var dp = req.ai && st && st.provider ? providerOf(st.provider.id) : null;
+    if (dp && aiConsent(dp, T) && typeof window.confirm === "function" && !window.confirm(T("ai.consent", { dest: dp.destination || dp.label }))) return Promise.resolve();
+    if (root.scrollIntoView) root.scrollIntoView({ behavior: "smooth", block: "start" });
+    return post("propose", { kind: "tidy", ai: body.ai, provider: body.provider }).then(function (o) { if (st) { st.job = o.job; render(); } else load(); }).catch(fail);
+  }
+  document.addEventListener("memglow:tidy", function (e) {
+    tidy({ ai: (e.detail || {}).ai === true });
   });
 
   document.addEventListener("memglow:assistant", function (e) {
