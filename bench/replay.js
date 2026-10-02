@@ -60,7 +60,7 @@ const LEVER_ENV = {
 const LEVER_NAMES = Object.keys(LEVER_ENV);
 // The shipped defaults (lib/proxy-levers.js DEFAULTS), named here explicitly so this file keeps
 // working unchanged even if that module's own defaults ever drift.
-const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: true, suggestions: true, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false };
+const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false };
 
 function sha1(s) { return crypto.createHash("sha1").update(s).digest("hex"); }
 
@@ -238,6 +238,16 @@ function namedConfigs(withCombos) {
   return list;
 }
 
+/** One configuration per lever (`--each`): every lever OFF except the one named, so each row is
+ * directly comparable to "off" and shows exactly what THAT lever alone adds or saves — unlike the
+ * "+lever" rows from `--with` (above), which start from the shipped DEFAULTS. This is what stage
+ * 0.4.2.2 used to decide, per lever, whether to keep it as is, shorten its text, or turn it off by
+ * default (see lib/proxy-levers.js DEFAULTS and its comment). */
+function eachLeverConfigs() {
+  const off = Object.fromEntries(LEVER_NAMES.map((n) => [n, false]));
+  return LEVER_NAMES.map((name) => ({ key: "alone:" + name, label: name + " (alone)", flags: { ...off, [name]: true } }));
+}
+
 function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-replay-"));
   const notesDir = path.join(work, "notes");
@@ -332,16 +342,27 @@ function summarize(results, baselineKey = "off") {
 // ---------------------------------------------------------------------------------------------
 // CLI
 
+// Every flag this CLI understands. "--memory" is an alias for "--memory-dir" (the real flag):
+// before this stage, typing "--memory" was silently ignored (treated as a bare positional token
+// and dropped), running against the DEFAULT memory folder instead of the one the caller meant —
+// now it works as an alias, and any OTHER unrecognised flag is a hard error instead of silently
+// doing nothing.
+const FLAG_ALIASES = { "--memory": "--memory-dir" };
+
 function parseArgs(argv) {
-  const o = { memoryDir: DEFAULT_MEMORY, events: DEFAULT_EVENTS, withCombos: [], alwaysLoaded: [], json: false };
+  const o = { memoryDir: DEFAULT_MEMORY, events: DEFAULT_EVENTS, withCombos: [], alwaysLoaded: [], json: false, each: false, unknown: [] };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i], v = () => argv[++i];
+    let a = argv[i];
+    if (Object.prototype.hasOwnProperty.call(FLAG_ALIASES, a)) a = FLAG_ALIASES[a];
+    const v = () => argv[++i];
     if (a === "--memory-dir") o.memoryDir = path.resolve(v());
     else if (a === "--events") o.events = path.resolve(v());
     else if (a === "--with") o.withCombos.push(String(v()).split(",").map((s) => s.trim()).filter(Boolean));
     else if (a === "--always-loaded") o.alwaysLoaded.push(...String(v()).split(",").map((s) => s.trim()).filter(Boolean));
     else if (a === "--json") o.json = true;
+    else if (a === "--each") o.each = true;
     else if (a === "--help" || a === "-h") o.help = true;
+    else o.unknown.push(argv[i]); // the ORIGINAL token (pre-alias), so the error names what was typed
   }
   return o;
 }
@@ -356,11 +377,32 @@ function printTable(rows) {
   }
 }
 
+/** `--each`: one line per lever, isolated against "off" — exactly what that lever alone adds or
+ * saves on this event file, independent of every other lever's own effect. */
+function printEachBreakdown(rows) {
+  const alone = rows.filter((r) => r.key.startsWith("alone:"));
+  if (!alone.length) return;
+  console.log("\nper-lever breakdown (each lever alone, vs off):");
+  const head = `${"lever".padEnd(24)}${"tokens added/saved".padStart(20)}${"violations".padStart(13)}`;
+  console.log(head);
+  console.log("-".repeat(head.length));
+  for (const r of alone) {
+    const name = r.key.slice("alone:".length);
+    const delta = -r.savingsAbs; // positive = this lever ADDS tokens, negative = it SAVES tokens
+    const text = delta === 0 ? "0" : `${delta > 0 ? "+" : ""}${delta} ${delta > 0 ? "added" : "saved"}`;
+    console.log(`${name.padEnd(24)}${text.padStart(20)}${String(r.violations).padStart(13)}`);
+  }
+}
+
 function main() {
   const o = parseArgs(process.argv.slice(2));
   if (o.help) {
-    console.log("usage: node bench/replay.js [--memory-dir <dir>] [--events <file>] [--with lever,lever]... [--always-loaded entry,entry] [--json]");
+    console.log("usage: node bench/replay.js [--memory-dir <dir> | --memory <dir>] [--events <file>] [--with lever,lever]... [--always-loaded entry,entry] [--each] [--json]");
     return;
+  }
+  if (o.unknown.length) {
+    console.error(`bench/replay: unknown flag${o.unknown.length > 1 ? "s" : ""}: ${o.unknown.join(", ")} — run with --help for the list of flags`);
+    process.exitCode = 2; return;
   }
   for (const combo of o.withCombos) for (const n of combo) {
     if (!LEVER_NAMES.includes(n)) { console.error(`bench/replay: unknown lever "${n}" — one of: ${LEVER_NAMES.join(", ")}`); process.exitCode = 2; return; }
@@ -369,18 +411,22 @@ function main() {
   try { events = loadEvents(o.events); } catch (e) { console.error("bench/replay: failed to load events: " + (e && e.message || e)); process.exitCode = 2; return; }
   if (!events.length) { console.error("bench/replay: no events to replay"); process.exitCode = 2; return; }
 
-  const configs = namedConfigs(o.withCombos);
+  const configs = [...namedConfigs(o.withCombos), ...(o.each ? eachLeverConfigs() : [])];
   const results = configs.map((c) => ({ key: c.key, label: c.label, ...runConfig(c.flags, events, { memoryDir: o.memoryDir, alwaysLoaded: o.alwaysLoaded }) }));
   const rows = summarize(results);
   const anyViolations = rows.some((r) => r.violations > 0);
 
   if (o.json) console.log(JSON.stringify({ events: events.length, rows, anyViolations }, null, 2));
-  else { printTable(rows); if (anyViolations) console.error("\nbench/replay: CORRECTNESS GUARD FAILED — see violations above"); }
+  else {
+    printTable(rows.filter((r) => !r.key.startsWith("alone:")));
+    if (o.each) printEachBreakdown(rows);
+    if (anyViolations) console.error("\nbench/replay: CORRECTNESS GUARD FAILED — see violations above");
+  }
   process.exitCode = anyViolations ? 1 : 0;
 }
 
 if (require.main === module) main();
 module.exports = {
-  loadEvents, normalizeCalls, portalToCalls, namedConfigs, runConfig, summarize,
-  isReachable, idsOfReadCall, withPermalink, makeUpstream, sha1, LEVER_NAMES, SHIPPED_DEFAULTS, GAP_MS,
+  loadEvents, normalizeCalls, portalToCalls, namedConfigs, eachLeverConfigs, runConfig, summarize,
+  isReachable, idsOfReadCall, withPermalink, makeUpstream, sha1, parseArgs, LEVER_NAMES, SHIPPED_DEFAULTS, GAP_MS,
 };

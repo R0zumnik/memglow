@@ -1,5 +1,88 @@
 # Changelog
 
+## 0.4.2.2 — internal (not published)
+
+### Changed
+
+- **MCP proxy: lean defaults.** `bench/replay.js` (stage 0.4.2.1b) measured, and a real 2-day
+  usage log confirmed, that the shipped `defaults` delivered MORE tokens than `off` — −19.7% on
+  the shipped demo (`off` 5,288 → `defaults` 6,329 tokens), **+14% on the real log** (91 calls:
+  `off` 116,052 → `defaults` 132,257 tokens). `searchDetails` and `suggestions` only ever ADD
+  explanatory text (never cut anything), and the free replay harness cannot credit the extra
+  reads/searches such text might avoid, so any amount of it reads as a pure loss — the real log's
+  +14% is the same effect, just noisier. Per lever (`node bench/replay.js --each`, each lever
+  alone against `off`, demo file / heavy synthetic file — see below):
+
+  | lever | demo (14 calls) | heavy (60 calls) | decision |
+  |---|---|---|---|
+  | `sizeWarning` | +0 | +0 (both files avoid an oversized note on purpose — see below) | **keep** |
+  | `searchDetails` | +483 | +1,179 | **off by default** (shortened) |
+  | `suggestions` | +331 | +1,376 | **off by default** (shortened) |
+  | `dedupe` | −1,449 | −4,314 | unchanged (off by default) |
+  | `toc` | 0 | 0 | unchanged (off by default) |
+  | `alreadyLoaded` | −3,710 | −9,646 | unchanged (off by default) |
+
+  Decisions, with the numbers above:
+  - **`sizeWarning` — keep, unchanged.** A single short line, once per large note per session —
+    exactly the "short and plausibly prevents a wasted call" case. It is the one lever still on
+    by default (`DEFAULTS.sizeWarning = true` in `lib/proxy-levers.js`); on a session that reads
+    an oversized note it can still make `defaults` cost a few tokens more than `off` — that is
+    this lever doing its job, not a regression.
+  - **`searchDetails` — shortened AND turned off by default.** Shortening (kept for whoever opts
+    back in via `MEMGLOW_PROXY_SEARCH_DETAILS=1`): a note already read **in full** this session
+    gets no teaser line at all (its real content, not a guess at it, is already in context); a
+    note merely *described* once this session (an earlier search mentioned it) gets the compact
+    line (no description) the next time a search turns it up. Neither optimisation was enough to
+    flip the sign on either event file (a nearly-cold demo/heavy file has few repeats to exploit),
+    so `DEFAULTS.searchDetails` is now `false`.
+  - **`suggestions` — shortened AND turned off by default.** Shortening: shown once per note
+    **per session** (re-reading the same note later in the session does not repeat its
+    related-notes suffix) — kept for `MEMGLOW_PROXY_SUGGESTIONS=1`. `DEFAULTS.suggestions` is now
+    `false`, same reasoning as `searchDetails`.
+
+  `dedupe`, `toc`, `archiveHint`, `hideUnsupportedTools` and `alreadyLoaded` are unchanged (still
+  off by default, for the reasons already documented) — this stage only touched the three levers
+  that were on by default.
+
+### Added
+
+- **`bench/replay.js --each`**: one row per lever, each lever ALONE against the `off` baseline
+  (every other lever off) — unlike `--with`, which starts from `defaults`. Reports the tokens
+  each lever adds or saves in isolation; this is the table stage 0.4.2.2 was decided from, and
+  the one to re-run before changing any lever's default again. `--json` includes the same rows
+  (`key: "alone:<lever>"`).
+- **`bench/replay-heavy.jsonl`**: a synthetic 60-call, 4-session event file, heavier and more
+  repetitive than the 14-call demo (the same handful of notes read and searched repeatedly across
+  a few topics — a storefront project, a docker/home-lab investigation, a weather-app session —
+  plus a one-off tail of notes touched once), closer to a real working session. Used by
+  `test/bench-replay.test.js` alongside the demo file to confirm `defaults` tokens `<=` `off`
+  tokens holds at a larger scale too, not just on the small demo.
+- **`bench/replay.js`: `--memory` is now an alias for `--memory-dir`.** Before this stage, typing
+  `--memory` (plausible shorthand, or a typo for `--memory-dir`) was silently ignored — the flag
+  and its value were dropped as unrecognised positional tokens, and the run silently used the
+  DEFAULT memory folder instead of the one intended. Now it works exactly like `--memory-dir`.
+- **`bench/replay.js`: any other unrecognised flag is now a hard error** (exit code 2, naming the
+  unknown token(s)) instead of being silently ignored — the same class of mistake as `--memory`
+  above, for every flag this CLI does not know.
+
+### Tests
+
+- `test/bench-replay.test.js`: `SHIPPED_DEFAULTS` (the harness's own copy of the shipped defaults)
+  pinned equal to `lib/proxy-levers.js`'s `DEFAULTS`, so the two can never silently drift again;
+  `defaults` tokens `<=` `off` tokens on both the demo and the new heavy file, 0 violations
+  everywhere; `eachLeverConfigs()` shape (one lever on per row); the demo/heavy per-lever
+  breakdown itself (`searchDetails`/`suggestions` only add, `dedupe`/`alreadyLoaded` only save,
+  the rest are no-ops on these two files); `parseArgs` (`--memory` alias, unknown flags recorded,
+  `--each` parses).
+- `test/mcp-proxy-levers.test.js`: the "defaults" end-to-end test updated for the new defaults
+  (only `sizeWarning` fires without opt-in); `searchDetails`/`suggestions` end-to-end mechanics
+  moved to their own opt-in tests (`MEMGLOW_PROXY_SEARCH_DETAILS=1` / `MEMGLOW_PROXY_SUGGESTIONS=1`),
+  including the new "already read in full this session → no row at all" case; the FastMCP
+  wrapper test, the HTTP proxy test and the config-clamping test updated to opt back in where
+  they specifically exercise those two levers.
+- `npm test`: 368 tests, all green. `node bench/replay.js` / `--each` / `--events
+  bench/replay-heavy.jsonl --each`: 0 violations on every configuration.
+
 ## 0.4.2.1b — internal (not published)
 
 ### Added

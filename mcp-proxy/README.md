@@ -106,14 +106,42 @@ about. Rules, for every lever:
 | # | Lever | Default | What the assistant gets |
 |---|---|---|---|
 | 1 | `sizeWarning` | **on** | Before the content of a note over `largeNoteTokens` (default 5,000): `⚠ memglow: this note is ≈N tokens (threshold T). Consider offering the user to split it into smaller notes within the same theme "<theme>"; memglow's split_plan tool can propose sections.` Also after a `write_note` / `edit_note` that leaves the note over the threshold (`…this note is now ≈N tokens…`). Once per note and per session. |
-| 2 | `searchDetails` | **on** | After search results: one line per note found — title, id, theme/sub-theme, ≈tokens, description — so the right note is picked without opening several. |
-| 3 | `suggestions` | **on** | After a note is read: `memglow: related notes: A (≈t), B (≈t), C (≈t)` — linked notes, same sub-theme and, when activity counters exist, notes usually read the same days. 3 by default (`suggestionsMax`, up to 5); notes already read in the session are skipped. |
+| 2 | `searchDetails` | off (was on through 0.4.2.1b) | After search results: one line per note found — title, id, theme/sub-theme, ≈tokens, description — so the right note is picked without opening several. The description is shown once per note **per session**; a note found again by a later search in the same session gets the compact line (no description), and a note already read **in full** this session gets no line at all. |
+| 3 | `suggestions` | off (was on through 0.4.2.1b) | After a note is read: `memglow: related notes: A (≈t), B (≈t), C (≈t)` — linked notes, same sub-theme and, when activity counters exist, notes usually read the same days. 3 by default (`suggestionsMax`, up to 5); notes already read in the session are skipped, and shown **once per note per session** (re-reading the same note later in the session does not repeat it). |
 | 4 | `dedupe` | off | A note re-read in the same session with **exactly the same answer** gets a short "unchanged since you read it earlier in this session (≈N tokens saved)" instead of its content (only when that is shorter). |
 | 5 | `toc` | off | A note over the threshold first comes back as its description plus its sections with ≈tokens each; the assistant then asks for one section (`"memglow_section": "Decisions"` or `"3"`), cut verbatim from the server's answer. |
 | 6 | `archiveHint` | off | A search that finds nothing in the live memory (an empty answer such as `No results` or `"results": []`, or hits only in the [archive folder](../README.md#archive)) → after the server's answer: `memglow: nothing found in the live memory — the archive summary lists: "Router setup" (from \`home-net\`, archived 2026-06-01 in \`habits-archive\`, ≈420 tokens)`. Titles of the archived sections matching the query (up to `archiveHintMax`, 5), read from the archive summary note — never their text. Nothing matches: a one-line pointer to the summary note. No archive summary: nothing added. |
 | 7 | `hideUnsupportedTools` | off | Removes, from `tools/list`, the tools a per-server table marks unsupported for the client that just said hello — never from a `tools/call`, which always reaches the real server untouched. |
 | 8 | `alreadyLoaded` | off | A single-note read (never `build_context` or another `multiNoteTools` entry) of a note memglow knows is loaded into the context at the start of **every** session — the index note(s), or an `alwaysLoaded` entry (see `README.md`'s "Always loaded" cost, `lib/always-loaded.js`) that resolves to a note — gets `memglow: "<label>" (≈N tokens) is already in your context — it is loaded at the start of every session and has not changed since this session began (sha <8 hex chars>). Use it from there. To get the full text anyway, call again with "memglow_fresh": true.` instead of its content, for as long as the note's file (read directly off disk) matches the hash captured at the start of the session. A note that changed meanwhile is never stubbed: its full, current text comes back with one extra line saying so. |
 | — | `indexWarning` | off | Before the content of the **index** note when it is over `indexWarningTokens` (top-level key, default 2,000): `⚠ memglow: the index note "…" is ≈N tokens (index threshold T) and it is loaded at every session. Consider offering the user to trim it…`. Once per session. Replaces lever 1 for the index note when on. |
+
+### Stage 0.4.2.2 — "lean defaults"
+
+Through 0.4.2.1b, `searchDetails` and `suggestions` were on by default, same as `sizeWarning`.
+Measured with the free replay harness (`bench/replay.js`, see [bench/README.md](../bench/README.md))
+and against a real 2-day usage log (91 calls), `defaults` delivered MORE tokens than `off` —
+−19.7% on the shipped demo, +14% on the real log (116,052 → 132,257 tokens). Both levers only
+ever ADD explanatory text (never cut anything), and the harness cannot credit the extra reads or
+searches that text might avoid, so any amount of it reads as a pure loss; the real log's own
++14% is the same effect at a larger, noisier scale. Neither lever is "short" the way `sizeWarning`
+is (a search's `searchDetails` suffix can be close to the size of the search results themselves),
+and neither has a measured upside, so this stage turns both OFF by default. They are shortened
+either way, for whoever opts back in (`MEMGLOW_PROXY_SEARCH_DETAILS=1` /
+`MEMGLOW_PROXY_SUGGESTIONS=1`, or the `proxy` config keys):
+
+- `searchDetails`: a note already read **in full** this session gets no teaser line at all (its
+  real content, not a guess at it, is already in context); a note merely *described* once this
+  session (an earlier search mentioned it) gets the compact line (no description) on a later
+  search that turns it up again.
+- `suggestions`: shown once per note **per session** — re-reading the same note later in the same
+  session does not repeat its related-notes suffix.
+
+`sizeWarning` stays on by default: one short line, once per large note per session, that
+plausibly prevents a wasted call (the model blindly reading, or growing, an oversized note) —
+exactly the "keep" case the other two did not meet. `node bench/replay.js --each` prints what
+each lever adds or saves alone, against `off`, independent of every other lever; that is the
+table this decision was made from, and the one to re-run before changing any lever's default
+again.
 
 ### Lever 7 — `hideUnsupportedTools`: one client, one tool list
 
@@ -219,6 +247,9 @@ content, no note.
 
 ### Examples
 
+(Levers 2 and 3 are off by default since stage 0.4.2.2 — these examples assume they were turned
+on, as shown.)
+
 A search (lever 2), the server's own text first, unchanged:
 
 ```text
@@ -264,8 +295,8 @@ sets `memoryDir`), or the file named by `MEMGLOW_CONFIG`:
   "alwaysLoaded": ["~/.claude/CLAUDE.md"],
   "proxy": {
     "sizeWarning": true,
-    "searchDetails": true,
-    "suggestions": true,
+    "searchDetails": false,
+    "suggestions": false,
     "suggestionsMax": 3,
     "dedupe": false,
     "toc": false,

@@ -24,20 +24,35 @@ and the process exits 1.
 
 ```
 node bench/replay.js                                    # off vs defaults, demo/memory + bench/replay-demo.jsonl
+node bench/replay.js --each                               # + a per-lever breakdown (each lever alone, vs off)
 node bench/replay.js --with alreadyLoaded                # + a defaults-plus-alreadyLoaded row
 node bench/replay.js --with dedupe,toc --with alreadyLoaded   # one row per --with (repeatable)
 node bench/replay.js --memory-dir path/to/notes --events path/to/events.jsonl --json
+node bench/replay.js --memory path/to/notes                # "--memory" is an alias for "--memory-dir"
 ```
 
 - `--events` accepts a JSONL file (or a plain JSON array) of tool calls, one call per line:
   `{"session":"s1","tool":"read_note","args":{"identifier":"MEMORY"},"t":1}`. It also accepts the
   r0zumnik portal's own activity shape, `{"evenements":[{"type":"lecture"|"recherche"|"ecriture",
   "ids":[...],"source":"nas"|"mac","t":...}]}` — sessions are inferred from `source` plus a
-  silence of more than 30 minutes.
-- `--with a,b,c` adds a configuration: the shipped **defaults** (sizeWarning + searchDetails +
-  suggestions on) with levers `a`, `b`, `c` also forced on. Repeat the flag for more rows.
+  silence of more than 30 minutes. `bench/replay-demo.jsonl` is the small shipped demo (14 calls,
+  3 sessions); `bench/replay-heavy.jsonl` is a bigger synthetic one (60 calls, 4 sessions, closer
+  to a real working session: the same handful of notes read and searched repeatedly, plus a
+  one-off tail) — both are replayed in CI-equivalent tests (`test/bench-replay.test.js`).
+- `--with a,b,c` adds a configuration: the shipped **defaults** (stage 0.4.2.2: sizeWarning only —
+  see below) with levers `a`, `b`, `c` also forced on. Repeat the flag for more rows.
+- `--each` adds one row per lever (sizeWarning, indexWarning, searchDetails, suggestions, dedupe,
+  toc, archiveHint, hideUnsupportedTools, alreadyLoaded), each ALONE against the `off` baseline
+  (every other lever off) — unlike `--with`, which starts from the shipped defaults. This is the
+  per-lever "does it add or save tokens, and how much" breakdown used to decide, lever by lever,
+  whether to keep it as shipped, shorten its text, or turn it off by default (see
+  `lib/proxy-levers.js`'s `DEFAULTS` comment and the CHANGELOG entry for stage 0.4.2.2).
 - `off` and `defaults` are always run, as the two fixed reference points.
-- `--json` for machine output (`{ rows, anyViolations }`); otherwise a short table.
+- `--json` for machine output (`{ rows, anyViolations }`); otherwise a short table (plus the
+  per-lever one with `--each`).
+- Any flag not in this list is a **hard error** (exit 2) instead of being silently ignored —
+  `--memory` (a common typo for the real flag, `--memory-dir`) is the one exception: it is an
+  alias, not a typo, and works exactly like `--memory-dir`.
 
 **Rule for every future engine micro-step touching `lib/proxy-levers.js`, `mcp-proxy/`, or the
 always-loaded/archive helpers it calls into: run `bench/replay.js` and show the numbers (gain +
@@ -52,19 +67,55 @@ Sample output on the shipped demo (`off` vs `defaults` vs `+alreadyLoaded`, `dem
 configuration              calls   tokens      savings vs off   violations
 --------------------------------------------------------------------------
 off                           14     5288          +0 (+0.0%)            0
-defaults                      14     6329      -1041 (-19.7%)            0
-+alreadyLoaded                14     2379      +2909 (+55.0%)            0
+defaults                      14     5288          +0 (+0.0%)            0
++alreadyLoaded                14     1578      +3710 (+70.2%)            0
 ```
 
-`defaults` costs MORE tokens than `off` here, and that is expected: sizeWarning / searchDetails /
-suggestions only ADD explanatory text, they never cut anything. `alreadyLoaded` is the lever that
+**Stage 0.4.2.2 ("lean defaults")**: `defaults` no longer costs more than `off`. Before this
+stage, `searchDetails` and `suggestions` were ON by default and only ADDED explanatory text (they
+never cut anything) — on this same demo file `defaults` used to deliver 6,329 tokens, −19.7% vs
+`off`'s 5,288, and the free replay harness cannot credit the extra reads/searches such text might
+avoid, so it always reads as a pure loss. Measured against a real 2-day usage log too (91 calls:
+`off` 116,052 tokens, `defaults` 132,257, +14%), the numbers did not support keeping either lever
+on: `searchDetails` and `suggestions` are now OFF by default (shortened either way — see
+`lib/proxy-levers.js`'s `DEFAULTS` comment — for whoever opts back in). `sizeWarning` stays ON: a
+single short line, once per large note per session, that plausibly prevents a wasted call — on a
+session that touches an oversized note it can still make `defaults` cost a FEW tokens more than
+`off` (this is that lever doing its job), which is why both shipped event files avoid reading one;
+see `bench/replay-heavy.jsonl` below and the `sizeWarning` tests in
+`test/mcp-proxy-levers.test.js` for that case on its own. `alreadyLoaded` is the lever that
 actually removes tokens (by stubbing a note memglow knows is already in context), which is why
 its row drops well below both — on this event file it stubs every one of the 4 re-reads of
 `MEMORY.md`. `dedupe` and `toc` would do the same for same-session re-reads / oversized notes
-respectively; the demo memory has none large enough to trigger `toc` (threshold 5,000 tokens),
-which is why `--with toc` alone matches `defaults` exactly on this particular event file — not a
-bug, just nothing in it to cut.
+respectively; the demo memory has none large enough to trigger `toc` (threshold 5,000 tokens).
+
+`node bench/replay.js --each` isolates each lever against `off` (every OTHER lever off), rather
+than starting from `defaults` like `--with` does — this is the table used to decide, per lever,
+keep / shorten / off by default:
+
+```
+per-lever breakdown (each lever alone, vs off):
+lever                     tokens added/saved   violations
+---------------------------------------------------------
+sizeWarning                                0            0
+indexWarning                               0            0
+searchDetails                     +483 added            0
+suggestions                       +331 added            0
+dedupe                           -1449 saved            0
+toc                                        0            0
+archiveHint                                0            0
+hideUnsupportedTools                       0            0
+alreadyLoaded                    -3710 saved            0
+```
+
+On `bench/replay-heavy.jsonl` (60 calls, 4 sessions, closer to a real working session — the same
+handful of notes read and searched repeatedly across a few topics, plus a one-off tail of notes
+touched once), the same shape holds at a larger scale: `off` 16,773 tokens, `defaults` 16,773
+(exactly equal — no large note in this file), `searchDetails` alone +1,179, `suggestions` alone
++1,376, `dedupe` alone −4,314, `alreadyLoaded` alone −9,646.
 
 Tests: `test/bench-replay.test.js` (the correctness guard on hand-built fixtures, including one
 that pins what an artificially broken lever looks like to the guard; event loading/grouping; the
-demo table's own invariant — `off` vs `+alreadyLoaded`, positive saving, 0 violations).
+demo AND heavy tables' own invariant — `defaults` tokens `<=` `off` tokens, 0 violations
+everywhere; a guard against `SHIPPED_DEFAULTS` drifting from `lib/proxy-levers.js`'s own
+`DEFAULTS`; `parseArgs` — the `--memory` alias, unknown flags rejected, `--each`).

@@ -8,12 +8,17 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const {
-  loadEvents, normalizeCalls, portalToCalls, namedConfigs, runConfig, summarize,
-  isReachable, withPermalink, LEVER_NAMES, GAP_MS,
+  loadEvents, normalizeCalls, portalToCalls, namedConfigs, eachLeverConfigs, runConfig, summarize,
+  isReachable, withPermalink, parseArgs, LEVER_NAMES, SHIPPED_DEFAULTS, GAP_MS,
 } = require("../bench/replay.js");
-const { ARG_FRESH } = require("../lib/proxy-levers");
+const { ARG_FRESH, DEFAULTS: LIB_DEFAULTS } = require("../lib/proxy-levers");
+
+test("SHIPPED_DEFAULTS (bench/replay.js) never silently drifts from lib/proxy-levers.js DEFAULTS", () => {
+  for (const name of LEVER_NAMES) assert.strictEqual(SHIPPED_DEFAULTS[name], LIB_DEFAULTS[name], `lever "${name}"`);
+});
 
 const ROOT = path.join(__dirname, "..");
+const HEAVY_EVENTS = path.join(__dirname, "..", "bench", "replay-heavy.jsonl");
 const DEMO_MEMORY = path.join(ROOT, "demo", "memory");
 const DEMO_EVENTS = path.join(__dirname, "..", "bench", "replay-demo.jsonl");
 
@@ -177,4 +182,78 @@ test("demo replay: +alreadyLoaded gives a positive saving on the repeated index 
 test("withPermalink: adds a permalink line right after the frontmatter fence, matching basic-memory's own convention", () => {
   const out = withPermalink("---\ntitle: x\n---\nbody\n", "folder/x");
   assert.strictEqual(out, "---\npermalink: folder/x\ntitle: x\n---\nbody\n");
+});
+
+// ---------------------------------------------------------------------------------------------
+// Stage 0.4.2.2 "lean defaults": defaults must never cost more than off, on the demo replay.
+
+test("demo replay: defaults never cost more tokens than off (0.4.2.2 target), 0 violations", () => {
+  const events = loadEvents(DEMO_EVENTS);
+  const configs = namedConfigs([]);
+  const results = configs.map((c) => ({ key: c.key, label: c.label, ...runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] }) }));
+  const rows = summarize(results);
+  for (const r of rows) assert.strictEqual(r.violations, 0, `${r.key}: ${JSON.stringify(r.violationDetails)}`);
+  const off = rows.find((r) => r.key === "off");
+  const defaults = rows.find((r) => r.key === "defaults");
+  assert.ok(defaults.tokensTotal <= off.tokensTotal, `defaults (${defaults.tokensTotal}) must be <= off (${off.tokensTotal})`);
+});
+
+test("heavy synthetic replay (60 calls, 4 sessions, realistic repeats): defaults never cost more tokens than off, 0 violations", () => {
+  const events = loadEvents(HEAVY_EVENTS);
+  assert.ok(events.length >= 50, "the heavy events file should be a lot bigger than the demo one");
+  const configs = namedConfigs([]);
+  const results = configs.map((c) => ({ key: c.key, label: c.label, ...runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] }) }));
+  const rows = summarize(results);
+  for (const r of rows) assert.strictEqual(r.violations, 0, `${r.key}: ${JSON.stringify(r.violationDetails)}`);
+  const off = rows.find((r) => r.key === "off");
+  const defaults = rows.find((r) => r.key === "defaults");
+  assert.ok(defaults.tokensTotal <= off.tokensTotal, `defaults (${defaults.tokensTotal}) must be <= off (${off.tokensTotal})`);
+});
+
+// ---------------------------------------------------------------------------------------------
+// --each: one configuration per lever, isolated against "off".
+
+test("eachLeverConfigs: one row per lever, each with every OTHER lever off", () => {
+  const configs = eachLeverConfigs();
+  assert.deepStrictEqual(configs.map((c) => c.key), LEVER_NAMES.map((n) => "alone:" + n));
+  for (const c of configs) {
+    const onCount = Object.values(c.flags).filter(Boolean).length;
+    assert.strictEqual(onCount, 1, `${c.key}: exactly one lever on`);
+  }
+});
+
+test("demo replay: per-lever breakdown — searchDetails/suggestions only ADD tokens alone, dedupe/alreadyLoaded only SAVE, the rest are no-ops on this file", () => {
+  const events = loadEvents(DEMO_EVENTS);
+  const off = { key: "off", flags: flagsAllOff() };
+  const results = [off, ...eachLeverConfigs()].map((c) => ({ key: c.key, label: c.label || c.key, ...runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] }) }));
+  const rows = summarize(results); // baseline "off" present in `results`, so savingsAbs is a real number
+  for (const r of rows) assert.strictEqual(r.violations, 0, `${r.key}: ${JSON.stringify(r.violationDetails)}`);
+  const delta = (name) => -rows.find((r) => r.key === "alone:" + name).savingsAbs; // positive = adds
+  assert.ok(delta("searchDetails") > 0, "searchDetails alone adds tokens on the demo file");
+  assert.ok(delta("suggestions") > 0, "suggestions alone adds tokens on the demo file");
+  assert.ok(delta("dedupe") < 0, "dedupe alone saves tokens on the demo file");
+  assert.ok(delta("alreadyLoaded") < 0, "alreadyLoaded alone saves tokens on the demo file");
+  for (const name of ["sizeWarning", "indexWarning", "toc", "archiveHint", "hideUnsupportedTools"]) {
+    assert.ok(delta(name) === 0, `${name}: nothing on this file triggers it`); // "=== 0" to accept -0 too
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// CLI: parseArgs — unknown flags are an error, "--memory" aliases "--memory-dir", "--each" parses.
+
+test("parseArgs: --memory is an alias for --memory-dir (used to be silently ignored)", () => {
+  const withAlias = parseArgs(["--memory", "/tmp/notes"]);
+  const withReal = parseArgs(["--memory-dir", "/tmp/notes"]);
+  assert.strictEqual(withAlias.memoryDir, withReal.memoryDir);
+  assert.deepStrictEqual(withAlias.unknown, []);
+});
+
+test("parseArgs: an unrecognised flag is recorded as unknown, not silently dropped", () => {
+  const o = parseArgs(["--bogus", "x"]);
+  assert.deepStrictEqual(o.unknown, ["--bogus", "x"]);
+});
+
+test("parseArgs: --each parses to a boolean, off by default", () => {
+  assert.strictEqual(parseArgs([]).each, false);
+  assert.strictEqual(parseArgs(["--each"]).each, true);
 });

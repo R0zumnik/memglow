@@ -80,7 +80,7 @@ function start(fx, env = {}, { direct = false } = {}) {
 const texts = (r) => r.result.content.map((c) => c.text);
 const rawNote = (fx, rel) => fs.readFileSync(path.join(fx.notes, rel + ".md"), "utf8").replace(/^---\n/, `---\npermalink: ${rel}\n`);
 
-test("defaults: size warning prefix, related-notes suffix, upstream content untouched, once per session", async () => {
+test("defaults (0.4.2.2): only sizeWarning fires — searchDetails/suggestions are opt-in, once per note/session", async () => {
   const fx = makeNotes();
   const c = start(fx);
   try {
@@ -91,10 +91,7 @@ test("defaults: size warning prefix, related-notes suffix, upstream content unto
     const a = await c.call("read_note", { identifier: "people/alice" });
     const ta = texts(a);
     assert.strictEqual(ta[0], rawNote(fx, "people/alice"), "upstream text first and byte-identical");
-    assert.strictEqual(ta.length, 2);
-    assert.match(ta[1], /^memglow: related notes: Bob `bob` \(≈\d+ tokens\)/);
-    assert.match(ta[1], /Carol `carol`/, "same sub-theme");
-    assert.ok(!ta[1].includes("SECRETBODY"), "never a body in suggestions");
+    assert.strictEqual(ta.length, 1, "suggestions is off by default since 0.4.2.2: no suffix");
 
     const b = await c.call("read_note", { identifier: "big" });
     const tb = texts(b);
@@ -107,9 +104,31 @@ test("defaults: size warning prefix, related-notes suffix, upstream content unto
   } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
-test("richer search results: compact metadata block appended, never bodies", async () => {
+test("suggestions (opt-in, MEMGLOW_PROXY_SUGGESTIONS=1): related-notes suffix, upstream content untouched, once per note per session", async () => {
   const fx = makeNotes();
-  const c = start(fx);
+  const c = start(fx, { MEMGLOW_PROXY_SUGGESTIONS: "1" });
+  try {
+    const a = await c.call("read_note", { identifier: "people/alice" });
+    const ta = texts(a);
+    assert.strictEqual(ta[0], rawNote(fx, "people/alice"), "upstream text first and byte-identical");
+    assert.strictEqual(ta.length, 2);
+    assert.match(ta[1], /^memglow: related notes: Bob `bob` \(≈\d+ tokens\)/);
+    assert.match(ta[1], /Carol `carol`/, "same sub-theme");
+    assert.ok(!ta[1].includes("SECRETBODY"), "never a body in suggestions");
+
+    // Re-reading the SAME note again this session: suggestions already shown once, not repeated
+    // (stage 0.4.2.2 shortening) — the upstream content is still delivered in full either way.
+    const again = texts(await c.call("read_note", { identifier: "people/alice" }));
+    assert.strictEqual(again.length, 1, "suggestions shown once per note per session");
+    assert.strictEqual(again[0], rawNote(fx, "people/alice"));
+    await c.rpc("initialize", {});
+    assert.strictEqual(texts(await c.call("read_note", { identifier: "people/alice" })).length, 2, "a new session suggests again");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("searchDetails (opt-in, MEMGLOW_PROXY_SEARCH_DETAILS=1): compact metadata block appended, never bodies; a note already read in full this session gets no row at all", async () => {
+  const fx = makeNotes();
+  const c = start(fx, { MEMGLOW_PROXY_SEARCH_DETAILS: "1" });
   try {
     const r = await c.call("search_notes", { query: "body" });
     const t = texts(r);
@@ -122,6 +141,14 @@ test("richer search results: compact metadata block appended, never bodies", asy
     assert.ok(!block.includes("SECRETBODY"));
     const none = await c.call("search_notes", { query: "zzz-nothing" });
     assert.deepStrictEqual(texts(none), ["No results"], "nothing recognised: response untouched");
+
+    // Now read "alice" in full, then search again: she gets no teaser row at all (her real content
+    // is already in context), the others keep theirs but without repeating the description.
+    await c.call("read_note", { identifier: "alice" });
+    const r2 = await c.call("search_notes", { query: "body" });
+    const block2 = texts(r2)[1];
+    assert.ok(!block2.includes("`alice`"), "alice already read in full this session: no row");
+    assert.match(block2, /- Big plan `big` · Projects\/plans · ≈\d+ tokens \(large\)$/m, "big: no description, already shown once");
   } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
@@ -521,7 +548,7 @@ test("levers 4/5 never touch structuredContent answers; the proxy writes nothing
 
 test("FastMCP text wrapper (structuredContent { result }): kept equal to the annotated text, so clients that show it see the levers", async () => {
   const fx = makeNotes();
-  const c = start(fx, { FAKE_WRAP: "1", MEMGLOW_PROXY_DEDUPE: "1", MEMGLOW_PROXY_TOC: "1" });
+  const c = start(fx, { FAKE_WRAP: "1", MEMGLOW_PROXY_DEDUPE: "1", MEMGLOW_PROXY_TOC: "1", MEMGLOW_PROXY_SUGGESTIONS: "1", MEMGLOW_PROXY_SEARCH_DETAILS: "1" });
   try {
     const sc = (r) => r.result.structuredContent.result;
     const joined = (r) => texts(r).join("\n\n");
@@ -586,7 +613,7 @@ test("config: file `proxy` key, env overrides, clamping", () => {
   }));
   try {
     const c = L.proxyConfig({ MEMGLOW_HOME: fx.home });
-    assert.deepStrictEqual([c.sizeWarning, c.searchDetails, c.suggestions, c.dedupe, c.toc], [true, true, false, true, false]);
+    assert.deepStrictEqual([c.sizeWarning, c.searchDetails, c.suggestions, c.dedupe, c.toc], [true, false, false, true, false]);
     assert.strictEqual(c.suggestionsMax, 3, "out of range → default");
     assert.deepStrictEqual(c.readTools, ["read_note"]);
     assert.strictEqual(c.largeNoteTokens, 3000);
@@ -601,7 +628,7 @@ test("config: file `proxy` key, env overrides, clamping", () => {
     assert.deepStrictEqual(e.searchTools, ["find", "lookup"]);
     assert.strictEqual(L.anyLever({ ...e, sizeWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false }), false);
     const def = L.proxyConfig({ MEMGLOW_HOME: path.join(fx.root, "nowhere") });
-    assert.deepStrictEqual([def.sizeWarning, def.searchDetails, def.suggestions, def.dedupe, def.toc, def.alreadyLoaded], [true, true, true, false, false, false]);
+    assert.deepStrictEqual([def.sizeWarning, def.searchDetails, def.suggestions, def.dedupe, def.toc, def.alreadyLoaded], [true, false, false, false, false, false]);
     assert.deepStrictEqual(def.alwaysLoaded, [], "no config file: nothing always-loaded beyond the index");
     assert.strictEqual(def.memoryDir, null);
     assert.strictEqual(L.anyLever({ alreadyLoaded: true }), true, "alreadyLoaded alone is enough to turn levers on");
@@ -683,7 +710,7 @@ test("lineRelay keeps untouched lines byte for byte (multi-byte split, CRLF, par
 
 test("HTTP proxy with levers: JSON answer gets the suffix with a correct Content-Length; SSE answer rewritten", async () => {
   const fx = makeNotes();
-  const cfg = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_MEMORY_DIR: fx.notes, MEMGLOW_DATA_DIR: fx.data, MEMGLOW_LARGE_NOTE_TOKENS: "1000" });
+  const cfg = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_MEMORY_DIR: fx.notes, MEMGLOW_DATA_DIR: fx.data, MEMGLOW_LARGE_NOTE_TOKENS: "1000", MEMGLOW_PROXY_SUGGESTIONS: "1", MEMGLOW_PROXY_SEARCH_DETAILS: "1" });
   const engine = L.createLevers({ config: cfg, index: L.createNoteIndex(cfg), savings: L.createSavings({ ...cfg, savingsFile: false, log: false }) });
   const upstream = http.createServer((req, res) => {
     let b = ""; req.on("data", (c) => (b += c));
@@ -704,7 +731,7 @@ test("HTTP proxy with levers: JSON answer gets the suffix with a correct Content
   const proxy = createHttpProxy({ upstream: `http://127.0.0.1:${upstream.address().port}/mcp`, name: "notes", onReport: () => {}, levers: engine });
   await new Promise((ok) => proxy.listen(0, "127.0.0.1", ok));
   const base = `http://127.0.0.1:${proxy.address().port}/mcp`;
-  const call = (id, name, args) => fetch(base, { method: "POST", headers: { "content-type": "application/json", "mcp-session-id": "s9" },
+  const call = (id, name, args, session = "s9") => fetch(base, { method: "POST", headers: { "content-type": "application/json", "mcp-session-id": session },
     body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }) });
   try {
     const r1 = await call(1, "read_note", { identifier: "alice" });
@@ -713,7 +740,9 @@ test("HTTP proxy with levers: JSON answer gets the suffix with a correct Content
     const j = JSON.parse(body);
     assert.strictEqual(j.result.content[0].text, "permalink: people/alice\nhello");
     assert.match(j.result.content[1].text, /^memglow: related notes: Bob `bob`/);
-    const r2 = await call("sse", "search_notes", { query: "x" });
+    // A fresh session ("s10"): searchDetails still reports "alice" in full — it was only skipped
+    // for a session that had already read it in full (see the "already read: no teaser row" test).
+    const r2 = await call("sse", "search_notes", { query: "x" }, "s10");
     const t2 = await r2.text();
     assert.match(t2, /^event: message\ndata: \{/);
     const data = JSON.parse(t2.split("\n").find((l) => l.startsWith("data: ")).slice(6));

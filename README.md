@@ -723,12 +723,18 @@ Tool-name mapping is configurable. Details: [mcp-proxy/README.md](mcp-proxy/READ
 **Token-saving and speed levers (v0.4).** The proxy annotates the memory server's *answers* —
 never your notes, which it only reads. Levers 1-3 only add a short block before or after the
 server's own content; 4, 5 and 8 may replace a read answer, so they are off by default.
+`searchDetails` and `suggestions` (2 and 3) were on by default through 0.4.2.1b; measured with
+the free replay harness ([bench/README.md](bench/README.md)) and against a real 2-day usage log,
+they only added delivered tokens without a measurable upside, so stage 0.4.2.2 turned them off by
+default too (shortened either way, for whoever turns them back on) — `sizeWarning` is the one
+lever on by default, since it is a single short line, once per large note per session, that
+plausibly prevents a wasted call.
 
 | # | Lever (`proxy` key / variable) | Default | Effect |
 |---|---|---|---|
 | 1 | `sizeWarning` / `MEMGLOW_PROXY_SIZE_WARNING` | on | `⚠ memglow: this note is ≈N tokens (threshold T)…` before a large note, or after a write that makes it large — suggests a split within the same theme. Once per note and session. |
-| 2 | `searchDetails` / `MEMGLOW_PROXY_SEARCH_DETAILS` | on | After search results: title · theme · ≈tokens · description of each note found. |
-| 3 | `suggestions` / `MEMGLOW_PROXY_SUGGESTIONS` | on | After a read: up to 3-5 related notes (links, sub-theme, co-usage), names and sizes only. |
+| 2 | `searchDetails` / `MEMGLOW_PROXY_SEARCH_DETAILS` | off | After search results: title · theme · ≈tokens · description of each note found — description shown once per note per session, and no line at all for a note already read in full this session. |
+| 3 | `suggestions` / `MEMGLOW_PROXY_SUGGESTIONS` | off | After a read: up to 3-5 related notes (links, sub-theme, co-usage), names and sizes only — once per note per session. |
 | 4 | `dedupe` / `MEMGLOW_PROXY_DEDUPE` | off | An unchanged note re-read in the same session → a short "unchanged, ≈N tokens saved" notice. |
 | 5 | `toc` / `MEMGLOW_PROXY_TOC` | off | A large note → its outline with ≈tokens per section first; then one section on demand. |
 | 6 | `archiveHint` / `MEMGLOW_PROXY_ARCHIVE_HINT` | off | A search that finds nothing in the live memory (no result, or only [archive](#archive) notes) → `memglow: nothing found in the live memory — the archive summary lists: …` with the **titles** of the archived sections that match the query (never their text). |
