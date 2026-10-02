@@ -40,11 +40,20 @@ node bench/replay.js --memory path/to/notes                # "--memory" is an al
   to a real working session: the same handful of notes read and searched repeatedly, plus a
   one-off tail, plus — since stage 0.4.2.2b — a few bursts of 2-3 consecutive searches with no
   read between them, to exercise the `multiQuery` lever below) — both are replayed in
-  CI-equivalent tests (`test/bench-replay.test.js`).
+  CI-equivalent tests (`test/bench-replay.test.js`). `bench/replay-aliases.jsonl` (stage
+  0.4.2.4) is for the `aliases`/`learnAliases` levers: a few miss → read → similar-search
+  scenarios, some followed by a `dropIfHinted` retry search. Two extra, measurement-only event
+  fields support it: `expect` (the note id a search is "about", to count whether it came back in
+  the delivered answer — reported as a separate "hit rate" block under the main table, silent for
+  every other fixture) and `dropIfHinted` (a retry search skipped entirely — no call, nothing
+  counted — once the session's most recent `expect` search already found that exact note,
+  modelling "a later re-search that becomes unnecessary once the note is already there").
 - `--with a,b,c` adds a configuration: the shipped **defaults** (stage 0.4.2.2b: sizeWarning +
   multiQuery — see below) with levers `a`, `b`, `c` also forced on. Repeat the flag for more rows.
+  A name prefixed with `-` forces that lever OFF instead (e.g. `-multiQuery`), to isolate one
+  lever from another's own effect on the same fixture — see `aliases`/`learnAliases` below.
 - `--each` adds one row per lever (sizeWarning, indexWarning, searchDetails, suggestions, dedupe,
-  toc, archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery), each ALONE against the `off`
+  toc, archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery, aliases, learnAliases), each ALONE against the `off`
   baseline (every other lever off) — unlike `--with`, which starts from the shipped defaults. This
   is the per-lever "does it add or save tokens, and how much" breakdown used to decide, lever by
   lever, whether to keep it as shipped, shorten its text, or turn it off by default (see

@@ -43,6 +43,7 @@ const https = require("https");
 const { spawn } = require("child_process");
 const core = require("../lib/agent-core");
 const levers = require("../lib/proxy-levers");
+const learnedAliases = require("../lib/learned-aliases");
 const memoryRules = require("../lib/memory-rules");
 const { StringDecoder } = require("string_decoder");
 
@@ -200,8 +201,9 @@ function setupLevers(env = process.env, serverName = "") {
     if (!levers.anyLever(config)) return null;
     const index = levers.createNoteIndex(config);
     const savings = levers.createSavings(config);
-    const engine = levers.createLevers({ config, index, savings, serverName });
-    return { ...engine, savings, config };
+    const aliasStore = learnedAliases.createAliasStore(config);
+    const engine = levers.createLevers({ config, index, savings, serverName, aliasStore });
+    return { ...engine, savings, aliasStore, config };
   } catch (e) {
     process.stderr.write(`memglow-mcp-proxy: levers disabled (${e.message})\n`);
     return null;
@@ -295,7 +297,7 @@ function runStdio(o) {
     process.stdin.on("end", () => { up.end(); child.stdin.end(); });
     child.stdout.on("data", (c) => down.push(c));
     child.stdout.on("end", () => down.end());
-    if (lv) process.on("exit", () => lv.savings.flush());
+    if (lv) process.on("exit", () => { lv.savings.flush(); lv.aliasStore.flush(); });
   } else {
     const fromClient = lineTap((m) => w.fromClient(m));
     const fromServer = lineTap((m) => w.fromServer(m));

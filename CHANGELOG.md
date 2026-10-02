@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.4.2.4 — internal (not published)
+
+Includes 0.4.2.3 ("query log") below it: the recording half of this same feature, shipped in the
+same stage since the lever only makes sense with both halves in place.
+
+### Added
+
+- **MCP proxy: lever 10, `aliases` ("learned aliases")**, OFF by default (see Changed below).
+  The owner's own real search log: the note finally read was the proxy's 1st search result only
+  7 times out of 28, and not among the results AT ALL 13 times out of 28 — found instead via the
+  index or a link — so the very next similarly-worded search failed again, the same way. This
+  lever lets the proxy learn, privately and locally, which of the assistant's own words actually
+  lead to which note, from THIS proxy's own past sessions, and use that the next time a similar
+  search would otherwise come up empty-handed for that note.
+  - **0.4.2.3, "query log" (lever switch `learnAliases`)**: when, in the SAME session, a search
+    is followed (within `ALIAS_LEARN_WINDOW_MS` = 2 minutes, before another search) by a
+    single-note read of a note NOT among that search's own results, the query's significant
+    words (lowercased, stop-words dropped — a short EN + FR list, ≥ 3 letters,
+    `lib/learned-aliases.js` `significantWords`, secret-masked with the existing
+    `maskSecrets` BEFORE extraction) are learned as aliases of that note, with a count. Kept in
+    one small local file, `learned-aliases.json` in memglow's data folder (mode 600, atomic
+    write, bounded to `aliasesMax` = 2,000 (word, note) entries, oldest by last-use dropped
+    first). **Nothing here is ever sent anywhere** — the file has no network code at all.
+  - **0.4.2.4, "learned aliases" (lever switch `aliases`)**: on a LATER search, if its words
+    match ≥ 2 of some note X's learned aliases (or 1 alias seen ≥ 2 times), and X is not already
+    among that search's own results, X is added at the TOP of the answer — in the upstream's own
+    per-hit row shape when the answer is plain text (reusing lever 9's own row helper, `hitRow`,
+    factored out of `mergeSearchResults`'s tier B for this), else one compact, explicitly-labelled
+    line: `memglow: likely relevant — <label> (<id>), learned from your past searches`. Never
+    removes a result, never touches a note file, never duplicates a note already in the answer.
+    An alias whose note no longer exists is forgotten (`forgetMissing`, run opportunistically on
+    every search while the lever is on).
+  - `learnAliases` (recording) and `aliases` (using what was recorded) are **independent**
+    switches, both under the `proxy` config key / `MEMGLOW_PROXY_ALIASES` and
+    `MEMGLOW_PROXY_LEARN_ALIASES` env vars: learning can keep running quietly while injection is
+    paused, and injection can keep using whatever was already learned while recording is paused.
+  - Pure logic in `lib/learned-aliases.js` (`significantWords`, `maskedQuery`, `learnEntries`,
+    `matchAlias`, `forgetMissing`, and the one fs-touching piece, `createAliasStore`) — zero
+    Express, zero three.js, meant to be lifted into memglow proper as is. Wiring in
+    `lib/proxy-levers.js` (`hitRow`/`isPlainTextResult` factored out and reused, `aliasInjection`,
+    the correlation bookkeeping in `handleSearch`/`handleRead`, session field `lastSearch`) and
+    `mcp-proxy/memglow-mcp-proxy.js` (`setupLevers` creates the store, flushes it at exit).
+  - **Known limitation, same family as searchDetails/archiveHint**: a search carrying
+    `memglow_queries` (lever 9, `multiQuery`) bypasses `handleSearch` entirely while it is being
+    merged (the merge happens against the raw upstream, outside the normal
+    `clientMessage`/`serverMessage` cycle — see lever 9's own doc comment) — `aliases` cannot
+    inject into, or learn from, a merged multi-phrasing call. It still works normally on every
+    ordinary, single-phrasing search, which is what the owner's own log above was measuring (it
+    predates `multiQuery`).
+  - `bench/replay.js` gained the measurement this lever needed: `expect`/`dropIfHinted` on an
+    event (`normalizeCalls`), a per-config hit-rate counter (`aliasSearches`/`aliasHits`,
+    `printAliasHitRate`), and `droppedCalls` (a `dropIfHinted` search is skipped — no upstream
+    call, nothing counted — once the session's most recent `expect` search already found that
+    exact note: "a later re-search that becomes unnecessary once the note is already there").
+    `--with` now also accepts a lever name prefixed with `-` to force it OFF (`namedConfigs`), so
+    this lever's own effect can be isolated from `multiQuery`'s call-merging on the same fixture.
+  - New fixture `bench/replay-aliases.jsonl`: 3 scenarios (mqtt, stripe-webhooks, git-workflow —
+    the last one specifically for the "1 alias seen ≥ 2 times" threshold branch), each a miss,
+    a read, then a later similar search (the mqtt/stripe ones also carry a `dropIfHinted` retry
+    search right after). `node bench/replay.js --events bench/replay-aliases.jsonl --with
+    aliases,learnAliases,-multiQuery` (multiQuery isolated out, see the limitation above):
+
+    | configuration | calls | tokens | hit rate | violations |
+    |---|---|---|---|---|
+    | off | 16 | 758 | 0/5 (0%) | 0 |
+    | +aliases,learnAliases,-multiQuery | 14 | 783 | 3/3 (100%) on the measured searches, 2 retries dropped | 0 |
+
+### Changed
+
+- **`DEFAULTS.aliases = false`, `DEFAULTS.learnAliases = false`** (`lib/proxy-levers.js`): the
+  replay numbers above are 0 violations (passed) and a much better hit rate (passed), but tokens
+  were WORSE, not "not worse" (758 → 783, +3.3%) — this lever only ever ADDS a hit row, it never
+  replaces or removes one (same family as `searchDetails`/`suggestions`/`archiveHint`, all OFF by
+  default for exactly this reason), and the 2 dropped retry calls' tokens did not outweigh the 3
+  injected rows'. Per the same rule every other lever's default is decided by (0 violations AND
+  hit rate improves AND tokens not worse, all three), this one ships OFF. Both still fully built,
+  tested and documented, and one env var away:
+  `MEMGLOW_PROXY_ALIASES=1` / `"proxy": { "aliases": true }`, `MEMGLOW_PROXY_LEARN_ALIASES=1` /
+  `"proxy": { "learnAliases": true }`.
+
 ## 0.4.2.2b — internal (not published)
 
 ### Added

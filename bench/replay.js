@@ -17,8 +17,11 @@
  *                single JSON object `{ evenements: [...] }` in the r0zumnik portal's own shape
  *                (default bench/replay-demo.jsonl) — see loadEvents() below for both formats.
  * --with a,b,c   adds one more configuration: DEFAULTS with levers a, b, c forced on (repeatable).
+ *                A name prefixed with "-" forces that lever OFF instead (e.g. "-multiQuery", to
+ *                isolate a lever from multiQuery's own call-merging on a fixture where the two
+ *                would otherwise interact — see bench/replay-aliases.jsonl).
  *                Lever names: sizeWarning, indexWarning, searchDetails, suggestions, dedupe, toc,
- *                archiveHint, hideUnsupportedTools, alreadyLoaded.
+ *                archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery, aliases, learnAliases.
  * --always-loaded a,b   extra `alwaysLoaded` entries (note references) for lever 8, on top of the
  *                index note(s) it already covers by default.
  * --json         machine-readable output instead of the table.
@@ -39,6 +42,7 @@ const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const L = require("../lib/proxy-levers");
+const LA = require("../lib/learned-aliases");
 const { estimateTokens } = require("../lib/cost");
 
 const ROOT = path.join(__dirname, "..");
@@ -57,11 +61,13 @@ const LEVER_ENV = {
   hideUnsupportedTools: "MEMGLOW_PROXY_HIDE_UNSUPPORTED",
   alreadyLoaded: "MEMGLOW_PROXY_ALREADY_LOADED",
   multiQuery: "MEMGLOW_PROXY_MULTI_QUERY",
+  aliases: "MEMGLOW_PROXY_ALIASES",
+  learnAliases: "MEMGLOW_PROXY_LEARN_ALIASES",
 };
 const LEVER_NAMES = Object.keys(LEVER_ENV);
 // The shipped defaults (lib/proxy-levers.js DEFAULTS), named here explicitly so this file keeps
 // working unchanged even if that module's own defaults ever drift.
-const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false, multiQuery: true };
+const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false, multiQuery: true, aliases: false, learnAliases: false };
 // multiQuery (lever 9, 0.4.2.2b): "no read in between, within 2 min" — see mergeSearchBursts below.
 const MULTI_QUERY_GAP_MS = 2 * 60 * 1000;
 
@@ -157,12 +163,21 @@ function makeUpstream(dir) {
 // Events: JSONL or a JSON array of `{ session, tool, args, t }`, or the portal's own
 // `{ evenements: [{ type, ids, source, t }] }`.
 
+// `expect` / `dropIfHinted` (0.4.2.4, bench/replay-aliases.jsonl): measurement-only fields, never
+// sent upstream. `expect` names the note id a SEARCH is "about", to count whether it came back in
+// the delivered answer (lever 10's own hit-rate check, see runConfig below) — a no-op for every
+// other fixture, which never sets it. `dropIfHinted` models "a later re-search that becomes
+// unnecessary when the note is already there": a search carrying it is skipped entirely (no
+// upstream call, nothing counted) when the SAME session's most recent `expect` search already
+// found that exact note — i.e. only once lever `aliases` has actually surfaced it.
 function normalizeCalls(list) {
   return (list || []).map((e, i) => ({
     session: String((e && e.session) || "default"),
     tool: String((e && e.tool) || ""),
     args: e && e.args && typeof e.args === "object" ? e.args : {},
     t: e && e.t != null ? e.t : i,
+    expect: e && typeof e.expect === "string" && e.expect ? e.expect : null,
+    dropIfHinted: !!(e && e.dropIfHinted),
   }));
 }
 
@@ -277,7 +292,10 @@ function namedConfigs(withCombos) {
   const list = [{ key: "off", label: "off", flags: off }, { key: "defaults", label: "defaults", flags: { ...SHIPPED_DEFAULTS } }];
   for (const names of withCombos || []) {
     const flags = { ...SHIPPED_DEFAULTS };
-    for (const n of names) flags[n] = true;
+    // A name prefixed with "-" forces that lever OFF instead of on — e.g. "-multiQuery" to
+    // isolate another lever from multiQuery's own call-merging when the two would otherwise
+    // interact on the same fixture (see bench/replay-aliases.jsonl and bench/README.md).
+    for (const n of names) { if (n.startsWith("-")) flags[n.slice(1)] = false; else flags[n] = true; }
     list.push({ key: "+" + names.join(","), label: "+" + names.join(","), flags });
   }
   return list;
@@ -316,13 +334,18 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
   const config = L.proxyConfig(env);
   const index = L.createNoteIndex(config);
   const savings = L.createSavings(config, () => {});
-  const engine = L.createLevers({ config, index, savings, serverName: "basic-memory" });
+  const aliasStore = LA.createAliasStore(config);
+  const engine = L.createLevers({ config, index, savings, serverName: "basic-memory", aliasStore });
   const upstream = makeUpstream(notesDir);
   const memory = index._memory();
 
   let nextId = 1, calls = 0, tokensTotal = 0, violations = 0;
   const violationDetails = [];
   const sessions = new Map();
+  // Lever 10 (aliases) verification counters — see the `expect`/`dropIfHinted` comment on
+  // normalizeCalls above. Stay at 0 for every fixture that never sets those fields.
+  let aliasSearches = 0, aliasHits = 0, droppedCalls = 0;
+  const lastHintedNote = new Map(); // session -> the note id the MOST RECENT `expect` search found, or null
 
   function sessionState(key) {
     let s = sessions.get(key);
@@ -347,6 +370,10 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
   const mergedEvents = config.multiQuery ? mergeSearchBursts(events, config.searchTools) : events;
 
   for (const ev of mergedEvents) {
+    // `dropIfHinted`: this exact retry search is unnecessary once the note it is about was
+    // already found by this session's most recent `expect` search — no upstream call, nothing
+    // counted, modelling the turn the model never has to spend.
+    if (ev.dropIfHinted && ev.expect && lastHintedNote.get(ev.session) === ev.expect) { droppedCalls++; continue; }
     if (memory) memory.scan(); // deterministic: metadata is never stale across a synchronous replay
     const s = sessionState(ev.session);
     const reqId = nextId++;
@@ -371,6 +398,13 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
     const deliveredText = texts.join("\n");
     tokensTotal += texts.reduce((sum, t) => sum + estimateTokens(t), 0);
 
+    if (config.searchTools.includes(ev.tool) && ev.expect) {
+      aliasSearches++;
+      const found = deliveredText.includes(ev.expect);
+      if (found) aliasHits++;
+      lastHintedNote.set(ev.session, found ? ev.expect : null);
+    }
+
     if (config.readTools.includes(ev.tool)) {
       for (const id of idsOfReadCall(ev.args, index)) {
         const note = index.note(id);
@@ -386,7 +420,7 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
     }
   }
   fs.rmSync(work, { recursive: true, force: true });
-  return { calls, tokensTotal, violations, violationDetails };
+  return { calls, tokensTotal, violations, violationDetails, aliasSearches, aliasHits, droppedCalls };
 }
 
 function summarize(results, baselineKey = "off") {
@@ -436,6 +470,18 @@ function printTable(rows) {
   }
 }
 
+/** Lever 10 (aliases) hit-rate readout: only printed when the event file actually uses `expect`
+ * (bench/replay-aliases.jsonl and friends) — silent (and free) for every other fixture. */
+function printAliasHitRate(rows) {
+  const used = rows.filter((r) => r.aliasSearches > 0);
+  if (!used.length) return;
+  console.log("\nlever `aliases` — hit rate (note found in the SEARCH's own delivered answer):");
+  for (const r of used) {
+    const pct = (100 * r.aliasHits / r.aliasSearches).toFixed(0);
+    console.log(`  ${r.label.padEnd(24)} ${r.aliasHits}/${r.aliasSearches} searches (${pct}%)` + (r.droppedCalls ? `, ${r.droppedCalls} retry search(es) dropped as unnecessary` : ""));
+  }
+}
+
 /** `--each`: one line per lever, isolated against "off" — exactly what that lever alone adds or
  * saves on this event file, independent of every other lever's own effect. */
 function printEachBreakdown(rows) {
@@ -464,7 +510,8 @@ async function main() {
     process.exitCode = 2; return;
   }
   for (const combo of o.withCombos) for (const n of combo) {
-    if (!LEVER_NAMES.includes(n)) { console.error(`bench/replay: unknown lever "${n}" — one of: ${LEVER_NAMES.join(", ")}`); process.exitCode = 2; return; }
+    const name = n.startsWith("-") ? n.slice(1) : n;
+    if (!name || !LEVER_NAMES.includes(name)) { console.error(`bench/replay: unknown lever "${n}" — one of: ${LEVER_NAMES.join(", ")} (optionally prefixed with "-" to force off)`); process.exitCode = 2; return; }
   }
   let events;
   try { events = loadEvents(o.events); } catch (e) { console.error("bench/replay: failed to load events: " + (e && e.message || e)); process.exitCode = 2; return; }
@@ -479,6 +526,7 @@ async function main() {
   else {
     printTable(rows.filter((r) => !r.key.startsWith("alone:")));
     if (o.each) printEachBreakdown(rows);
+    printAliasHitRate(rows);
     if (anyViolations) console.error("\nbench/replay: CORRECTNESS GUARD FAILED — see violations above");
   }
   process.exitCode = anyViolations ? 1 : 0;

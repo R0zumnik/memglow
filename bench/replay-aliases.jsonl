@@ -1,0 +1,16 @@
+{"session":"s1-mqtt","tool":"search_notes","args":{"query":"broker reconnect settings"},"t":1}
+{"session":"s1-mqtt","tool":"read_note","args":{"identifier":"knowledge-mqtt"},"t":2}
+{"session":"s1-mqtt","tool":"search_notes","args":{"query":"broker reconnect issue today"},"t":3,"expect":"knowledge-mqtt"}
+{"session":"s1-mqtt","tool":"search_notes","args":{"query":"mqtt broker reconnect troubleshoot steps"},"t":4,"expect":"knowledge-mqtt","dropIfHinted":true}
+{"session":"s1-mqtt","tool":"read_note","args":{"identifier":"knowledge-mqtt"},"t":5}
+{"session":"s2-stripe","tool":"search_notes","args":{"query":"handler retries payment gateway"},"t":10}
+{"session":"s2-stripe","tool":"read_note","args":{"identifier":"reference-stripe-webhooks"},"t":11}
+{"session":"s2-stripe","tool":"search_notes","args":{"query":"handler retries failing gateway"},"t":12,"expect":"reference-stripe-webhooks"}
+{"session":"s2-stripe","tool":"search_notes","args":{"query":"payment handler retries debug logs"},"t":13,"expect":"reference-stripe-webhooks","dropIfHinted":true}
+{"session":"s2-stripe","tool":"read_note","args":{"identifier":"reference-stripe-webhooks"},"t":14}
+{"session":"s4-git","tool":"search_notes","args":{"query":"branching conventions guide"},"t":20}
+{"session":"s4-git","tool":"read_note","args":{"identifier":"reference-git-workflow"},"t":21}
+{"session":"s4-git","tool":"search_notes","args":{"query":"commit conventions overview"},"t":22}
+{"session":"s4-git","tool":"read_note","args":{"identifier":"reference-git-workflow"},"t":23}
+{"session":"s4-git","tool":"search_notes","args":{"query":"conventions walkthrough"},"t":24,"expect":"reference-git-workflow"}
+{"session":"s4-git","tool":"read_note","args":{"identifier":"reference-git-workflow"},"t":25}

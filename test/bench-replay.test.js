@@ -332,3 +332,37 @@ test("parseArgs: --each parses to a boolean, off by default", () => {
   assert.strictEqual(parseArgs([]).each, false);
   assert.strictEqual(parseArgs(["--each"]).each, true);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Lever 10 (aliases, 0.4.2.4) — "-lever" negation in --with, and bench/replay-aliases.jsonl.
+
+test("namedConfigs: a name prefixed with \"-\" forces that lever OFF, on top of SHIPPED_DEFAULTS", () => {
+  const [, , combo] = namedConfigs([["aliases", "learnAliases", "-multiQuery"]]);
+  assert.deepStrictEqual(combo.flags, { ...SHIPPED_DEFAULTS, aliases: true, learnAliases: true, multiQuery: false });
+  assert.strictEqual(combo.key, "+aliases,learnAliases,-multiQuery");
+});
+
+test("normalizeCalls: `expect` and `dropIfHinted` pass through (measurement-only fields), default to null/false", () => {
+  const [full, bare] = normalizeCalls([
+    { tool: "search_notes", args: {}, expect: "note-x", dropIfHinted: true },
+    { tool: "search_notes", args: {} },
+  ]);
+  assert.deepStrictEqual([full.expect, full.dropIfHinted], ["note-x", true]);
+  assert.deepStrictEqual([bare.expect, bare.dropIfHinted], [null, false]);
+});
+
+test("bench/replay-aliases.jsonl: off vs aliases+learnAliases (multiQuery isolated out) — 0 violations, hit rate 0% -> 100%, 2 retry searches dropped as unnecessary", async () => {
+  const events = loadEvents(path.join(__dirname, "..", "bench", "replay-aliases.jsonl"));
+  const memoryDir = path.join(ROOT, "demo", "memory");
+  const off = await runConfig(flagsAllOff(), events, { memoryDir });
+  assert.strictEqual(off.violations, 0);
+  assert.strictEqual(off.aliasSearches, 5);
+  assert.strictEqual(off.aliasHits, 0);
+  assert.strictEqual(off.droppedCalls, 0);
+  const on = await runConfig({ ...flagsAllOff(), aliases: true, learnAliases: true }, events, { memoryDir });
+  assert.strictEqual(on.violations, 0);
+  assert.strictEqual(on.aliasSearches, 3, "the s4-git scenario's third search is measured too, on top of the 2 dropped retries");
+  assert.strictEqual(on.aliasHits, 3, "every measured search now finds its note");
+  assert.strictEqual(on.droppedCalls, 2, "the mqtt and stripe scenarios' follow-up retry, each made unnecessary");
+  assert.strictEqual(on.calls, off.calls - 2, "exactly the 2 dropped retries, nothing else");
+});

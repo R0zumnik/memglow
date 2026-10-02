@@ -10,6 +10,7 @@ const http = require("http");
 const { spawn } = require("child_process");
 const { lineRelay, sseRelay, createHttpProxy } = require("../mcp-proxy/memglow-mcp-proxy");
 const L = require("../lib/proxy-levers");
+const LA = require("../lib/learned-aliases");
 
 const PROXY = path.join(__dirname, "..", "mcp-proxy", "memglow-mcp-proxy.js");
 const FAKE = path.join(__dirname, "fixtures", "fake-memory-mcp.js");
@@ -632,9 +633,15 @@ test("config: file `proxy` key, env overrides, clamping", () => {
     const def = L.proxyConfig({ MEMGLOW_HOME: path.join(fx.root, "nowhere") });
     assert.deepStrictEqual([def.sizeWarning, def.searchDetails, def.suggestions, def.dedupe, def.toc, def.alreadyLoaded], [true, false, false, false, false, false]);
     assert.strictEqual(def.multiQuery, true, "multiQuery on by default since 0.4.2.2b");
+    assert.deepStrictEqual([def.aliases, def.learnAliases], [false, false], "aliases/learnAliases off by default (0.4.2.4: tokens were worse on the replay fixture)");
+    assert.strictEqual(def.aliasesMax, 2000);
     assert.deepStrictEqual(def.alwaysLoaded, [], "no config file: nothing always-loaded beyond the index");
     assert.strictEqual(def.memoryDir, null);
     assert.strictEqual(L.anyLever({ alreadyLoaded: true }), true, "alreadyLoaded alone is enough to turn levers on");
+    const al = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_PROXY_ALIASES: "1", MEMGLOW_PROXY_LEARN_ALIASES: "1" });
+    assert.deepStrictEqual([al.aliases, al.learnAliases], [true, true]);
+    assert.strictEqual(L.anyLever({ aliases: true }), true, "aliases alone is enough to turn levers on");
+    assert.strictEqual(L.anyLever({ learnAliases: true }), true, "learnAliases alone is enough to turn levers on");
     // hideUnsupportedTools: off by default, basic-memory's search/fetch gated to openai-mcp by default.
     assert.strictEqual(def.hideUnsupportedTools, false);
     assert.deepStrictEqual(def.unsupportedTools, L.DEFAULT_UNSUPPORTED_TOOLS);
@@ -1026,4 +1033,118 @@ test("multiQuery over HTTP: one merged response, upstream received one POST per 
     proxy.closeAllConnections(); proxy.close();
     fs.rmSync(fx.root, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Lever 10 (aliases, 0.4.2.3 + 0.4.2.4) — end to end. Pure pieces (significantWords, learnEntries,
+// matchAlias, forgetMissing, createAliasStore) are unit-tested on their own in
+// test/learned-aliases.test.js; this section is about the WIRING into createLevers/the real proxy.
+
+test("aliases: off by default — a search that misses, then a read of that note, then a similar later search: nothing is ever learned or injected", async () => {
+  const fx = makeNotes();
+  const c = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "0" });
+  try {
+    assert.strictEqual(texts(await c.call("search_notes", { query: "roster assignment sheet" }))[0], "No results");
+    await c.call("read_note", { identifier: "carol" });
+    const r = texts(await c.call("search_notes", { query: "roster assignment update" }));
+    assert.strictEqual(r.length, 1);
+    assert.strictEqual(r[0], "No results", "aliases AND learnAliases default off: nothing changes");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("aliases (opt-in): a search that misses a note, then a single-note read of it, teaches the search's significant words; a later search sharing >= 2 of them gets that note injected at the TOP, in the upstream's own per-hit row format", async () => {
+  const fx = makeNotes();
+  const c = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "0", MEMGLOW_PROXY_ALIASES: "1", MEMGLOW_PROXY_LEARN_ALIASES: "1" });
+  try {
+    // 1 — a search for carol that finds nothing upstream (none of these words are in carol.md).
+    assert.strictEqual(texts(await c.call("search_notes", { query: "roster assignment sheet" }))[0], "No results");
+    // 2 — reading carol right after: carol was NOT among that search's own results, so its words
+    // ("roster", "assignment", "sheet") are learned as aliases of carol.
+    await c.call("read_note", { identifier: "carol" });
+    // 3 — a later, similarly-worded search (2 of the 3 words overlap: "roster", "assignment")
+    // still finds nothing upstream, but now gets carol injected FIRST — a plain-text "No results"
+    // answer is safe to add a hit row to, so the upstream's own row shape is reused (hitRow),
+    // never the compact fallback sentence.
+    const r = texts(await c.call("search_notes", { query: "roster assignment update" }));
+    assert.strictEqual(r.length, 2);
+    assert.match(r[0], /^- Carol `carol`$/);
+    assert.strictEqual(r[1], "No results", "the upstream's own answer is still relayed, unchanged, right after");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("aliases (opt-in): only 1 shared word, learned once — below the threshold, nothing is injected", async () => {
+  const fx = makeNotes();
+  const c = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "0", MEMGLOW_PROXY_ALIASES: "1", MEMGLOW_PROXY_LEARN_ALIASES: "1" });
+  try {
+    assert.strictEqual(texts(await c.call("search_notes", { query: "roster assignment sheet" }))[0], "No results");
+    await c.call("read_note", { identifier: "carol" });
+    // Only "roster" overlaps (seen once so far) — 1 alias seen once is not enough.
+    const r = texts(await c.call("search_notes", { query: "roster timetable update" }));
+    assert.deepStrictEqual(r, ["No results"]);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("aliases (opt-in): a note already among this search's own results is never duplicated", () => {
+  // Driven directly through createLevers (not the spawned fixture): the toy upstream fixture
+  // matches a search query as ONE literal substring, so there is no way to phrase a query that
+  // is BOTH built from the learned alias words (which, by construction, never appeared in the
+  // note — that is why the original search missed) AND a real upstream hit for the same note.
+  // Crafting the upstream's own answer by hand here (step 3) sidesteps that fixture limitation
+  // while still exercising the real engine end to end.
+  const fx = makeNotes();
+  try {
+    const cfg = L.proxyConfig({
+      MEMGLOW_HOME: fx.home, MEMGLOW_MEMORY_DIR: fx.notes, MEMGLOW_DATA_DIR: fx.data, MEMGLOW_LARGE_NOTE_TOKENS: "100000",
+      MEMGLOW_PROXY_ALIASES: "1", MEMGLOW_PROXY_LEARN_ALIASES: "1", MEMGLOW_PROXY_MULTI_QUERY: "0",
+    });
+    const index = L.createNoteIndex(cfg);
+    const savings = L.createSavings({ ...cfg, savingsFile: false, log: false });
+    const aliasStore = LA.createAliasStore(cfg);
+    const engine = L.createLevers({ config: cfg, index, savings, aliasStore, serverName: "basic-memory" });
+    const sid = "s1";
+    // 1 — a search for carol that misses.
+    engine.clientMessage({ id: 1, method: "tools/call", params: { name: "search_notes", arguments: { query: "roster assignment sheet" } } }, sid);
+    engine.serverMessage({ id: 1, result: { content: [{ type: "text", text: "No results" }] } }, sid);
+    // 2 — reading carol right after teaches "roster"/"assignment"/"sheet" as its aliases.
+    engine.clientMessage({ id: 2, method: "tools/call", params: { name: "read_note", arguments: { identifier: "carol" } } }, sid);
+    engine.serverMessage({ id: 2, result: { content: [{ type: "text", text: rawNote(fx, "people/carol") }] } }, sid);
+    // 3 — a later search that BOTH matches those aliases AND already found carol upstream for
+    // real: carol must not be duplicated.
+    engine.clientMessage({ id: 3, method: "tools/call", params: { name: "search_notes", arguments: { query: "roster assignment update" } } }, sid);
+    const upstreamText = "### carol\npermalink: people/carol\nsnippet: s";
+    const r3 = engine.serverMessage({ id: 3, result: { content: [{ type: "text", text: upstreamText }] } }, sid);
+    assert.strictEqual(r3.changed, false, "nothing added: carol was already in the upstream's own answer");
+    assert.strictEqual(r3.msg.result.content.length, 1, "still exactly the upstream's one content block");
+    assert.strictEqual(r3.msg.result.content[0].text, upstreamText);
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("aliases (opt-in): `learnAliases` and `aliases` are independent — learning alone injects nothing, injection alone has nothing to learn from", async () => {
+  const fx = makeNotes();
+  // learnAliases only: records aliases, never surfaces them.
+  const c1 = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "0", MEMGLOW_PROXY_LEARN_ALIASES: "1" });
+  try {
+    await c1.call("search_notes", { query: "roster assignment sheet" });
+    await c1.call("read_note", { identifier: "carol" });
+    const r1 = texts(await c1.call("search_notes", { query: "roster assignment update" }));
+    assert.deepStrictEqual(r1, ["No results"], "aliases off: nothing injected even though it was learned");
+  } finally { await c1.close(); }
+  // aliases only, same data folder: whatever was just learned above is now USED.
+  const c2 = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "0", MEMGLOW_PROXY_ALIASES: "1" });
+  try {
+    const r2 = texts(await c2.call("search_notes", { query: "roster assignment update" }));
+    assert.strictEqual(r2.length, 2, "learnAliases off here, but aliases on surfaces what c1 already learned");
+    assert.match(r2[0], /`carol`/);
+  } finally { await c2.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("aliases: a lever failure (a broken index/store) never breaks the relay", () => {
+  const cfg = L.proxyConfig({ MEMGLOW_HOME: path.join(os.tmpdir(), "memglow-alias-broken-" + process.pid), MEMGLOW_PROXY_ALIASES: "1", MEMGLOW_PROXY_LEARN_ALIASES: "1" });
+  const broken = L.createLevers({
+    config: cfg, index: { resolve() { throw new Error("x"); }, note() { throw new Error("x"); } }, savings: { add() {}, addClient() {} },
+    aliasStore: { available: () => true, learn() { throw new Error("x"); }, match() { throw new Error("x"); }, forgetMissing() { throw new Error("x"); } },
+  });
+  broken.clientMessage({ id: 1, method: "tools/call", params: { name: "search_notes", arguments: { query: "x" } } });
+  const m = { id: 1, result: { content: [{ type: "text", text: "No results" }] } };
+  assert.deepStrictEqual(broken.serverMessage(m), { msg: m, changed: false });
 });
