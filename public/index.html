@@ -19,6 +19,37 @@
     <p data-i18n="header.subtitle">Every dot is a note your assistant remembers; every line, a link between two notes. When an assistant reads, searches or writes a note, it lights up — live.</p>
   </header>
   <div class="bn-grid">
+    <!-- First-run set-up (public/setup.js): steps 1-2 here, step 3 = the zones screen below. -->
+    <section class="bn-tile mg-setup" id="mg-setup" data-api="/api/setup" hidden aria-labelledby="mg-setup-title">
+      <div class="mg-cost__head">
+        <h2 class="bn-label" id="mg-setup-title"><span data-i18n="setup.title">Set up memglow</span> · <span id="mg-setup-step"></span></h2>
+        <h3 class="bn-title" id="mg-setup-steptitle"></h3>
+        <p class="mg-cost__sub" id="mg-setup-intro"></p>
+      </div>
+      <div id="mg-setup-body" class="mg-setup__body"></div>
+      <div class="mg-setup__btns mg-setup__nav">
+        <button type="button" class="bn-btn" id="mg-setup-back" data-i18n="setup.back">Back</button>
+        <button type="button" class="bn-btn mg-zones__save" id="mg-setup-next" data-i18n="setup.next">Next</button>
+        <button type="button" class="bn-btn" id="mg-setup-skip" data-i18n="setup.skipStep">Skip this step</button>
+        <button type="button" class="bn-btn" id="mg-setup-skipall" data-i18n="setup.skipAll">Skip set-up</button>
+      </div>
+      <p class="mg-setup__status" id="mg-setup-status" role="status"></p>
+    </section>
+    <!-- LLM settings tile (public/setup.js). -->
+    <section class="bn-tile mg-setup mg-llmset" id="mg-llmset" hidden aria-labelledby="mg-llmset-title">
+      <div class="mg-cost__head">
+        <h2 class="bn-label" id="mg-llmset-title" data-i18n="aiset.title">AI settings</h2>
+        <p class="mg-cost__sub" data-i18n="aiset.intro">Which AI the assistant uses, and how. Saved on this memglow instance; an environment variable always wins over this page, and this page over memglow.config.json.</p>
+      </div>
+      <form id="mg-llmset-form">
+        <div id="mg-llmset-body" class="mg-setup__body"><p class="mg-cost__empty" data-i18n="common.loading">Loading…</p></div>
+        <div class="mg-setup__btns mg-setup__nav">
+          <button type="submit" class="bn-btn mg-zones__save" data-i18n="aiset.save">Save</button>
+          <button type="button" class="bn-btn" id="mg-llmset-close" data-i18n="aiset.close">Close</button>
+        </div>
+        <p class="mg-setup__status" id="mg-llmset-status" role="status"></p>
+      </form>
+    </section>
     <section class="bn-tile mg-zones" id="mg-zones" data-api="/api/zones" hidden aria-labelledby="mg-zones-title">
       <div class="mg-cost__head">
         <h2 class="bn-label" id="mg-zones-title" data-i18n="zones.title">What are your big themes?</h2>
@@ -161,6 +192,8 @@
               <button type="button" class="bn-btn" id="mem-recentrer" data-i18n="settings.recenter">Recenter</button>
               <button type="button" class="bn-btn" id="mem-reorganiser" data-i18n="settings.rearrange">Rearrange</button>
               <button type="button" class="bn-btn" id="mem-zones" data-i18n="settings.protectedGroups">Protected groups</button>
+              <button type="button" class="bn-btn" id="mem-llmset" data-i18n="settings.aiSettings">AI settings</button>
+              <button type="button" class="bn-btn" id="mem-setup-again" data-i18n="setup.again">First-run setup</button>
             </div>
             <p class="mem-options__aide" data-i18n="settings.help">Drag a bubble to move it; double-click it to release it, double-click the background to recenter. The view (settings, layout, camera) is saved on this memglow instance: every browser and device that opens it gets the same view. “Rearrange” starts again from a fresh layout and keeps the settings.</p>
           </div>
@@ -201,6 +234,7 @@
 <script src="/app.js?v={{v:app.js}}"></script>
 <script src="/cost.js?v={{v:cost.js}}"></script>
 <script src="/zones.js?v={{v:zones.js}}"></script>
+<script src="/setup.js?v={{v:setup.js}}"></script>
 {{assistantScript}}
 </body>
 </html>

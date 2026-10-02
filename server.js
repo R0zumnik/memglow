@@ -19,6 +19,7 @@ const { computeCost, dayOf } = require("./lib/cost");
 const view = require("./lib/view");
 const { createAssistant } = require("./lib/assistant");
 const zonesLib = require("./lib/zones");
+const setupLib = require("./lib/setup");
 const organise = require("./lib/organise");
 const { measureFiles, alwaysLoadedCost } = require("./lib/always-loaded");
 const archive = require("./lib/archive");
@@ -34,6 +35,7 @@ const STATIC = {
   "/app.css": ["app.css", "text/css; charset=utf-8"],
   "/cost.js": ["cost.js", "text/javascript; charset=utf-8"],
   "/zones.js": ["zones.js", "text/javascript; charset=utf-8"],
+  "/setup.js": ["setup.js", "text/javascript; charset=utf-8"],
   "/i18n.js": ["i18n.js", "text/javascript; charset=utf-8"],
   "/vendor/memglow-graph.js": ["vendor/memglow-graph.js", "text/javascript; charset=utf-8"],
   ...Object.fromEntries(I18N_LANGS.map((code) => [`/i18n/${code}.json`, [`i18n/${code}.json`, "application/json; charset=utf-8"]])),
@@ -44,6 +46,7 @@ const COST_SECTIONS_MAX = 40; // notes whose sections are listed in one /api/cos
 const ASSIST_BODY_MAX = 8192;
 const ASSIST_STREAM_MAX = 5;
 const ASSIST_POSTS_PER_MIN = 30;
+const SETUP_TESTS_PER_MIN = 10;
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -60,7 +63,7 @@ function isInside(child, parent) {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-function createServer(config, memory, { counters, views, zones, assistantEnv, findTime, engineSpeed } = {}) {
+function createServer(config, memory, { counters, views, zones, assistantEnv, findTime, engineSpeed, setupStore, usage, fetchImpl, memglowHome } = {}) {
   // memglow's own files (counters, saved view) live in its data folder, NEVER in the notes folder:
   // if the data folder is inside the notes folder, nothing is written (kept in memory only).
   let dataDir = config.dataDir || null;
@@ -97,11 +100,33 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
   const themesNow = () => zones.themes();
   const groupName = (id) => { const t = themesNow().find((x) => x.id === id); return t ? t.label : id; };
   const subthemeName = (s) => (config.subthemeLabels && typeof config.subthemeLabels[s] === "string" ? String(config.subthemeLabels[s]).slice(0, 40) : s);
+  // First-run set-up and Settings → AI settings (lib/setup.js): what the page saved in the data
+  // folder, applied over the configuration (environment > page > memglow.config.json).
+  const runEnv = assistantEnv || process.env;
+  memglowHome = memglowHome || runEnv.MEMGLOW_HOME || path.join(os.homedir(), ".memglow");
+  const baseConfig = setupLib.baseOf(config);
+  setupStore = setupStore || setupLib.createSetupStore({ dir: dataDir });
+  usage = usage || setupLib.createUsage({ dir: dataDir });
+  setupLib.apply(config, baseConfig, setupStore.read(), runEnv);
+  let testWindow = 0, testsInWindow = 0;
+  function testRateOk() {
+    const now = Date.now();
+    if (now - testWindow >= 60000) { testWindow = now; testsInWindow = 0; }
+    return ++testsInWindow <= SETUP_TESTS_PER_MIN;
+  }
+
   // Optional assistant (lib/assistant): only when enabled. Disabled = its routes, script and buttons
-  // do not exist (404 like any unknown route).
-  const assistant = config.assistant && config.assistant.enabled
-    ? createAssistant({
-      config, memory, dataDir, env: assistantEnv || process.env, groupName,
+  // do not exist (404 like any unknown route). Created the first time it is enabled (at start, or
+  // from the page); it reads config.assistant live, so later settings apply without a restart and
+  // its Undo history is kept.
+  let assistantInstance = null;
+  const assistantNow = () => {
+    if (!config.assistant || !config.assistant.enabled) return null;
+    if (!assistantInstance) assistantInstance = buildAssistant();
+    return assistantInstance;
+  };
+  const buildAssistant = () => createAssistant({
+      config, memory, dataDir, env: runEnv, groupName, usage, fetchImpl,
       protectedIds: () => zones.protectedIds(),
       // Only the regroupings Memory cost currently suggests (by id).
       suggestion(id) { return (cost().organisation || []).find((x) => x.id === id) || null; },
@@ -112,12 +137,11 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       },
       // Only sections of the current dormancy report can be archived.
       archiveReport: () => cost().archive,
-    })
-    : null;
-  const statics = { ...STATIC };
-  if (assistant) statics["/assistant.js"] = ["assistant.js", "text/javascript; charset=utf-8"];
+    });
+  assistantNow();
+  const statics = { ...STATIC, "/assistant.js": ["assistant.js", "text/javascript; charset=utf-8"] };
   const template = fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8");
-  const assistantPanel = assistant ? fs.readFileSync(path.join(PUBLIC, "assistant.html"), "utf8") : "";
+  const assistantPanelHtml = fs.readFileSync(path.join(PUBLIC, "assistant.html"), "utf8");
   const fingerprints = {};
   for (const [url, [file]] of Object.entries(statics)) {
     fingerprints[url] = crypto.createHash("sha1").update(fs.readFileSync(path.join(PUBLIC, file))).digest("hex").slice(0, 10);
@@ -185,6 +209,8 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
   }
 
   function page() {
+    const assistant = assistantNow();
+    const assistantPanel = assistant ? assistantPanelHtml : "";
     const themes = themesNow();
     const cfg = {
       themes,
@@ -194,6 +220,8 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       // Label of the default AI ("Do it with <provider>"): a name, never a setting or a key.
       assistantLabel: assistant ? assistant.label : "",
       assistantProvider: assistant ? (assistant.label || "your AI") : "",
+      // First-run set-up (public/setup.js): shown by itself until finished or skipped.
+      setupPending: setupStore.read().wizardDone !== true,
     };
     // Theme colours: legend dots, and the group tag of the activity journal (tinted by --c).
     const dots = themes.map((t) => `.mem-dot--${t.id}{background:${t.color};box-shadow:0 0 6px ${t.color}}.mem-grp--${t.id}{--c:${t.color}}`).join("");
@@ -226,7 +254,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
   function cost() {
     const notes = memory.costNotes(); // rescans when due: the key below sees the result
     const z = zones.read();
-    const key = [counters.version(), memory.version(), dayOf(Date.now()), config.showBodies, JSON.stringify(z)].join(":");
+    const key = [counters.version(), memory.version(), dayOf(Date.now()), config.showBodies, JSON.stringify(z), config.largeNoteTokens, config.splitChunkTokens].join(":");
     if (costCache && key === costKey) return costCache;
     costCache = computeCostNow(notes);
     costKey = key;
@@ -297,9 +325,40 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
     return findTime.summary(Date.now(), (id) => labels.get(id) || null);
   }
 
+  /**
+   * Reads a small JSON body (capped at `max` bytes, also when the declared length lies) and calls
+   * `done(body)`; answers 413 / 400 itself. Never logs the body.
+   */
+  function readJson(req, res, max, done) {
+    const declared = Number(req.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > max) { req.resume(); return json(res, 413, { error: "too large" }); }
+    if (!/^application\/json\b/i.test(String(req.headers["content-type"] || ""))) { req.resume(); return json(res, 415, { error: "json only" }); }
+    let size = 0; const chunks = [];
+    req.on("data", (c) => {
+      if (res.writableEnded) return;
+      size += c.length;
+      if (size > max) { json(res, 413, { error: "too large" }); req.resume(); return; }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      if (res.writableEnded) return;
+      let body;
+      try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return json(res, 400, { error: "bad json" }); }
+      chunks.length = 0;
+      done(body);
+    });
+  }
+  const setupNow = (req) => setupLib.publicSetup({ config, saved: setupStore.read(), env: runEnv, dataDir, memglowHome, req, usage });
+  /** Hosts a key may be sent to, per provider, with the settings in effect now. */
+  const destinations = () => Object.fromEntries(setupLib.PROVIDER_IDS.map((id) => {
+    const row = setupLib.publicSetup({ config, saved: {}, env: runEnv, dataDir, memglowHome, req: null }).assistant.providers.find((x) => x.id === id);
+    return [id, { destination: row.destination, key: row.key }];
+  }));
+
   return http.createServer((req, res) => {
     const url = new URL(req.url, "http://localhost");
     const p = url.pathname;
+    const assistant = assistantNow();
 
     // Assistant hooks report activity here. Bearer token; without a valid one the answer is the
     // plain 404 of an unknown route (never 401/403, which would advertise the route).
@@ -409,6 +468,72 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       return;
     }
 
+    // First-run set-up and AI settings (lib/setup.js): same guard as the saved view — page access
+    // rule, same-origin request with memglow's header (CSRF), rate limited, JSON only, body capped,
+    // strictly validated. No secret ever travels here (refused as "secret-field").
+    if (p === "/api/setup" && req.method === "PUT") {
+      if (!viewerAllowed(req)) { req.resume(); return unauthorized(); }
+      if (!sameOriginWrite(req)) { req.resume(); return json(res, 403, { error: "forbidden" }); }
+      if (!setupStore.rateOk()) { req.resume(); headers(res, { "Retry-After": "5" }); return json(res, 429, { error: "too many requests" }); }
+      return readJson(req, res, setupLib.BODY_MAX, (body) => {
+        const v = setupLib.validate(body);
+        if (!v.ok) return json(res, 400, { error: v.error, field: v.field || "" });
+        // Sending a key somewhere else is as sensitive as typing one: changing the address of a
+        // provider that has a key needs the same conditions (this machine, or password + HTTPS).
+        if (v.value.assistant) {
+          const before = destinations();
+          const trial = setupLib.effective(baseConfig, { ...setupStore.read(), ...v.value }, runEnv);
+          const after = setupLib.publicSetup({ config: { ...config, assistant: trial.assistant }, saved: {}, env: runEnv, dataDir, memglowHome, req: null }).assistant.providers;
+          const moved = after.some((row) => row.key === "set" && before[row.id] && before[row.id].destination && row.destination !== before[row.id].destination);
+          if (moved && !setupLib.secretEntry(req, config).allowed) return json(res, 403, { error: "destination-change-needs-local", field: "baseUrl" });
+          if (assistantInstance && assistantInstance.status().busy) return json(res, 409, { error: "assistant-busy" });
+        }
+        try { setupStore.write(v.value); } catch (e) { console.error("[memglow] set-up not saved:", e.code || "error"); return json(res, 500, { error: "not saved" }); }
+        setupLib.apply(config, baseConfig, setupStore.read(), runEnv);
+        costCache = null;
+        return json(res, 200, setupNow(req));
+      });
+    }
+    // A secret (API key, Claude Code subscription token): its own route, its own rules. Saving one
+    // needs this machine, or a password and HTTPS (setupLib.secretEntry). Removing one only needs the
+    // page's access. The value is written to a mode-600 file and never sent back, never logged.
+    if (p === "/api/setup/secret" && req.method === "POST") {
+      if (!viewerAllowed(req)) { req.resume(); return unauthorized(); }
+      if (!sameOriginWrite(req)) { req.resume(); return json(res, 403, { error: "forbidden" }); }
+      if (!setupStore.rateOk()) { req.resume(); headers(res, { "Retry-After": "5" }); return json(res, 429, { error: "too many requests" }); }
+      return readJson(req, res, setupLib.SECRET_BODY_MAX, (body) => {
+        if (!body || typeof body !== "object" || Array.isArray(body)) return json(res, 400, { error: "bad-body" });
+        const keys = Object.keys(body);
+        const id = typeof body.provider === "string" ? body.provider : "";
+        if (!setupLib.secretFile(id)) return json(res, 400, { error: "no-secret-for-provider" });
+        if (!dataDir) return json(res, 409, { error: "no-data-dir" });
+        if (body.remove === true && keys.every((k) => k === "provider" || k === "remove")) {
+          setupLib.removeSecret(dataDir, id);
+        } else if (typeof body.secret === "string" && keys.every((k) => k === "provider" || k === "secret")) {
+          const entry = setupLib.secretEntry(req, config);
+          if (!entry.allowed) return json(res, 403, { error: "secret-entry-refused", reason: entry.reason });
+          if (!setupLib.validSecret(body.secret)) return json(res, 400, { error: "bad-secret" });
+          try { setupLib.writeSecret(dataDir, id, body.secret); } catch (e) { console.error("[memglow] secret not saved:", e.code || "error"); return json(res, 500, { error: "not saved" }); }
+        } else return json(res, 400, { error: "bad-body" });
+        const row = setupNow(req).assistant.providers.find((x) => x.id === id);
+        return json(res, 200, { provider: id, key: row.key, keySource: row.keySource, keyName: row.keyName });
+      });
+    }
+    // Test connection: one minimal request to the provider with the settings in effect (no note
+    // content), rate limited. The answer says OK or the error, redacted of every secret.
+    if (p === "/api/setup/test" && req.method === "POST") {
+      if (!viewerAllowed(req)) { req.resume(); return unauthorized(); }
+      if (!sameOriginWrite(req)) { req.resume(); return json(res, 403, { error: "forbidden" }); }
+      if (!testRateOk()) { req.resume(); headers(res, { "Retry-After": "30" }); return json(res, 429, { error: "too many requests" }); }
+      return readJson(req, res, 1024, (body) => {
+        const id = body && typeof body.provider === "string" && setupLib.PROVIDER_IDS.includes(body.provider) ? body.provider : "";
+        if (!id) return json(res, 400, { error: "unknown-provider" });
+        setupLib.testConnection({ id, assistantConfig: config.assistant, env: runEnv, dataDir, workDir: dataDir ? path.join(dataDir, "assistant-work") : null, fetchImpl })
+          .then((r) => json(res, 200, { provider: id, ...r }))
+          .catch(() => json(res, 200, { provider: id, ok: false, ms: 0, error: "test failed" }));
+      });
+    }
+
     // Assistant actions (only when enabled): same access rule as the page, same-origin browser request
     // with memglow's header (CSRF), rate limited, small JSON body. Every one of them can start a
     // process, spend tokens or write notes.
@@ -465,7 +590,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       });
       return res.end(page());
     }
-    if (statics[p]) {
+    if (statics[p] && (p !== "/assistant.js" || assistant)) {
       const [file, type] = statics[p];
       headers(res, { "Content-Type": type, "Cache-Control": url.searchParams.has("v") ? "public, max-age=31536000, immutable" : "no-cache" });
       return fs.createReadStream(path.join(PUBLIC, file)).pipe(res);
@@ -488,6 +613,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       return json(res, 200, { ...z, themes: zonesLib.overview(config, memory.costNotes(), z.labels) });
     }
     if (p === "/api/view") return json(res, 200, view.publicView(views.read()));
+    if (p === "/api/setup") return json(res, 200, setupNow(req));
     if (p.startsWith("/api/note/")) {
       const n = memory.note(decodeURIComponent(p.slice("/api/note/".length)), { withBody: config.showBodies });
       return n ? json(res, 200, n) : json(res, 404, { error: "not found" });

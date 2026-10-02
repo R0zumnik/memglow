@@ -268,6 +268,41 @@ you set `maxTokens`.
   not valid JSON, cut off, or larger than 4 MB. Each request is time-limited (`timeoutMinutes`).
   HTTP errors are reported plainly (401 key refused, 429 rate limit with its delay, 5xx).
 
+<a id="ai-settings"></a>
+**AI settings** (Settings → AI settings) — the same choices as the [first run](#first-run), kept
+there for good: the default provider and the configured ones (add, remove, several at once), each
+with *key: set / not set / not needed*, **Test connection**, and its settings — model (known names
+offered, any valid name accepted), address or preset, **max output tokens**, **temperature** (only
+for providers and models that accept it), **time limit**, **cost cap per request**
+(`--max-budget-usd` for Claude Code; for the APIs, max output tokens × the price, shown as an
+estimate), and **Always ask before sending a note to this provider** (on by default for every
+provider that is not on this machine: a box to tick before *Propose*). Below: the assistant's own
+settings (a note is too large above, size of the parts, lines allowed to go missing — 0 by default,
+with a warning above —, backup auto / git / copy) and a **usage** box: requests per provider over 7
+and 30 days, tokens (≈ characters ÷ 4) and an estimated cost from the price you set (list prices of
+Anthropic's models are pre-filled), from memglow's own counts (`assistant-usage.json`, numbers
+only) — no external call.
+
+Order of priority: **environment variable > the page > `memglow.config.json`**. Every value is
+checked on the server against a closed list of fields with bounds; anything else is refused.
+
+**Claude Code subscription (no API key)** — the `claude-code` provider uses your Claude Code
+sign-in. Model: an alias `claude --model` accepts (`opus`, `sonnet`, `haiku`, `fable`,
+`best`, `default`, `sonnet[1m]`, `opus[1m]`) or a full id (`claude-…`); empty = your Claude
+Code default. Where `claude` is not signed in (Docker, a server), use a token from
+`claude setup-token` as `CLAUDE_CODE_OAUTH_TOKEN` (see [Docker](#docker-claude-code)); typed in
+the page it is saved in `claude-code-oauth-token` (mode 600) and passed **only** in the
+environment of the `claude` process memglow starts (an `ANTHROPIC_API_KEY` there is then left
+out, as it would win over the subscription).
+
+**Keys typed in the page** — saved by their own route (`POST /api/setup/secret`), one file per
+provider in the data folder (`assistant-api-key-<provider>`, mode 600, written atomically), never
+sent back (only *set / not set* and where it comes from), never logged, removable with *Remove key*.
+A key sent anywhere else (a settings body, a model field) is refused. Order: `apiKeyEnv` or
+`MEMGLOW_ASSISTANT_API_KEY_<PROVIDER>` > `MEMGLOW_ASSISTANT_API_KEY` > the page's file >
+`assistant-api-key`. Changing the address of a provider that has a key needs the same conditions
+as typing one (this computer, or password + HTTPS).
+
 **Regroup** (Organisation suggestions). *Do it with …* on an Organisation suggestion asks the AI
 which notes of that suggestion should share one sub-theme. The AI receives **only metadata** —
 ids, titles, descriptions (secret-looking lines masked), current sub-themes and the folders of
@@ -521,7 +556,12 @@ It:
 3. **detects your AI tools** and proposes each hook (Claude Code, Codex, Gemini CLI, Cursor,
    Windsurf, Copilot CLI, Cline). Every file it changes is **backed up** first
    (`<file>.memglow-backup`), existing entries are kept, a file it cannot parse is left untouched;
-4. proposes to put the [MCP proxy](#mcp-proxy) in front of Claude Desktop's memory servers.
+4. proposes to put the [MCP proxy](#mcp-proxy) in front of Claude Desktop's memory servers;
+5. asks the **same questions as the page's [first run](#first-run)**: which AI tools you use
+   (several are fine; the detected ones are proposed), whether to turn the optional assistant on,
+   and with which provider(s) and model. An API key can be typed there **without echo** (it goes to
+   `~/.memglow/assistant-api-key-<provider>`, mode 600) — or skipped, to set the variable or use
+   the page later. `--yes` asks nothing and keeps the previous behaviour.
 
 | Option | Meaning |
 |---|---|
@@ -530,7 +570,8 @@ It:
 | `--port <n>` | viewer port (default `4747`) |
 | `--agents <list>` | `claude-code,codex,gemini,cursor,windsurf,copilot,cline`, `all` (default: every detected tool) or `none` |
 | `--wrap-mcp` | with `--yes`: also wrap Claude Desktop's memory MCP servers |
-| `--docker` | also write `~/.memglow/docker-compose.yml` and `.env` |
+| `--clients <list>` | the AI tools you use (`claude-code,codex,gemini,cursor,windsurf,copilot,cline,chatgpt,other-mcp` or `none`), without asking |
+| `--docker` | also write `~/.memglow/docker-compose.yml` and `.env` — with your first-run choices as variables, and the key lines **commented out** (no key is ever asked or written for Docker) |
 
 **Undo:** `memglow uninstall` removes exactly what `init` added — hooks, the Cline script, MCP
 wrappings — and nothing else, even if you edited those files since. `--restore-backups` puts the
@@ -748,6 +789,61 @@ Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every 
 
 The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
 container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.
+
+<a id="first-run"></a>
+### First run
+
+The first time the page opens (npx or Docker alike — everything goes through the page), memglow
+shows a three-step set-up. Every step can be skipped, and Settings → **First-run setup** runs it
+again.
+
+1. **Your AI tools** — tick every tool you use (Claude Code, Codex, Gemini CLI, Cursor, Windsurf,
+   Copilot, Cline, ChatGPT, other MCP client); what `memglow init` detected is pre-ticked. For each
+   ticked tool the page shows exactly how memglow sees it: the hook `memglow init` installed, the
+   command to install it, or the MCP proxy command. **In Docker** it reminds you that hooks run next
+   to the tool, on your computer, and need `MEMGLOW_URL` and `MEMGLOW_TOKEN`.
+2. **Assistant (optional)** — off or on; one or several providers (Claude Code subscription,
+   Anthropic API, OpenAI-compatible API with a preset, Ollama / LM Studio on this machine), each with
+   its model, its address, its key, a **Test connection** button and where your notes would go.
+3. **Your big themes** — the [protected groups](#protected-groups) screen.
+
+The choices are saved in `/data/setup.json` (the data folder, mode 600). The variables below do
+the same from the environment, and **an environment variable always wins over the page** (the page
+then shows the field as "set by …"):
+
+| Variable | Same as |
+|---|---|
+| `MEMGLOW_CLIENTS` | step 1, e.g. `claude-code,codex` (or `none`) |
+| `MEMGLOW_ASSISTANT=1` / `0` | step 2, on / off |
+| `MEMGLOW_ASSISTANT_PROVIDER`, `MEMGLOW_ASSISTANT_MODEL`, `MEMGLOW_ASSISTANT_PRESET`, `MEMGLOW_ASSISTANT_BASE_URL` | default provider and its model / preset / address |
+| `MEMGLOW_ASSISTANT_API_KEY_ANTHROPIC`, `MEMGLOW_ASSISTANT_API_KEY_OPENAI_COMPATIBLE` (or the shared `MEMGLOW_ASSISTANT_API_KEY`) | the key fields |
+| `CLAUDE_CODE_OAUTH_TOKEN` | the Claude Code subscription token |
+| `MEMGLOW_TRUST_PROXY=1` | trust `X-Forwarded-Proto` from your HTTPS reverse proxy (see below) |
+
+`memglow init --docker` writes your answers in `~/.memglow/.env` (mode 600) with the key lines
+commented out; delete a line to hand that choice back to the page.
+
+**Typing a key in the page** works only when the browser is on the same computer
+(`http://127.0.0.1`, no proxy in between) **or** when memglow has a password
+(`MEMGLOW_PASSWORD`) and the connection is HTTPS. With Docker's port mapping the container never
+sees a loopback address, so put the key in `.env` instead — or, behind an HTTPS reverse proxy with
+a password, set `MEMGLOW_TRUST_PROXY=1`. Otherwise the field is disabled and the page says why.
+
+<a id="docker-claude-code"></a>
+### Claude Code subscription in Docker
+
+The image does not include the `claude` command (the page then says *Claude Code not available in
+this container*). Build the variant that does:
+
+```bash
+docker build --build-arg CLAUDE_CODE=1 -t memglow:claude .
+```
+
+It installs Claude Code from npm **at build time** (about +230 MB; nothing is downloaded when the
+container starts, and its auto-update is off). To sign in without a browser, run
+`claude setup-token` on a computer where you are signed in to your Claude subscription, and pass
+the printed token as `CLAUDE_CODE_OAUTH_TOKEN` in `.env` (or type it in the page from
+`http://127.0.0.1`). memglow gives it only to the `claude` process it starts.
 
 <a id="security"></a>
 ## 🔒 Security

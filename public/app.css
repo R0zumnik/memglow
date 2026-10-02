@@ -731,3 +731,47 @@ a { color: var(--bn-accent-teal); }
 .mg-zones__check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; min-height: 32px; }
 .mg-zones__label { min-width: 0; flex: 1 1 160px; max-width: 260px; min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--bn-line); background: var(--bn-surface); color: var(--bn-ink); font: inherit; font-size: 13px; }
 @media (max-width: 900px) { .mg-cost__grid--two { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---- First-run set-up and Settings → AI settings (public/setup.js) ---- */
+.mg-setup { grid-column: 1 / -1; }
+.mg-setup .bn-title { margin: 4px 0; }
+.mg-setup__body { display: grid; gap: var(--bn-space-3); min-width: 0; }
+.mg-setup__clients, .mg-setup__providers, .mg-setup__usage { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--bn-space-2); min-width: 0; }
+.mg-setup__client, .mg-setup__provider { padding: var(--bn-space-2) var(--bn-space-3); border: 1px solid var(--bn-line); border-radius: 12px; background: var(--bn-surface-well); min-width: 0; }
+.mg-setup__provider { display: grid; gap: var(--bn-space-2); }
+.mg-setup__phead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.mg-setup__remove { margin-left: auto; }
+.mg-setup__check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; min-height: 32px; }
+.mg-setup__check input { width: 18px; height: 18px; margin: 0; accent-color: var(--bn-accent-teal); }
+.mg-setup__tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--bn-chip-bg); color: var(--bn-accent-teal); }
+.mg-setup__tag--off { color: #FFB86B; }
+.mg-setup__help, .mg-setup__hint, .mg-setup__note, .mg-setup__keystate { margin: 4px 0; font-size: 12px; color: var(--bn-ink-dim); overflow-wrap: anywhere; }
+.mg-setup__note--warn { color: #FFB86B; }
+.mg-setup__code { margin: 4px 0; padding: 8px 10px; border-radius: 8px; background: var(--bn-surface); border: 1px solid var(--bn-line); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
+.mg-setup__field { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); align-items: center; gap: 4px 12px; font-size: 13px; color: var(--bn-ink-dim); }
+.mg-setup__field > .mg-setup__hint, .mg-setup__field > .mg-setup__lock { grid-column: 1 / -1; }
+.mg-setup__input { min-width: 0; width: 100%; max-width: 420px; min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--bn-line); background: var(--bn-surface); color: var(--bn-ink); font: inherit; font-size: 13px; box-sizing: border-box; }
+.mg-setup__input:disabled { opacity: 0.6; }
+.mg-setup__lock { font-size: 11px; color: var(--bn-ink-dim); }
+.mg-setup__key { display: grid; gap: 4px; padding-top: 4px; border-top: 1px dashed var(--bn-line); }
+.mg-setup__privacy { margin: 0; font-size: 12px; color: var(--bn-ink); }
+.mg-setup__privacy--local { color: var(--bn-accent-teal); }
+.mg-setup__btns, .mg-setup__add { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.mg-setup__nav { margin-top: var(--bn-space-3); }
+.mg-setup__status { margin: 4px 0 0; font-size: 12px; color: var(--bn-ink-dim); overflow-wrap: anywhere; }
+.mg-setup__status--bad { color: #FFB86B; }
+.mg-setup__onoff, .mg-setup__tuning { margin: 0; padding: var(--bn-space-2) var(--bn-space-3); border: 1px solid var(--bn-line); border-radius: 12px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; min-width: 0; }
+.mg-setup__tuning { display: grid; }
+.mg-setup__onoff legend, .mg-setup__tuning legend { padding: 0 6px; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--bn-ink-dim); }
+.mg-setup__usage li { font-size: 12px; color: var(--bn-ink); }
+/* Phone: one column, full-width fields and buttons, 16 px text in the fields (no zoom on focus in
+   iOS Safari), 40 px touch targets. After the rules above so it wins. */
+@media (max-width: 640px) {
+  .mg-setup__field { grid-template-columns: minmax(0, 1fr); }
+  .mg-setup__input { max-width: none; min-height: 40px; font-size: 16px; }
+  .mg-setup__check { min-height: 40px; }
+  .mg-setup__btns .bn-btn, .mg-setup__add .bn-btn { flex: 1 1 auto; min-height: 40px; }
+  .mg-setup__phead { flex-direction: column; align-items: flex-start; }
+  .mg-setup__remove { margin-left: 0; }
+  .mg-setup__client, .mg-setup__provider { padding: var(--bn-space-2); }
+}

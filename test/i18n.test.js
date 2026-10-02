@@ -14,6 +14,7 @@ const appPage = require("../public/app.js");
 const costPage = require("../public/cost.js");
 const aiPage = require("../public/assistant.js");
 const zonesPage = require("../public/zones.js");
+const setupPage = require("../public/setup.js");
 
 const PUBLIC = path.join(__dirname, "..", "public");
 const LANGS = ["en", "fr", "de", "es", "pt-BR", "ja", "ko", "zh-CN"];
@@ -159,7 +160,7 @@ test("i18n: server.js serves every language file and the loader, with the page's
 
 test("i18n: app.js/cost.js/assistant.js/zones.js English fallbacks match public/i18n/en.json exactly", () => {
   const en = loadLang("en");
-  for (const [name, dict] of [["app.js EN_APP", appPage.EN_APP], ["cost.js EN_COST", costPage.EN_COST], ["assistant.js EN_AI", aiPage.EN_AI], ["zones.js EN_ZONES", zonesPage.EN_ZONES]]) {
+  for (const [name, dict] of [["app.js EN_APP", appPage.EN_APP], ["cost.js EN_COST", costPage.EN_COST], ["assistant.js EN_AI", aiPage.EN_AI], ["zones.js EN_ZONES", zonesPage.EN_ZONES], ["setup.js EN_SETUP", setupPage.EN_SETUP]]) {
     for (const k of Object.keys(dict)) {
       assert.ok(Object.prototype.hasOwnProperty.call(en, k), `${name}: "${k}" is not a real en.json key`);
       assert.deepStrictEqual(dict[k], en[k], `${name}: "${k}" has drifted from en.json`);
@@ -282,12 +283,15 @@ test("i18n: no hardcoded English UI text remains outside the English fallback bl
     "No section selected", "Copy failed: select", "Kept live by the AI", "which sections to archive",
     "sub-theme changed", "archive summary\"", "Regroup: <strong>", "> Protect<", "Display name of the group",
     "Nothing protected yet", "Saved. Reloading", "No group is configured",
+    // first-run set-up and AI settings
+    "Test connection", "Your AI tools", "Remove key", "Local model: nothing leaves", "Max output tokens", "Always ask before sending",
   ];
   const files = {
     "public/app.js": stripBlock(read("public/app.js"), "var EN_APP = {", "};"),
     "public/cost.js": stripBlock(read("public/cost.js"), "var EN_COST = {", "};"),
     "public/assistant.js": stripBlock(read("public/assistant.js"), "var EN_AI = {", "};"),
     "public/zones.js": stripBlock(read("public/zones.js"), "var EN_ZONES = {", "};"),
+    "public/setup.js": stripBlock(read("public/setup.js"), "var EN_SETUP = {", "};"),
   };
   for (const [file, text] of Object.entries(files)) {
     for (const s of STRINGS) {
@@ -302,6 +306,7 @@ test("i18n: no hardcoded English UI text remains outside the English fallback bl
   for (const phrase of [
     "Loading the graph…", "Settings", "Find a note", "Release all bubbles", "Live activity",
     "What are your big themes?", "Protected groups", "Not now", "Light",
+    "Set up memglow", "AI settings", "First-run setup", "Skip set-up",
   ]) {
     let i = index.indexOf(phrase);
     assert.ok(i >= 0, `index.html should still show "${phrase}" as the pre-JS default`);

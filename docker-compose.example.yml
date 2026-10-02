@@ -17,6 +17,17 @@ services:
     environment:
       - MEMGLOW_TOKEN=${MEMGLOW_TOKEN:-}
       # - MEMGLOW_PASSWORD=choose-a-long-password
+      # First run: the page asks which AI tools you use and sets up the optional assistant
+      # (README → Docker → First run). A variable set here wins over the page:
+      # - MEMGLOW_CLIENTS=claude-code,codex
+      # - MEMGLOW_ASSISTANT=1
+      # - MEMGLOW_ASSISTANT_PROVIDER=anthropic
+      # Keys: never in this file. Put them in .env (mode 600), or type them in the page from
+      # http://127.0.0.1 (saved in /data, mode 600):
+      # - MEMGLOW_ASSISTANT_API_KEY_ANTHROPIC=${MEMGLOW_ASSISTANT_API_KEY_ANTHROPIC:-}
+      # - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}   # image variant with Claude Code only
+      # Behind an HTTPS reverse proxy, to type a key in the page (with MEMGLOW_PASSWORD):
+      # - MEMGLOW_TRUST_PROXY=1
     volumes:
       # your notes folder, read-only: memglow never writes to it
       - ${NOTES:-./demo/memory}:/memory:ro

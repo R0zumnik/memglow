@@ -27,6 +27,8 @@ init options:
   --port <n>          viewer port (default 4747)
   --agents <list>     comma-separated: claude-code,codex,gemini,cursor,windsurf,copilot,cline
                       or "all" (default: every detected tool) or "none"
+  --clients <list>    the AI tools you use (also chatgpt, other-mcp), saved for the page;
+                      asked when interactive
   --wrap-mcp          also wrap Claude Desktop's memory MCP servers with the memglow proxy
   --docker            also write ~/.memglow/docker-compose.yml and .env
   --home <folder>     home folder to configure (default: yours)
@@ -47,7 +49,7 @@ function parse(argv) {
     else if (a === "--restore-backups") o.restoreBackups = true;
     else if (a === "--purge") o.purge = true;
     else if (a === "-h" || a === "--help") o.help = true;
-    else if (["--dir", "--port", "--agents", "--home"].includes(a)) o[a.slice(2)] = argv[++i];
+    else if (["--dir", "--port", "--agents", "--home", "--clients"].includes(a)) o[a.slice(2)] = argv[++i];
     else o._.push(a);
   }
   return o;
@@ -61,10 +63,96 @@ function asker(yes) {
   return ask;
 }
 
-async function cmdInit(o) {
+/**
+ * Terminal questions for the first-run choices (same as the page's set-up). `io` = { text(q, def)
+ * → answer, hidden(q) → answer typed without echo, yesNo(q, def) → bool, log(line) }. A key is
+ * NEVER read with echo: hidden() masks it; with --docker no key is asked at all (it would not reach
+ * the container) — the .env gets the variable, commented out, instead.
+ */
+async function askChoices(io, { detected, docker }) {
+  const { CLIENTS } = require("../lib/clients");
+  io.log("\nWhich AI tools do you use? (several are fine; memglow shows how it sees each one)");
+  CLIENTS.forEach((c, i) => io.log(`  ${i + 1}. ${c.label}${detected.includes(c.id) ? " (detected)" : ""}`));
+  const def = CLIENTS.map((c, i) => (detected.includes(c.id) ? i + 1 : 0)).filter(Boolean).join(",");
+  const pick = (answer, list) => String(answer || "").split(/[\s,]+/).filter(Boolean)
+    .map((x) => (/^\d+$/.test(x) ? list[Number(x) - 1] : list.find((c) => c.id === x)))
+    .filter(Boolean).map((c) => c.id);
+  const ans = await io.text("Numbers or names, comma-separated", def || "none");
+  const clients = /^none$/i.test(String(ans).trim()) ? [] : [...new Set(pick(ans, CLIENTS))];
+
+  if (!(await io.yesNo("\nTurn on the optional assistant (the AI proposes, memglow shows the diff and writes what you approve)?", false))) {
+    return { clients, assistant: { enabled: false }, secrets: {} };
+  }
+  const setup = require("../lib/setup");
+  const claude = require("../lib/assistant/providers/claude-code").detect({}).detected;
+  const PROV = [
+    { id: "claude-code", label: "Claude Code subscription (no API key)" + (claude ? " (detected)" : "") },
+    { id: "anthropic", label: "Anthropic API (your API key)" },
+    { id: "openai-compatible", label: "OpenAI-compatible API (OpenAI, Mistral, OpenRouter; your API key)" },
+    { id: "ollama", label: "Ollama on this machine (nothing leaves it)" },
+    { id: "lmstudio", label: "LM Studio on this machine (nothing leaves it)" },
+  ];
+  io.log("Providers (one or several; the first is the default):");
+  PROV.forEach((x, i) => io.log(`  ${i + 1}. ${x.label}`));
+  const chosen = [...new Set(pick(await io.text("Numbers or names, comma-separated", claude ? "1" : "4"), PROV))];
+  const providers = {}, secrets = {};
+  for (const id of chosen) {
+    const fields = {};
+    const defModel = id === "anthropic" ? "claude-sonnet-5-5" : id === "claude-code" ? "" : id === "ollama" ? "llama3.1" : "";
+    for (;;) {
+      const m = String(await io.text(`${id}: model${id === "claude-code" ? " (opus, sonnet, haiku, fable… or a full id; empty = your Claude Code default)" : ""}`, defModel)).trim();
+      if (!m || setup.validModel(id, m)) { if (m) fields.model = m; break; }
+      io.log("  not a valid model name for this provider, try again");
+    }
+    if (id === "openai-compatible") {
+      const preset = String(await io.text("openai-compatible: service (openai, mistral, openrouter) or an https:// address", "openai")).trim();
+      if (/^https?:\/\//.test(preset)) fields.baseUrl = preset; else fields.preset = preset || "openai";
+    }
+    const v = setup.validateProvider(id, fields);
+    if (!v.ok) { io.log(`  ${id}: ${v.error} (${v.field}) — skipped, set it later in the page`); continue; }
+    providers[id] = v.value;
+    const secretName = setup.secretFile(id);
+    if (!secretName) continue;
+    const envName = id === "claude-code" ? "CLAUDE_CODE_OAUTH_TOKEN" : require("../lib/assistant/providers/http").providerKeyEnv(id);
+    if (docker) { io.log(`  ${id}: put the ${id === "claude-code" ? "token from \`claude setup-token\`" : "API key"} in ~/.memglow/.env (${envName}, written commented out), or type it in the page from http://127.0.0.1.`); continue; }
+    if (id === "claude-code") { io.log("  claude-code: uses this computer's Claude Code sign-in; nothing to type here."); continue; }
+    const key = String(await io.hidden(`  ${id}: API key (hidden; Enter to skip and set ${envName} or use the page later): `) || "").trim();
+    if (!key) continue;
+    if (!setup.validSecret(key)) { io.log("  that does not look like a key (no spaces, 8 to 4096 characters): skipped"); continue; }
+    secrets[id] = key;
+  }
+  const ids = Object.keys(providers);
+  return { clients, assistant: { enabled: ids.length > 0, provider: ids[0] || "", providers }, secrets };
+}
+
+/** Real terminal questions: readline, and a no-echo reader for keys. */
+function terminalIo() {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  let muted = false;
+  const write = rl._writeToOutput ? rl._writeToOutput.bind(rl) : null;
+  // While a key is typed, nothing it contains is echoed (not even as stars).
+  if (write) rl._writeToOutput = (str) => { if (!muted || /^\r?\n$/.test(str)) write(str); };
+  return {
+    text: (q, def) => new Promise((r) => rl.question(`${q}${def ? ` [${def}]` : ""}: `, (a) => r(a.trim() || def || ""))),
+    yesNo: (q, def) => new Promise((r) => rl.question(`${q} [${def ? "Y/n" : "y/N"}] `, (a) => r(a.trim() ? /^y/i.test(a.trim()) : !!def))),
+    hidden: (q) => new Promise((r) => {
+      if (!write) return r(""); // cannot mask: never read a key with echo
+      process.stdout.write(q);
+      muted = true;
+      rl.question("", (a) => { muted = false; process.stdout.write("\n"); r(a); });
+    }),
+    log: (line) => console.log(line),
+    close: () => rl.close(),
+  };
+}
+
+async function cmdInit(o, io) {
   const installer = require("../lib/installer");
   const home = path.resolve(o.home || os.homedir());
-  const confirm = asker(o.yes);
+  const interactive = !!io || (!o.yes && process.stdin.isTTY);
+  // One readline for every question when interactive (yes/no ones included).
+  if (interactive && !io) io = terminalIo();
+  const confirm = interactive ? Object.assign((q) => io.yesNo(q, true), { close: () => io.close && io.close() }) : asker(o.yes);
   let dir = o.dir;
   if (!dir) {
     const found = installer.detectNotes(home);
@@ -76,15 +164,23 @@ async function cmdInit(o) {
   }
   const agents = !o.agents || o.agents === "all" ? "all" : o.agents === "none" ? "none" : o.agents.split(",").map((s) => s.trim());
   let wrapMcp = !!o.wrapMcp;
-  if (!wrapMcp && !o.yes && process.stdin.isTTY) wrapMcp = true; // interactive: it will be asked
+  if (!wrapMcp && interactive) wrapMcp = true; // interactive: it will be asked
   try {
-    const r = await installer.init({ home, dir, port: o.port, agents, wrapMcp, docker: o.docker, confirm });
+    // The first-run choices (also offered by the page): asked when interactive; --clients sets the
+    // tools without asking; --yes keeps the previous behaviour (nothing asked, nothing written).
+    let choices = {};
+    if (o.clients) choices.clients = o.clients === "none" ? [] : o.clients.split(",").map((x) => x.trim());
+    else if (interactive) choices = await askChoices(io, { detected: installer.detectAgents(home).map((a) => a.id), docker: !!o.docker });
+    const r = await installer.init({ home, dir, port: o.port, agents, wrapMcp, docker: o.docker, confirm, clients: choices.clients, assistant: choices.assistant, secrets: choices.secrets });
     console.log(`\nmemglow is set up for ${r.notes}`);
     console.log(`  config and token: ${path.join(home, ".memglow")}`);
     for (const a of r.agents) console.log(`  ✓ ${a.id}: ${a.file}`);
     for (const s of r.skipped) console.log(`  – ${s.id}: ${s.why}`);
     for (const m of r.mcp) console.log(`  ✓ MCP proxy in front of ${m}`);
     if (!r.agents.length && !r.skipped.length) console.log("  no AI tool detected: file changes are still picked up live (see README).");
+    if (r.clients) console.log(`  AI tools: ${r.clients.join(", ") || "none"} (change them in the page: Settings → First-run setup)`);
+    if (r.assistant) console.log(`  assistant: ${r.assistant.enabled ? "on, " + Object.keys(r.assistant.providers).join(", ") : "off"} (Settings → AI settings)`);
+    for (const id of r.secrets) console.log(`  key for ${id}: saved in ${path.join(home, ".memglow")} (mode 600), never shown again`);
     if (r.docker) console.log(`  docker: docker compose -f ${path.join(home, ".memglow", "docker-compose.yml")} up -d`);
     console.log("\nStart the viewer with `memglow` (or `npx github:R0zumnik/memglow`), then restart your AI tools.");
     console.log("Undo everything with `memglow uninstall`.");
@@ -118,4 +214,4 @@ async function run(argv = process.argv.slice(2)) {
 
 if (require.main === module) run().then((code) => { if (code != null) process.exitCode = code; });
 
-module.exports = { run, parse };
+module.exports = { run, parse, cmdInit, askChoices };
