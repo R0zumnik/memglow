@@ -10,8 +10,9 @@ const path = require("path");
 const {
   loadEvents, normalizeCalls, portalToCalls, namedConfigs, eachLeverConfigs, runConfig, summarize,
   isReachable, withPermalink, parseArgs, LEVER_NAMES, SHIPPED_DEFAULTS, GAP_MS,
+  mergeSearchBursts, MULTI_QUERY_GAP_MS,
 } = require("../bench/replay.js");
-const { ARG_FRESH, DEFAULTS: LIB_DEFAULTS } = require("../lib/proxy-levers");
+const { ARG_FRESH, ARG_QUERIES, MULTI_QUERY_MAX, DEFAULTS: LIB_DEFAULTS } = require("../lib/proxy-levers");
 
 test("SHIPPED_DEFAULTS (bench/replay.js) never silently drifts from lib/proxy-levers.js DEFAULTS", () => {
   for (const name of LEVER_NAMES) assert.strictEqual(SHIPPED_DEFAULTS[name], LIB_DEFAULTS[name], `lever "${name}"`);
@@ -125,23 +126,82 @@ test("portalToCalls: a new session starts on a source change, or on a silence ov
 });
 
 // ---------------------------------------------------------------------------------------------
+// mergeSearchBursts (0.4.2.2b) — modelling the multiQuery lever: a run of consecutive searches,
+// same session, no read between, within MULTI_QUERY_GAP_MS, becomes ONE call with ARG_QUERIES.
+
+test("mergeSearchBursts: 3 consecutive searches, same session, no read between → ONE call with the other 2 as memglow_queries", () => {
+  const calls = normalizeCalls([
+    { session: "s1", tool: "search_notes", args: { query: "a" }, t: 0 },
+    { session: "s1", tool: "search_notes", args: { query: "b" }, t: 10 },
+    { session: "s1", tool: "search_notes", args: { query: "c" }, t: 20 },
+  ]);
+  const out = mergeSearchBursts(calls, ["search_notes"]);
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(out[0].args.query, "a", "the first phrasing stays the main query argument");
+  assert.deepStrictEqual(out[0].args[ARG_QUERIES], ["b", "c"]);
+});
+
+test("mergeSearchBursts: a read between two searches breaks the run — both stay separate calls", () => {
+  const calls = normalizeCalls([
+    { session: "s1", tool: "search_notes", args: { query: "a" }, t: 0 },
+    { session: "s1", tool: "read_note", args: { identifier: "x" }, t: 10 },
+    { session: "s1", tool: "search_notes", args: { query: "b" }, t: 20 },
+  ]);
+  const out = mergeSearchBursts(calls, ["search_notes"]);
+  assert.strictEqual(out.length, 3);
+  for (const c of out) assert.ok(!(ARG_QUERIES in c.args));
+});
+
+test("mergeSearchBursts: a different session, or a silence over MULTI_QUERY_GAP_MS, also breaks the run", () => {
+  const diffSession = mergeSearchBursts(normalizeCalls([
+    { session: "s1", tool: "search_notes", args: { query: "a" }, t: 0 },
+    { session: "s2", tool: "search_notes", args: { query: "b" }, t: 10 },
+  ]), ["search_notes"]);
+  assert.strictEqual(diffSession.length, 2);
+
+  const longSilence = mergeSearchBursts(normalizeCalls([
+    { session: "s1", tool: "search_notes", args: { query: "a" }, t: 0 },
+    { session: "s1", tool: "search_notes", args: { query: "b" }, t: MULTI_QUERY_GAP_MS + 1 },
+  ]), ["search_notes"]);
+  assert.strictEqual(longSilence.length, 2);
+});
+
+test("mergeSearchBursts: a lone search (no run) passes through unchanged — only a run of 2+ gets memglow_queries", () => {
+  const out = mergeSearchBursts(normalizeCalls([
+    { session: "s1", tool: "read_note", args: { identifier: "x" }, t: 0 },
+    { session: "s1", tool: "search_notes", args: { query: "a" }, t: 10 },
+    { session: "s1", tool: "read_note", args: { identifier: "y" }, t: 20 },
+  ]), ["search_notes"]);
+  assert.strictEqual(out.length, 3);
+  assert.ok(!(ARG_QUERIES in out[1].args));
+});
+
+test("mergeSearchBursts: capped at MULTI_QUERY_MAX phrasings — extra consecutive searches start a fresh run", () => {
+  const calls = normalizeCalls(Array.from({ length: MULTI_QUERY_MAX + 2 }, (_, i) => ({ session: "s1", tool: "search_notes", args: { query: "q" + i }, t: i * 10 })));
+  const out = mergeSearchBursts(calls, ["search_notes"]);
+  assert.strictEqual(out.length, 2, "MULTI_QUERY_MAX + 2 searches → one full run + one 2-item run");
+  assert.strictEqual(out[0].args[ARG_QUERIES].length, MULTI_QUERY_MAX - 1);
+  assert.strictEqual(1 + out[1].args[ARG_QUERIES].length, 2);
+});
+
+// ---------------------------------------------------------------------------------------------
 // End to end: runConfig against a small hand-built memory folder.
 
-test("runConfig: off vs defaults vs +dedupe on a same-session re-read — dedupe only saves tokens when it fires, never a violation", () => {
+test("runConfig: off vs defaults vs +dedupe on a same-session re-read — dedupe only saves tokens when it fires, never a violation", async () => {
   const body = "Some note body. ".repeat(20);
   const dir = writeNotes({ "a.md": `---\ntitle: a\ntheme: knowledge\n---\n${body}` });
   const events = normalizeCalls([
     { session: "s1", tool: "read_note", args: { identifier: "a" } },
     { session: "s1", tool: "read_note", args: { identifier: "a" } }, // same note, same session: dedupe can fire
   ]);
-  const off = runConfig(flagsAllOff(), events, { memoryDir: dir, alwaysLoaded: [] });
-  const withDedupe = runConfig({ ...flagsAllOff(), dedupe: true }, events, { memoryDir: dir, alwaysLoaded: [] });
+  const off = await runConfig(flagsAllOff(), events, { memoryDir: dir, alwaysLoaded: [] });
+  const withDedupe = await runConfig({ ...flagsAllOff(), dedupe: true }, events, { memoryDir: dir, alwaysLoaded: [] });
   assert.strictEqual(off.violations, 0);
   assert.strictEqual(withDedupe.violations, 0);
   assert.ok(withDedupe.tokensTotal < off.tokensTotal, "dedupe must have shortened the second read");
 });
 
-test("runConfig: a changed-file case is never stubbed — the read right after an edit returns the full new text", () => {
+test("runConfig: a changed-file case is never stubbed — the read right after an edit returns the full new text", async () => {
   const dir = writeNotes({ "a.md": "---\ntitle: a\ntheme: knowledge\n---\nOriginal body.\n" });
   const events = normalizeCalls([
     { session: "s1", tool: "read_note", args: { identifier: "a" } },
@@ -150,14 +210,14 @@ test("runConfig: a changed-file case is never stubbed — the read right after a
   ]);
   // dedupe AND alreadyLoaded both on: if either wrongly stubbed the post-edit read, the guard would catch it.
   const flags = { ...flagsAllOff(), dedupe: true, alreadyLoaded: true };
-  const res = runConfig(flags, events, { memoryDir: dir, alwaysLoaded: ["a"] });
+  const res = await runConfig(flags, events, { memoryDir: dir, alwaysLoaded: ["a"] });
   assert.strictEqual(res.violations, 0, JSON.stringify(res.violationDetails));
 });
 
-test("runConfig: an unresolved note (never on disk) is skipped by the guard, not a false violation", () => {
+test("runConfig: an unresolved note (never on disk) is skipped by the guard, not a false violation", async () => {
   const dir = writeNotes({ "a.md": "---\ntitle: a\n---\nbody\n" });
   const events = normalizeCalls([{ session: "s1", tool: "read_note", args: { identifier: "does-not-exist" } }]);
-  const res = runConfig(flagsAllOff(), events, { memoryDir: dir, alwaysLoaded: [] });
+  const res = await runConfig(flagsAllOff(), events, { memoryDir: dir, alwaysLoaded: [] });
   assert.strictEqual(res.violations, 0);
   assert.strictEqual(res.calls, 1);
 });
@@ -165,11 +225,11 @@ test("runConfig: an unresolved note (never on disk) is skipped by the guard, not
 // ---------------------------------------------------------------------------------------------
 // The demo table itself: off vs defaults vs +alreadyLoaded over demo/memory + bench/replay-demo.jsonl.
 
-test("demo replay: +alreadyLoaded gives a positive saving on the repeated index reads, with 0 violations everywhere", () => {
+test("demo replay: +alreadyLoaded gives a positive saving on the repeated index reads, with 0 violations everywhere", async () => {
   const events = loadEvents(DEMO_EVENTS);
   assert.ok(events.length >= 10, "the demo events file should have a handful of calls across 3 sessions");
   const configs = namedConfigs([["alreadyLoaded"]]);
-  const results = configs.map((c) => ({ key: c.key, label: c.label, ...runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] }) }));
+  const results = await Promise.all(configs.map(async (c) => ({ key: c.key, label: c.label, ...(await runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] })) })));
   const rows = summarize(results);
   for (const r of rows) assert.strictEqual(r.violations, 0, `${r.key}: ${JSON.stringify(r.violationDetails)}`);
 
@@ -187,27 +247,29 @@ test("withPermalink: adds a permalink line right after the frontmatter fence, ma
 // ---------------------------------------------------------------------------------------------
 // Stage 0.4.2.2 "lean defaults": defaults must never cost more than off, on the demo replay.
 
-test("demo replay: defaults never cost more tokens than off (0.4.2.2 target), 0 violations", () => {
+test("demo replay: defaults never cost more tokens OR more calls than off (0.4.2.2 / 0.4.2.2b target), 0 violations", async () => {
   const events = loadEvents(DEMO_EVENTS);
   const configs = namedConfigs([]);
-  const results = configs.map((c) => ({ key: c.key, label: c.label, ...runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] }) }));
+  const results = await Promise.all(configs.map(async (c) => ({ key: c.key, label: c.label, ...(await runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] })) })));
   const rows = summarize(results);
   for (const r of rows) assert.strictEqual(r.violations, 0, `${r.key}: ${JSON.stringify(r.violationDetails)}`);
   const off = rows.find((r) => r.key === "off");
   const defaults = rows.find((r) => r.key === "defaults");
   assert.ok(defaults.tokensTotal <= off.tokensTotal, `defaults (${defaults.tokensTotal}) must be <= off (${off.tokensTotal})`);
+  assert.ok(defaults.calls <= off.calls, `defaults (${defaults.calls} calls) must be <= off (${off.calls} calls)`);
 });
 
-test("heavy synthetic replay (60 calls, 4 sessions, realistic repeats): defaults never cost more tokens than off, 0 violations", () => {
+test("heavy synthetic replay (67 calls, 4 sessions, realistic repeats incl. multi-search bursts): defaults never cost more tokens OR more calls than off, 0 violations", async () => {
   const events = loadEvents(HEAVY_EVENTS);
   assert.ok(events.length >= 50, "the heavy events file should be a lot bigger than the demo one");
   const configs = namedConfigs([]);
-  const results = configs.map((c) => ({ key: c.key, label: c.label, ...runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] }) }));
+  const results = await Promise.all(configs.map(async (c) => ({ key: c.key, label: c.label, ...(await runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] })) })));
   const rows = summarize(results);
   for (const r of rows) assert.strictEqual(r.violations, 0, `${r.key}: ${JSON.stringify(r.violationDetails)}`);
   const off = rows.find((r) => r.key === "off");
   const defaults = rows.find((r) => r.key === "defaults");
   assert.ok(defaults.tokensTotal <= off.tokensTotal, `defaults (${defaults.tokensTotal}) must be <= off (${off.tokensTotal})`);
+  assert.ok(defaults.calls < off.calls, `defaults (${defaults.calls} calls) must be FEWER than off (${off.calls} calls) — this file has multi-search bursts for multiQuery to collapse`);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -222,10 +284,10 @@ test("eachLeverConfigs: one row per lever, each with every OTHER lever off", () 
   }
 });
 
-test("demo replay: per-lever breakdown — searchDetails/suggestions only ADD tokens alone, dedupe/alreadyLoaded only SAVE, the rest are no-ops on this file", () => {
+test("demo replay: per-lever breakdown — searchDetails/suggestions only ADD tokens alone, dedupe/alreadyLoaded only SAVE, the rest are no-ops on this file (no bursts, no large notes)", async () => {
   const events = loadEvents(DEMO_EVENTS);
   const off = { key: "off", flags: flagsAllOff() };
-  const results = [off, ...eachLeverConfigs()].map((c) => ({ key: c.key, label: c.label || c.key, ...runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] }) }));
+  const results = await Promise.all([off, ...eachLeverConfigs()].map(async (c) => ({ key: c.key, label: c.label || c.key, ...(await runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] })) })));
   const rows = summarize(results); // baseline "off" present in `results`, so savingsAbs is a real number
   for (const r of rows) assert.strictEqual(r.violations, 0, `${r.key}: ${JSON.stringify(r.violationDetails)}`);
   const delta = (name) => -rows.find((r) => r.key === "alone:" + name).savingsAbs; // positive = adds
@@ -233,9 +295,22 @@ test("demo replay: per-lever breakdown — searchDetails/suggestions only ADD to
   assert.ok(delta("suggestions") > 0, "suggestions alone adds tokens on the demo file");
   assert.ok(delta("dedupe") < 0, "dedupe alone saves tokens on the demo file");
   assert.ok(delta("alreadyLoaded") < 0, "alreadyLoaded alone saves tokens on the demo file");
-  for (const name of ["sizeWarning", "indexWarning", "toc", "archiveHint", "hideUnsupportedTools"]) {
+  for (const name of ["sizeWarning", "indexWarning", "toc", "archiveHint", "hideUnsupportedTools", "multiQuery"]) {
     assert.ok(delta(name) === 0, `${name}: nothing on this file triggers it`); // "=== 0" to accept -0 too
   }
+});
+
+test("heavy replay: multiQuery alone saves tokens AND calls vs off (the bursts added for 0.4.2.2b)", async () => {
+  const events = loadEvents(HEAVY_EVENTS);
+  const off = { key: "off", flags: flagsAllOff() };
+  const mq = { key: "alone:multiQuery", flags: { ...flagsAllOff(), multiQuery: true } };
+  const results = await Promise.all([off, mq].map(async (c) => ({ key: c.key, ...(await runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] })) })));
+  const rows = summarize(results);
+  for (const r of rows) assert.strictEqual(r.violations, 0, `${r.key}: ${JSON.stringify(r.violationDetails)}`);
+  const offRow = rows.find((r) => r.key === "off");
+  const mqRow = rows.find((r) => r.key === "alone:multiQuery");
+  assert.ok(mqRow.calls < offRow.calls, `multiQuery (${mqRow.calls} calls) must be FEWER than off (${offRow.calls} calls)`);
+  assert.ok(mqRow.tokensTotal < offRow.tokensTotal, `multiQuery (${mqRow.tokensTotal}) must be FEWER tokens than off (${offRow.tokensTotal})`);
 });
 
 // ---------------------------------------------------------------------------------------------

@@ -31,6 +31,15 @@ test("defaultTemplate: real configuration values, no placeholder left unfilled",
   assert.ok(text.length > 400 && text.length < 1600, "short and impersonal, not a essay: " + text.length);
 });
 
+test("defaultTemplate (0.4.2.2b): the first rule tells the assistant to use memglow_queries in ONE call when the tool offers it", () => {
+  const text = R.defaultTemplate({ largeNoteTokens: 4000, splitChunkTokens: 1500, protectedLabel: "People, Family" });
+  const firstRule = text.split("\n")[1];
+  assert.match(firstRule, /^- Search before reading or writing/);
+  assert.match(firstRule, /memglow_queries/);
+  assert.match(firstRule, /ONE call/);
+  assert.match(firstRule, /2–3 different phrasings/, "the rule still names the 2-3 phrasings habit");
+});
+
 test("protectedLabelFor: config.protectedThemes with labels, saved zones.json wins, empty -> 'none configured'", () => {
   const themes = [{ id: "people", label: "People" }, { id: "work", label: "Work" }];
   assert.strictEqual(R.protectedLabelFor({ themes, protectedThemes: [], dataDir: null }), "none configured");

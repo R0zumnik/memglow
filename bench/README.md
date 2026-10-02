@@ -36,17 +36,22 @@ node bench/replay.js --memory path/to/notes                # "--memory" is an al
   r0zumnik portal's own activity shape, `{"evenements":[{"type":"lecture"|"recherche"|"ecriture",
   "ids":[...],"source":"nas"|"mac","t":...}]}` — sessions are inferred from `source` plus a
   silence of more than 30 minutes. `bench/replay-demo.jsonl` is the small shipped demo (14 calls,
-  3 sessions); `bench/replay-heavy.jsonl` is a bigger synthetic one (60 calls, 4 sessions, closer
+  3 sessions); `bench/replay-heavy.jsonl` is a bigger synthetic one (67 calls, 4 sessions, closer
   to a real working session: the same handful of notes read and searched repeatedly, plus a
-  one-off tail) — both are replayed in CI-equivalent tests (`test/bench-replay.test.js`).
-- `--with a,b,c` adds a configuration: the shipped **defaults** (stage 0.4.2.2: sizeWarning only —
-  see below) with levers `a`, `b`, `c` also forced on. Repeat the flag for more rows.
+  one-off tail, plus — since stage 0.4.2.2b — a few bursts of 2-3 consecutive searches with no
+  read between them, to exercise the `multiQuery` lever below) — both are replayed in
+  CI-equivalent tests (`test/bench-replay.test.js`).
+- `--with a,b,c` adds a configuration: the shipped **defaults** (stage 0.4.2.2b: sizeWarning +
+  multiQuery — see below) with levers `a`, `b`, `c` also forced on. Repeat the flag for more rows.
 - `--each` adds one row per lever (sizeWarning, indexWarning, searchDetails, suggestions, dedupe,
-  toc, archiveHint, hideUnsupportedTools, alreadyLoaded), each ALONE against the `off` baseline
-  (every other lever off) — unlike `--with`, which starts from the shipped defaults. This is the
-  per-lever "does it add or save tokens, and how much" breakdown used to decide, lever by lever,
-  whether to keep it as shipped, shorten its text, or turn it off by default (see
-  `lib/proxy-levers.js`'s `DEFAULTS` comment and the CHANGELOG entry for stage 0.4.2.2).
+  toc, archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery), each ALONE against the `off`
+  baseline (every other lever off) — unlike `--with`, which starts from the shipped defaults. This
+  is the per-lever "does it add or save tokens, and how much" breakdown used to decide, lever by
+  lever, whether to keep it as shipped, shorten its text, or turn it off by default (see
+  `lib/proxy-levers.js`'s `DEFAULTS` comment and the CHANGELOG entries for stages 0.4.2.2 and
+  0.4.2.2b). For `multiQuery`, "tokens added/saved" also comes with a call-count change — see
+  the main table's `calls` column, since that lever's whole point is fewer round trips, not just
+  fewer tokens.
 - `off` and `defaults` are always run, as the two fixed reference points.
 - `--json` for machine output (`{ rows, anyViolations }`); otherwise a short table (plus the
   per-lever one with `--each`).
@@ -108,14 +113,32 @@ hideUnsupportedTools                       0            0
 alreadyLoaded                    -3710 saved            0
 ```
 
-On `bench/replay-heavy.jsonl` (60 calls, 4 sessions, closer to a real working session — the same
-handful of notes read and searched repeatedly across a few topics, plus a one-off tail of notes
-touched once), the same shape holds at a larger scale: `off` 16,773 tokens, `defaults` 16,773
-(exactly equal — no large note in this file), `searchDetails` alone +1,179, `suggestions` alone
-+1,376, `dedupe` alone −4,314, `alreadyLoaded` alone −9,646.
+On `bench/replay-heavy.jsonl` (67 calls, 4 sessions, closer to a real working session — the same
+handful of notes read and searched repeatedly across a few topics, a few bursts of 2-3 searches
+in a row, plus a one-off tail of notes touched once), the same shape holds at a larger scale:
+`off` 67 calls / 17,581 tokens, `defaults` 60 calls / 16,864 tokens (+717 vs off — no large note
+in this file, so that's entirely `multiQuery`'s doing); alone against `off`, `searchDetails`
++1,466, `suggestions` +1,376, `dedupe` −4,314, `alreadyLoaded` −9,646, `multiQuery` −717 tokens
+AND 7 fewer calls (one per burst — see lib/proxy-levers.js's `DEFAULTS.multiQuery` comment and
+`mergeSearchBursts` in this file for how a burst becomes one call here).
+
+### Stage 0.4.2.2b — `multiQuery` ("several phrasings, one call")
+
+The built-in rule "search in 2-3 phrasings" (lib/memory-rules.js's first rule) used to cost 2-3
+separate model turns, every time: a real usage log showed 20 of 40 searches were immediately
+followed by ANOTHER search, before any read. `multiQuery` (lever 9, `lib/proxy-levers.js`) lets a
+client send all of them in ONE call (`memglow_queries`, advertised on search tools in
+`tools/list`), sends one upstream search per phrasing sequentially, merges the hits (deduped by
+note id — a note found by several phrasings ranks higher — capped to the upstream's usual result
+count), and returns ONE result. Modelled here by `mergeSearchBursts()`: a run of consecutive
+searches by the same session, no read in between, within 2 minutes, becomes one call carrying
+`memglow_queries` before the replay loop runs — so `calls` below counts client-facing round
+trips, exactly what this lever is meant to cut. On by default (`DEFAULTS.multiQuery`): fewer
+calls AND fewer tokens than `off`, on the only file with bursts to show it, 0 violations.
 
 Tests: `test/bench-replay.test.js` (the correctness guard on hand-built fixtures, including one
-that pins what an artificially broken lever looks like to the guard; event loading/grouping; the
-demo AND heavy tables' own invariant — `defaults` tokens `<=` `off` tokens, 0 violations
-everywhere; a guard against `SHIPPED_DEFAULTS` drifting from `lib/proxy-levers.js`'s own
-`DEFAULTS`; `parseArgs` — the `--memory` alias, unknown flags rejected, `--each`).
+that pins what an artificially broken lever looks like to the guard; event loading/grouping,
+`mergeSearchBursts` on its own; the demo AND heavy tables' own invariant — `defaults` tokens
+`<=` `off` tokens AND `defaults` calls `<=` `off` calls, 0 violations everywhere; a guard against
+`SHIPPED_DEFAULTS` drifting from `lib/proxy-levers.js`'s own `DEFAULTS`; `parseArgs` — the
+`--memory` alias, unknown flags rejected, `--each`).

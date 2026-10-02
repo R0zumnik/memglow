@@ -12,13 +12,17 @@
  * "Memory engine speed" in memglow's Memory cost panel).
  *
  * v0.4 levers (lib/proxy-levers.js; switches in memglow.config.json → "proxy", or MEMGLOW_PROXY_*):
- * size warning, richer search results and related-note suggestions (ON by default) only ADD a text
- * block before/after the server's own content; session read de-duplication and table-of-contents
- * first (OFF by default) may replace a read answer; hideUnsupportedTools (OFF by default) removes,
- * from `tools/list` and per client session, the tools a config table marks unsupported for that
- * client (e.g. basic-memory's ChatGPT-only `search`/`fetch`). With every lever off, bytes are
- * relayed unchanged, as before; with levers on, only whole JSON-RPC lines a lever rewrites differ.
- * Nothing is ever written in the notes folder.
+ * size warning (ON) only ADDS a text block before/after the server's own content; richer search
+ * results and related-note suggestions (OFF since stage 0.4.2.2) do the same; session read
+ * de-duplication and table-of-contents first (OFF) may replace a read answer; hideUnsupportedTools
+ * (OFF) removes, from `tools/list` and per client session, the tools a config table marks
+ * unsupported for that client (e.g. basic-memory's ChatGPT-only `search`/`fetch`); multiQuery (ON
+ * since stage 0.4.2.2b) turns a search call's `memglow_queries` into one upstream call PER
+ * PHRASING, sequentially, merged into one reply (bypasses the normal 1-line-in/1-line-out relay
+ * below for that one call — see runStdio's `sub`/`createSubCallSender` and createHttpProxy's
+ * multiQuery branch). With every lever off, bytes are relayed unchanged, as before; with levers
+ * on, only whole JSON-RPC lines a lever rewrites (or, for multiQuery, a request/reply pair it
+ * replaces outright) differ. Nothing is ever written in the notes folder.
  *
  * memglow's built-in memory rules (lib/memory-rules.js) are NOT a lever: ON by default (off with
  * MEMGLOW_RULES=0, or rules.enabled=false in Settings), they add memglow's calibrated
@@ -115,11 +119,18 @@ function lineTap(fn) {
   };
 }
 
+// A transform may return this to mean "write nothing for this line at all" — distinct from
+// `null` ("keep the original line unchanged"). Used by the multiQuery lever: the client's one
+// request becomes several upstream calls (sent directly, bypassing this relay) and ONE merged
+// reply (written directly too, once all of them answer) — so neither the original request line
+// nor any of the synthetic sub-calls' response lines are relayed as is.
+const SUPPRESS = Symbol("memglow-mcp-proxy: suppress this line");
+
 /**
  * Newline-delimited relay that can rewrite whole JSON-RPC lines (stdio transport, levers on).
  * Works on Buffers: a line nobody rewrites is written back byte for byte. `transform(msg)` returns
- * a replacement string (without the newline) or null to keep the line. A line longer than `max`
- * is relayed raw, unparsed.
+ * a replacement string (without the newline) to rewrite the line, `SUPPRESS` to write nothing for
+ * it, or null to keep it as is. A line longer than `max` is relayed raw, unparsed.
  */
 function lineRelay(write, transform, max = 20 * 1024 * 1024) {
   let parts = [], size = 0, raw = false;
@@ -127,6 +138,7 @@ function lineRelay(write, transform, max = 20 * 1024 * 1024) {
     let out = null;
     const txt = line.toString("utf8").trim();
     if (txt) { try { out = transform(JSON.parse(txt)); } catch { out = null; } }
+    if (out === SUPPRESS) return;
     write(out != null ? Buffer.from(out + "\n", "utf8") : line);
   }
   return {
@@ -165,7 +177,8 @@ function sseRelay(write, transform) {
       const data = lines.filter((l) => l.startsWith("data:")).map((l) => l.slice(5).replace(/^ /, "")).join("\n");
       let out = null;
       if (data) { try { out = transform(JSON.parse(data)); } catch { out = null; } }
-      if (out == null) write(blockText + sep);
+      if (out === SUPPRESS) { /* write nothing for this event */ }
+      else if (out == null) write(blockText + sep);
       else write(lines.filter((l) => !l.startsWith("data:")).concat("data: " + out).join("\n") + "\n\n");
     }
   }
@@ -201,6 +214,45 @@ function setupRules(env = process.env, rules = undefined) {
   try { return memoryRules.createRulesRelay({ text: memoryRules.computeRulesText(env) }); } catch { return null; }
 }
 
+// Lever 9 (multiQuery): how long to wait for ONE upstream sub-call before failing that phrasing
+// open (see runSearchCall in lib/proxy-levers.js) rather than hanging the client's call forever.
+const MULTI_QUERY_TIMEOUT_MS = 20000;
+
+/**
+ * Sends the EXTRA upstream calls a multiQuery search makes on its own, outside the normal
+ * request/response relay: `send(tool, args)` writes a `tools/call` with a synthetic id (never
+ * colliding with a client id, which is always a number or a plain client-chosen string) and
+ * resolves with `{result}|{error}` when the matching line arrives; `intercept(m)` is how the
+ * caller recognises that line (so it can suppress it instead of relaying it to the client) —
+ * false for every other message, which the caller keeps handling as usual.
+ */
+function createSubCallSender(write) {
+  const pending = new Map();
+  let n = 0;
+  return {
+    intercept(m) {
+      if (!m || typeof m !== "object" || m.id == null || "method" in m) return false;
+      const resolve = pending.get(String(m.id));
+      if (!resolve) return false;
+      pending.delete(String(m.id));
+      resolve(m.error ? { error: m.error } : { result: m.result });
+      return true;
+    },
+    send(tool, args) {
+      return new Promise((resolve) => {
+        const id = "memglow-mq:" + process.pid + ":" + (++n);
+        let done = false;
+        const finish = (v) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } };
+        const timer = setTimeout(() => { pending.delete(id); finish({ error: { code: -32000, message: "memglow-mcp-proxy: multiQuery upstream timeout" } }); }, MULTI_QUERY_TIMEOUT_MS);
+        if (timer.unref) timer.unref();
+        pending.set(id, finish);
+        try { write(Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: tool, arguments: args } }) + "\n", "utf8")); }
+        catch (e) { pending.delete(id); finish({ error: { code: -32000, message: "memglow-mcp-proxy: " + e.message } }); }
+      });
+    },
+  };
+}
+
 function runStdio(o) {
   if (!o.cmd.length) { process.stderr.write("memglow-mcp-proxy: nothing to run (usage: memglow-mcp-proxy -- <server command>)\n"); process.exit(2); }
   const server = o.name || o.cmd.join(" ").match(/[A-Za-z0-9_-]*(memory|obsidian|notes|filesystem)[A-Za-z0-9_-]*/i)?.[0] || "memory";
@@ -211,14 +263,28 @@ function runStdio(o) {
   if (lv || rules) {
     // Levers on, or the memory rules active: whole lines are relayed (rewritten only when one of
     // the two layers changes them — rules only ever touches an `initialize` response).
+    // multiQuery (lever 9) is handled OUTSIDE this per-line rewrite: it turns the client's one
+    // request into several upstream calls and ONE merged reply, so it needs its own sender
+    // (`sub`, below) rather than the 1 line in → 1 line out shape `transform` has everywhere else.
+    const sub = lv ? createSubCallSender((b) => child.stdin.write(b)) : null;
     const up = lineRelay((b) => child.stdin.write(b), (m) => {
       try { w.fromClient(m); } catch { /* keep relaying */ }
+      if (lv && lv.multiQuery.applies(m)) {
+        lv.multiQuery.run(m, (args) => sub.send(m.params.name, args)).then((r) => {
+          try { w.fromServer(r.message); } catch { /* ignore: the call is still answered below */ }
+          process.stdout.write(JSON.stringify(r.message) + "\n");
+        }).catch(() => {
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, error: { code: -32000, message: "memglow-mcp-proxy: multiQuery failed" } }) + "\n");
+        });
+        return SUPPRESS; // the original line is answered, out of band, once run() resolves
+      }
       let msg = m, changed = false;
       if (rules) { const r = rules.clientMessage(msg); if (r.changed) { msg = r.msg; changed = true; } }
       if (lv) { const r = lv.clientMessage(msg); if (r.changed) { msg = r.msg; changed = true; } }
       return changed ? JSON.stringify(msg) : null;
     });
     const down = lineRelay((b) => process.stdout.write(b), (m) => {
+      if (sub && sub.intercept(m)) return SUPPRESS; // a multiQuery sub-call's answer: never relayed as is
       try { w.fromServer(m); } catch { /* keep relaying */ }
       let msg = m, changed = false;
       if (rules) { const r = rules.serverMessage(msg); if (r.changed) { msg = r.msg; changed = true; } }
@@ -267,12 +333,40 @@ function hopless(h) {
   return out;
 }
 
+/**
+ * One upstream `tools/call`, over HTTP, outside the normal request/response relay: used for the
+ * EXTRA calls a multiQuery search makes on its own. JSON answers only (a sub-call that gets an
+ * SSE answer back fails — the caller fails that phrasing open, same as a network error); the
+ * one call the CLIENT actually asked for still goes through the normal streaming path below,
+ * SSE included.
+ */
+function postJsonRpc(lib, target, baseHeaders, id, tool, args) {
+  return new Promise((resolve) => {
+    const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: tool, arguments: args } }), "utf8");
+    const headers = { ...baseHeaders, "content-type": "application/json", "content-length": String(body.length) };
+    delete headers["content-encoding"];
+    const pr = lib.request(target, { method: "POST", headers }, (ur) => {
+      const parts = [];
+      ur.on("data", (c) => parts.push(c));
+      ur.on("end", () => {
+        try {
+          const j = JSON.parse(Buffer.concat(parts).toString("utf8"));
+          resolve(j && j.error ? { error: j.error } : { result: j && j.result });
+        } catch { resolve({ error: { code: -32000, message: "memglow-mcp-proxy: multiQuery: unreadable upstream response" } }); }
+      });
+    });
+    pr.on("error", (e) => resolve({ error: { code: -32000, message: "memglow-mcp-proxy: multiQuery: " + e.message } }));
+    pr.end(body);
+  });
+}
+
 function createHttpProxy(o) {
   const up = new URL(o.upstream);
   const lib = up.protocol === "https:" ? https : http;
   const server = o.name || up.hostname;
   const lv = o.levers === undefined ? setupLevers(process.env, server) : o.levers; // tests pass their own (or null)
   const rules = setupRules(process.env, o.rules);
+  let mqN = 0;
   return http.createServer((req, res) => {
     const w = createWatcher({ server, source: o.source, onReport: o.onReport });
     const sk = String(req.headers["mcp-session-id"] || "default");
@@ -281,19 +375,42 @@ function createHttpProxy(o) {
     req.on("data", (c) => { size += c.length; if (size <= 10 * 1024 * 1024) chunks.push(c); });
     req.on("end", () => {
       let body = Buffer.concat(chunks);
+      let parsed;
+      if (body.length) { try { parsed = JSON.parse(body.toString("utf8")); } catch { parsed = undefined; /* not JSON */ } }
+      const target = new URL(up.href);
+      const incoming = new URL(req.url, "http://x");
+      incoming.searchParams.forEach((v, k) => target.searchParams.set(k, v));
+      const baseHeaders = hopless(req.headers);
+      delete baseHeaders.host; delete baseHeaders["content-length"];
+
+      // Lever 9 (multiQuery): this ONE client request becomes several upstream calls (sent
+      // directly, below — never through the normal streaming path) and ONE merged reply. Never
+      // for a JSON-RPC batch (an array): each element would need its own independent answer.
+      if (parsed !== undefined && !Array.isArray(parsed) && lv && lv.multiQuery.applies(parsed)) {
+        try { w.fromClient(parsed); } catch { /* keep relaying */ }
+        const sendUpstream = (args) => postJsonRpc(lib, target, baseHeaders, "memglow-mq:" + process.pid + ":" + (++mqN), parsed.params.name, args);
+        lv.multiQuery.run(parsed, sendUpstream).then((r) => {
+          try { w.fromServer(r.message); } catch { /* ignore: the call is still answered below */ }
+          const out = Buffer.from(JSON.stringify(r.message), "utf8");
+          res.writeHead(200, { "content-type": "application/json", "content-length": String(out.length) });
+          res.end(out);
+        }).catch(() => {
+          const out = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, error: { code: -32000, message: "memglow-mcp-proxy: multiQuery failed" } }), "utf8");
+          res.writeHead(200, { "content-type": "application/json", "content-length": String(out.length) });
+          res.end(out);
+        });
+        return;
+      }
+
       let wanted = false;
-      if (body.length) {
-        let parsed;
-        try { parsed = JSON.parse(body.toString("utf8")); } catch { parsed = undefined; /* not JSON */ }
-        if (parsed !== undefined) {
-          try { w.fromClient(parsed); } catch { /* keep relaying */ }
-          let msg = parsed, changed = false;
-          if (rules) { const r = rules.clientMessage(msg, sk); if (r.changed) { msg = r.msg; changed = true; } }
-          if (lv) { const r = lv.clientMessage(msg, sk); if (r.changed) { msg = r.msg; changed = true; } }
-          if (changed) body = Buffer.from(JSON.stringify(msg), "utf8");
-          const ids = (Array.isArray(parsed) ? parsed : [parsed]).map((m) => m && m.id);
-          wanted = (!!lv && lv.wants(ids, sk)) || (!!rules && rules.wants(ids, sk));
-        }
+      if (parsed !== undefined) {
+        try { w.fromClient(parsed); } catch { /* keep relaying */ }
+        let msg = parsed, changed = false;
+        if (rules) { const r = rules.clientMessage(msg, sk); if (r.changed) { msg = r.msg; changed = true; } }
+        if (lv) { const r = lv.clientMessage(msg, sk); if (r.changed) { msg = r.msg; changed = true; } }
+        if (changed) body = Buffer.from(JSON.stringify(msg), "utf8");
+        const ids = (Array.isArray(parsed) ? parsed : [parsed]).map((m) => m && m.id);
+        wanted = (!!lv && lv.wants(ids, sk)) || (!!rules && rules.wants(ids, sk));
       }
       const transform = (m) => {
         try { w.fromServer(m); } catch { /* ignore */ }
@@ -302,12 +419,8 @@ function createHttpProxy(o) {
         if (lv) { const r = lv.serverMessage(msg, sk); if (r.changed) { msg = r.msg; changed = true; } }
         return changed ? JSON.stringify(msg) : null;
       };
-      const headers = hopless(req.headers);
-      delete headers.host; delete headers["content-length"];
+      const headers = { ...baseHeaders };
       if (body.length) headers["content-length"] = String(body.length);
-      const target = new URL(up.href);
-      const incoming = new URL(req.url, "http://x");
-      incoming.searchParams.forEach((v, k) => target.searchParams.set(k, v));
       const pr = lib.request(target, { method: req.method, headers }, (ur) => {
         const type = String(ur.headers["content-type"] || "");
         const encoded = !!ur.headers["content-encoding"] && ur.headers["content-encoding"] !== "identity";
@@ -359,7 +472,7 @@ function createHttpProxy(o) {
 if (require.main === module) {
   const o = parseArgs(process.argv.slice(2));
   if (o.help) {
-    process.stdout.write("usage:\n  memglow-mcp-proxy [--name NAME] -- <memory MCP server command>\n  memglow-mcp-proxy --upstream URL --listen HOST:PORT [--name NAME]\nlevers (v0.4): MEMGLOW_PROXY_SIZE_WARNING, _SEARCH_DETAILS, _SUGGESTIONS (default on), MEMGLOW_PROXY_DEDUPE, _TOC, _ARCHIVE_HINT, _HIDE_UNSUPPORTED (default off)\n  or memglow.config.json → \"proxy\": { ... } — see mcp-proxy/README.md\nmemory rules (default on): MEMGLOW_RULES=0 to turn off, or Settings → Memory rules — see README.md\n");
+    process.stdout.write("usage:\n  memglow-mcp-proxy [--name NAME] -- <memory MCP server command>\n  memglow-mcp-proxy --upstream URL --listen HOST:PORT [--name NAME]\nlevers (v0.4): MEMGLOW_PROXY_SIZE_WARNING, _MULTI_QUERY (default on), _SEARCH_DETAILS, _SUGGESTIONS, MEMGLOW_PROXY_DEDUPE, _TOC, _ARCHIVE_HINT, _HIDE_UNSUPPORTED, _ALREADY_LOADED (default off)\n  or memglow.config.json → \"proxy\": { ... } — see mcp-proxy/README.md\nmemory rules (default on): MEMGLOW_RULES=0 to turn off, or Settings → Memory rules — see README.md\n");
     process.exit(0);
   }
   if (o.upstream) {
@@ -369,4 +482,4 @@ if (require.main === module) {
   } else runStdio(o);
 }
 
-module.exports = { createWatcher, createHttpProxy, lineTap, sseTap, lineRelay, sseRelay, setupLevers, setupRules, parseArgs };
+module.exports = { createWatcher, createHttpProxy, lineTap, sseTap, lineRelay, sseRelay, setupLevers, setupRules, parseArgs, SUPPRESS, createSubCallSender };

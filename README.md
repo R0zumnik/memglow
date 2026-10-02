@@ -184,7 +184,8 @@ the MCP proxy and memglow's own MCP server. **On by default.** (A dedicated benc
 rules' effect is coming — no numbers are claimed here yet.)
 
 The rules are short, English, and cover: search before reading or writing, in a couple of
-phrasings; one note per topic, update rather than duplicate; split a note once it is too large
+phrasings — in one call when the memory tool offers it (`memglow_queries`, the [MCP proxy](#mcp-proxy)'s
+`multiQuery` lever), else as separate calls like before; one note per topic, update rather than duplicate; split a note once it is too large
 (the same threshold as [Memory cost](#memory-cost), real numbers filled in); keep the memory
 [hub and spoke](docs/hub-and-spoke.md) — the index lists project summaries and stand-alone notes
 only, a summary lists its notes, each note links back to its summary rather than to all its
@@ -722,13 +723,16 @@ Tool-name mapping is configurable. Details: [mcp-proxy/README.md](mcp-proxy/READ
 
 **Token-saving and speed levers (v0.4).** The proxy annotates the memory server's *answers* —
 never your notes, which it only reads. Levers 1-3 only add a short block before or after the
-server's own content; 4, 5 and 8 may replace a read answer, so they are off by default.
-`searchDetails` and `suggestions` (2 and 3) were on by default through 0.4.2.1b; measured with
-the free replay harness ([bench/README.md](bench/README.md)) and against a real 2-day usage log,
-they only added delivered tokens without a measurable upside, so stage 0.4.2.2 turned them off by
-default too (shortened either way, for whoever turns them back on) — `sizeWarning` is the one
-lever on by default, since it is a single short line, once per large note per session, that
-plausibly prevents a wasted call.
+server's own content; 4, 5 and 8 may replace a read answer, so they are off by default; 9
+(`multiQuery`) replaces a search call's one request/response pair with several upstream calls
+merged into one, so it is its own case (see below). `searchDetails` and `suggestions` (2 and 3)
+were on by default through 0.4.2.1b; measured with the free replay harness
+([bench/README.md](bench/README.md)) and against a real 2-day usage log, they only added
+delivered tokens without a measurable upside, so stage 0.4.2.2 turned them off by default too
+(shortened either way, for whoever turns them back on). `sizeWarning` and `multiQuery` are the
+two levers on by default: the first is a single short line, once per large note per session,
+that plausibly prevents a wasted call; the second genuinely removes both calls and tokens on a
+real usage log (stage 0.4.2.2b — [bench/README.md](bench/README.md)).
 
 | # | Lever (`proxy` key / variable) | Default | Effect |
 |---|---|---|---|
@@ -740,6 +744,7 @@ plausibly prevents a wasted call.
 | 6 | `archiveHint` / `MEMGLOW_PROXY_ARCHIVE_HINT` | off | A search that finds nothing in the live memory (no result, or only [archive](#archive) notes) → `memglow: nothing found in the live memory — the archive summary lists: …` with the **titles** of the archived sections that match the query (never their text). |
 | 7 | `hideUnsupportedTools` / `MEMGLOW_PROXY_HIDE_UNSUPPORTED` | off | Hides, from `tools/list` and **per client session**, the tools a config table marks unsupported for that client — default: basic-memory's `search`/`fetch` (its ChatGPT-only adapters) hidden from any client that is not OpenAI's MCP client. A client that calls a hidden tool anyway is relayed unchanged; one unrecognised client is never filtered. |
 | 8 | `alreadyLoaded` / `MEMGLOW_PROXY_ALREADY_LOADED` | off | A read of a note memglow knows is **already loaded into the assistant's context at the start of every session** (the index note(s), or an `alwaysLoaded` entry that resolves to a note) → `memglow: "…" is already in your context — … has not changed since this session began (sha …)`, instead of its content, for as long as it stays unchanged. Off by default: memglow cannot know whether your setup truly re-injects the index at session start (a `SessionStart` hook, a `CLAUDE.md` import…) — turn it on only when it does; `memglow init` does not install such an injection on its own. |
+| 9 | `multiQuery` / `MEMGLOW_PROXY_MULTI_QUERY` | on | A search call carrying `memglow_queries` (2-4 extra phrasings, advertised in `tools/list`) is sent upstream as ONE call per phrasing, sequentially, the original first — instead of a separate model turn per phrasing. Hits merged, deduped by note id (found by more phrasings ranks higher), capped to one call's usual result count, returned as ONE result (the server's own hit blocks when safe, else a compact listing); any later phrasing's failed call fails the whole thing open to the first phrasing's own result. |
 | — | `indexWarning` / `MEMGLOW_PROXY_INDEX_WARNING` | off | The **index** note read while above `indexWarningTokens` (default 2,000): `⚠ memglow: the index note … is loaded at every session` — suggests trimming it. Once per session. |
 
 Levers 4, 5 and 8 change what the assistant receives: **measure answer quality before enabling

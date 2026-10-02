@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.4.2.2b — internal (not published)
+
+### Added
+
+- **MCP proxy: lever 9, `multiQuery` ("several phrasings, one call")**, ON by default. The
+  owner's own real usage log: 20 of 40 searches were immediately followed by ANOTHER search,
+  before any read — the built-in rule "search in 2-3 phrasings" (`lib/memory-rules.js`) was
+  costing 2-3 separate model turns every time, each with its own latency and re-sent context.
+  The proxy now accepts an extra argument on every search tool (advertised in `tools/list` when
+  this lever is on, stripped before the call reaches the server either way): `memglow_queries`
+  (an array of up to `MULTI_QUERY_MAX` = 4 extra phrasings, each up to `MULTI_QUERY_LEN_MAX` =
+  200 characters). A call carrying it is sent upstream as ONE call per phrasing — sequentially,
+  the original query first, never in parallel or as a JSON-RPC batch — and the hits are merged:
+  deduped by note id (a note found by several phrasings ranks higher, ties broken by the best
+  rank it had anywhere then by which phrasing found it first), capped to the biggest single
+  phrasing's own hit count, returned as ONE result in the upstream's own format when every
+  phrasing answered in plain text (reassembled from the SERVER'S OWN hit blocks, split on blank
+  lines — never a line memglow invented), else a compact listing of whatever note ids resolve
+  (same style as lever 2, `searchDetails`). Any later phrasing's failed call fails the whole
+  thing open to the FIRST phrasing's own result — what a plain single search would have
+  returned; nothing resolvable anywhere does the same.
+  - Pure logic in `lib/proxy-levers.js`: `planMultiQuery` (validates/caps `memglow_queries`),
+    `mergeRankedIds`/`rankKeys` (the dedup/rank/cap algorithm, usable on its own), merge
+    `mergeSearchResults` (the three tiers above), and the async, transport-agnostic
+    `runSearchCall` (sequential calls + fail-open), all exported for direct testing.
+  - Transport wiring in `mcp-proxy/memglow-mcp-proxy.js`: a multiQuery call bypasses the normal
+    1-request-in/1-response-out relay — `lineRelay`/`sseRelay` gained a `SUPPRESS` sentinel (write
+    nothing for this line/event) so the client's original request and each sub-call's own
+    response are never relayed as is, only the ONE merged reply is. Stdio sends each sub-call as
+    its own `tools/call` with a synthetic id (`createSubCallSender`); HTTP sends each as its own
+    POST to the upstream (`postJsonRpc`) — JSON answers only for sub-calls (the one call the
+    CLIENT asked for still streams normally, SSE included).
+  - `lib/memory-rules.js`'s first rule updated: "if that tool's `memglow_queries` argument is
+    offered, pass all the phrasings in that ONE call; otherwise call it 2-3 times as before" —
+    so an assistant that already follows the habit switches to one call for free.
+  - `bench/replay.js` models it: a run of consecutive searches by the same session, no read in
+    between, within 2 minutes (`mergeSearchBursts`, `MULTI_QUERY_GAP_MS`), becomes ONE call
+    carrying `memglow_queries` before the replay loop runs, so `calls` counts client-facing round
+    trips — exactly what this lever is meant to cut. `bench/replay-heavy.jsonl` gained a few such
+    bursts (67 calls now, up from 60) to exercise it; `bench/replay-demo.jsonl` has none (no
+    change either way, by design — a small demo file was never going to have a realistic burst).
+
+### Changed
+
+- **`DEFAULTS.multiQuery = true`** (`lib/proxy-levers.js`), decided the same way every other
+  lever's default is: `node bench/replay.js --each`, fewer calls AND no more tokens than `off`,
+  or it ships off.
+
+  | file | off | defaults (multiQuery on) | multiQuery alone vs off |
+  |---|---|---|---|
+  | `bench/replay-demo.jsonl` (no bursts) | 14 calls / 5,288 tokens | 14 calls / 5,288 tokens | +0 calls / +0 tokens |
+  | `bench/replay-heavy.jsonl` (a few bursts added) | 67 calls / 17,581 tokens | 60 calls / 16,864 tokens | −7 calls / −717 tokens |
+
+  Fewer calls AND fewer tokens on the only file with bursts to show it, no change on the file
+  without any, 0 violations on both — unlike levers 2/3/6 (`searchDetails`/`suggestions`/
+  `archiveHint`), which only ever ADD explanatory text, this lever can genuinely remove both
+  calls and tokens, so it ships ON alongside `sizeWarning`.
+
 ## 0.4.2.2 — internal (not published)
 
 ### Changed

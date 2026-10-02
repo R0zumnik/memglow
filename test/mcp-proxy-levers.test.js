@@ -82,7 +82,9 @@ const rawNote = (fx, rel) => fs.readFileSync(path.join(fx.notes, rel + ".md"), "
 
 test("defaults (0.4.2.2): only sizeWarning fires — searchDetails/suggestions are opt-in, once per note/session", async () => {
   const fx = makeNotes();
-  const c = start(fx);
+  // multiQuery (0.4.2.2b) is on by default but is a lever of its own — see the dedicated
+  // multiQuery tests below; turned off here so this test stays about levers 1-8 only.
+  const c = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "0" });
   try {
     await c.rpc("initialize", {});
     const list = await c.rpc("tools/list", {});
@@ -177,7 +179,7 @@ test("all levers off: every response line is byte-identical to the upstream's", 
   const fx = makeNotes();
   // MEMGLOW_RULES=0: memglow's built-in memory rules are a separate, independent layer (ON by
   // default) — this test is about the LEVERS being off, see memory-rules.test.js for the rules.
-  const off = { MEMGLOW_PROXY_SIZE_WARNING: "0", MEMGLOW_PROXY_SEARCH_DETAILS: "false", MEMGLOW_PROXY_SUGGESTIONS: "off", MEMGLOW_PROXY_HIDE_UNSUPPORTED: "0", MEMGLOW_RULES: "0" };
+  const off = { MEMGLOW_PROXY_SIZE_WARNING: "0", MEMGLOW_PROXY_SEARCH_DETAILS: "false", MEMGLOW_PROXY_SUGGESTIONS: "off", MEMGLOW_PROXY_HIDE_UNSUPPORTED: "0", MEMGLOW_PROXY_MULTI_QUERY: "0", MEMGLOW_RULES: "0" };
   const c = start(fx, off);
   const d = start(fx, {}, { direct: true });
   try {
@@ -626,9 +628,10 @@ test("config: file `proxy` key, env overrides, clamping", () => {
     const e = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_PROXY_DEDUPE: "0", MEMGLOW_PROXY_TOC: "yes", MEMGLOW_PROXY_SEARCH_TOOLS: "find,lookup", MEMGLOW_PROXY_ALREADY_LOADED: "0" });
     assert.deepStrictEqual([e.dedupe, e.toc, e.alreadyLoaded], [false, true, false]);
     assert.deepStrictEqual(e.searchTools, ["find", "lookup"]);
-    assert.strictEqual(L.anyLever({ ...e, sizeWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false }), false);
+    assert.strictEqual(L.anyLever({ ...e, sizeWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, multiQuery: false }), false);
     const def = L.proxyConfig({ MEMGLOW_HOME: path.join(fx.root, "nowhere") });
     assert.deepStrictEqual([def.sizeWarning, def.searchDetails, def.suggestions, def.dedupe, def.toc, def.alreadyLoaded], [true, false, false, false, false, false]);
+    assert.strictEqual(def.multiQuery, true, "multiQuery on by default since 0.4.2.2b");
     assert.deepStrictEqual(def.alwaysLoaded, [], "no config file: nothing always-loaded beyond the index");
     assert.strictEqual(def.memoryDir, null);
     assert.strictEqual(L.anyLever({ alreadyLoaded: true }), true, "alreadyLoaded alone is enough to turn levers on");
@@ -686,6 +689,140 @@ test("engine: no notes folder → levers needing metadata stay silent; a failing
   broken.clientMessage({ id: 3, method: "tools/call", params: { name: "read_note", arguments: { identifier: "x" } } });
   const m = { id: 3, result: { content: [{ type: "text", text: "hi" }] } };
   assert.deepStrictEqual(broken.serverMessage(m), { msg: m, changed: false });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Lever 9 (multiQuery, 0.4.2.2b) — pure pieces: planMultiQuery, mergeRankedIds, mergeSearchResults,
+// runSearchCall. A minimal fake `index` (resolve/note only — everything these functions touch).
+
+function fakeIndex(notes) {
+  const byId = new Map(Object.entries(notes || {}));
+  return {
+    resolve(ref) {
+      const s = String(ref || "");
+      if (byId.has(s)) return s;
+      const base = s.split("/").pop();
+      return byId.has(base) ? base : null;
+    },
+    note(id) { return byId.get(id) || null; },
+  };
+}
+
+test("planMultiQuery: caps at MULTI_QUERY_MAX total, drops blanks/too-long/duplicates, null when nothing to multiply", () => {
+  assert.strictEqual(L.planMultiQuery({ query: "a" }), null, "no memglow_queries: nothing to multiply");
+  assert.strictEqual(L.planMultiQuery({ query: "a", [L.ARG_QUERIES]: [] }), null, "empty array: nothing to multiply");
+  assert.strictEqual(L.planMultiQuery({ [L.ARG_QUERIES]: ["b"] }), null, "no recognisable query argument at all");
+  assert.strictEqual(L.planMultiQuery({ query: "a", [L.ARG_QUERIES]: ["a", "  ", 42, "a"] }), null, "every entry blank, wrong type, or a duplicate of the main query");
+
+  const plan = L.planMultiQuery({ query: "a", [L.ARG_QUERIES]: ["b", "c", "d", "e", "f"] });
+  assert.strictEqual(plan.queryKey, "query");
+  assert.deepStrictEqual(plan.phrasings, ["a", "b", "c", "d"], `capped at MULTI_QUERY_MAX (${L.MULTI_QUERY_MAX}), extras dropped`);
+
+  const tooLong = "x".repeat(L.MULTI_QUERY_LEN_MAX + 1);
+  const p2 = L.planMultiQuery({ q: "a", [L.ARG_QUERIES]: [tooLong, "b"] });
+  assert.deepStrictEqual(p2.phrasings, ["a", "b"], "over MULTI_QUERY_LEN_MAX: dropped, the valid one kept");
+});
+
+test("mergeRankedIds: dedup by key, a key found by MORE phrasings ranks first, tie-broken by best original rank then first phrasing, capped", () => {
+  // "a": found by phrasing 0 (rank 1) and 1 (rank 0) -> count 2. "b": phrasing 0 only (rank 0) -> count 1.
+  const order = L.mergeRankedIds([["b", "a"], ["a"]], 0);
+  assert.deepStrictEqual(order, ["a", "b"], "a found by both phrasings ranks before b, found by only one");
+  assert.deepStrictEqual(L.mergeRankedIds([["x", "y", "z"]], 2), ["x", "y"], "capped to 2");
+  assert.deepStrictEqual(L.mergeRankedIds([[], []], 5), [], "nothing anywhere: empty, not an error");
+  assert.deepStrictEqual(L.mergeRankedIds([["a", null, "a", "b"]], 0), ["a", "b"], "falsy/duplicate entries within one phrasing ignored");
+});
+
+test("mergeSearchResults: tier A — plain-text hits reassembled from the SERVER'S OWN blocks, deduped by note id, capped to the largest phrasing's own hit count", () => {
+  const idx = fakeIndex({ alice: { id: "alice", label: "Alice" }, bob: { id: "bob", label: "Bob" }, carol: { id: "carol", label: "Carol" } });
+  const r0 = { content: [{ type: "text", text: "### alice\npermalink: alice\nsnippet: s1\n\n### bob\npermalink: bob\nsnippet: s2" }] }; // 2 hits
+  const r1 = { content: [{ type: "text", text: "### bob\npermalink: bob\nsnippet: s2\n\n### carol\npermalink: carol\nsnippet: s3" }] }; // 2 hits, bob again
+  const merged = L.mergeSearchResults(idx, [r0, r1]);
+  assert.strictEqual(merged.content.length, 1);
+  const text = merged.content[0].text;
+  assert.match(text, /### bob[\s\S]*permalink: bob/, "bob (found by both phrasings) kept, verbatim server text");
+  assert.match(text, /### alice/, "alice: found in phrasing 0 at rank 0 — the better tie-break");
+  // bob was found by BOTH phrasings: ranks before alice (found by only one, rank 0 there).
+  assert.ok(text.indexOf("### bob") < text.indexOf("### alice"));
+  // cap = max(2, 2) = 2: alice (rank 0 in its phrasing) edges out carol (rank 1 in its phrasing).
+  assert.strictEqual((text.match(/^### /gm) || []).length, 2);
+  assert.ok(!text.includes("### carol"));
+});
+
+test("mergeSearchResults: tier A keeps the FastMCP text wrap in step with the merged text", () => {
+  const idx = fakeIndex({ alice: { id: "alice", label: "Alice" } });
+  const text = "### alice\npermalink: alice\nsnippet: s1";
+  const r0 = { content: [{ type: "text", text }], structuredContent: { result: text } };
+  const merged = L.mergeSearchResults(idx, [r0, r0]);
+  assert.strictEqual(merged.structuredContent.result, merged.content[0].text);
+});
+
+test("mergeSearchResults: tier B — a compact listing when the format cannot be merged safely (non-text content, or real structuredContent)", () => {
+  const idx = fakeIndex({ alice: { id: "alice", label: "Alice", theme: "people" } });
+  const safe = { content: [{ type: "text", text: "permalink: alice" }] };
+  const unsafe = { content: [{ type: "text", text: "permalink: alice" }], structuredContent: { results: [{ id: "alice" }] } }; // real structured data, not the text wrap
+  const merged = L.mergeSearchResults(idx, [safe, unsafe]);
+  assert.strictEqual(merged.content.length, 1);
+  assert.match(merged.content[0].text, /^memglow: merged results across 2 phrasings:\n- Alice `alice`$/);
+  assert.ok(!("structuredContent" in merged), "tier B never invents a structuredContent");
+});
+
+test("mergeSearchResults: fail open (null) — every phrasing found nothing, or (tier B) no id resolves in unsafe content", () => {
+  const idx = fakeIndex({});
+  assert.strictEqual(L.mergeSearchResults(idx, [{ content: [{ type: "text", text: "No results" }] }, { content: [{ type: "text", text: "No results" }] }]), null, "every phrasing empty");
+  // Plain, all-text, identical blocks still merge (tier A dedups by the block's own text even
+  // with no id) — fail open is for when tier A is skipped (non-text / real structuredContent)
+  // AND tier B's id-sniffing comes up empty too.
+  const unsafe = { content: [{ type: "text", text: "some text with no id or permalink in it" }], structuredContent: { results: [] } };
+  assert.strictEqual(L.mergeSearchResults(idx, [unsafe, unsafe]), null, "unsafe format AND nothing resolves to a note id: fail open");
+});
+
+test("mergeSearchResults: tier A dedups identical un-identifiable text too (no note id needed to collapse a repeat)", () => {
+  const idx = fakeIndex({});
+  const r = { content: [{ type: "text", text: "some text with no id or permalink in it" }] };
+  const merged = L.mergeSearchResults(idx, [r, r]);
+  assert.strictEqual(merged.content[0].text, "some text with no id or permalink in it");
+});
+
+test("runSearchCall: sequential, one call per phrasing, the original query first; multiQuery off or no plan -> exactly one call", async () => {
+  const idx = fakeIndex({ alice: { id: "alice", label: "Alice" } });
+  const sent = [];
+  const sendUpstream = async (args) => { sent.push(args); return { result: { content: [{ type: "text", text: "permalink: alice" }] } }; };
+
+  const off = await L.runSearchCall({ multiQuery: false }, idx, { query: "a", [L.ARG_QUERIES]: ["b"] }, sendUpstream);
+  assert.strictEqual(off.calls, 1);
+  assert.ok(!(L.ARG_QUERIES in sent[0]), "memglow_queries stripped even when multiQuery is off");
+  assert.strictEqual(sent[0].query, "a");
+
+  sent.length = 0;
+  const r = await L.runSearchCall({ multiQuery: true }, idx, { query: "a", [L.ARG_QUERIES]: ["b", "c"] }, sendUpstream);
+  assert.strictEqual(r.calls, 3);
+  assert.deepStrictEqual(sent.map((a) => a.query), ["a", "b", "c"], "sequential, original query first");
+  for (const a of sent) assert.ok(!(L.ARG_QUERIES in a));
+});
+
+test("runSearchCall: fail open — a LATER phrasing's error relays the FIRST phrasing's own result unchanged, never a partial merge", async () => {
+  const idx = fakeIndex({ alice: { id: "alice", label: "Alice" } });
+  const firstResult = { content: [{ type: "text", text: "permalink: alice" }] };
+  let n = 0;
+  const sendUpstream = async () => { n++; return n === 1 ? { result: firstResult } : { error: { code: -32000, message: "boom" } }; };
+  const r = await L.runSearchCall({ multiQuery: true }, idx, { query: "a", [L.ARG_QUERIES]: ["b", "c"] }, sendUpstream);
+  assert.strictEqual(r.calls, 2, "stopped at the failing phrasing, never tried the third");
+  assert.deepStrictEqual(r.message, { result: firstResult });
+});
+
+test("runSearchCall: the FIRST phrasing's own error relays as is — exactly what a plain single search would have returned", async () => {
+  const idx = fakeIndex({});
+  const sendUpstream = async () => ({ error: { code: -32001, message: "upstream exploded" } });
+  const r = await L.runSearchCall({ multiQuery: true }, idx, { query: "a", [L.ARG_QUERIES]: ["b"] }, sendUpstream);
+  assert.strictEqual(r.calls, 1);
+  assert.deepStrictEqual(r.message, { error: { code: -32001, message: "upstream exploded" } });
+});
+
+test("runSearchCall: a rejected sendUpstream (thrown/rejected promise) never throws — relayed as an upstream error", async () => {
+  const idx = fakeIndex({});
+  const r = await L.runSearchCall({ multiQuery: false }, idx, { query: "a" }, async () => { throw new Error("network down"); });
+  assert.strictEqual(r.calls, 1);
+  assert.match(r.message.error.message, /network down/);
 });
 
 test("lineRelay keeps untouched lines byte for byte (multi-byte split, CRLF, partial tail); sseRelay rewrites one event", () => {
@@ -792,6 +929,98 @@ test("hideUnsupportedTools over HTTP: two simultaneous sessions (Claude Code and
     // Repeat tools/list on the Claude Code session again: still filtered, unaffected by the other session.
     const again = await post("sess-claude", "tools/list", {});
     assert.deepStrictEqual(names(again), ["read_note", "search_notes"]);
+  } finally {
+    upstream.closeAllConnections(); upstream.close();
+    proxy.closeAllConnections(); proxy.close();
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Lever 9 (multiQuery, 0.4.2.2b) — end to end, stdio and HTTP.
+
+test("multiQuery over stdio: tools/list advertises memglow_queries on search tools only; one upstream call per phrasing, merged into one reply; stripped and inert when off", async () => {
+  const fx = makeNotes();
+  const on = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "1" });
+  try {
+    await on.rpc("initialize", {});
+    const list = await on.rpc("tools/list", {});
+    const names = list.result.tools.map((t) => t.name);
+    for (const n of names) {
+      const hasArg = "memglow_queries" in (list.result.tools.find((t) => t.name === n).inputSchema.properties || {});
+      assert.strictEqual(hasArg, ["search_notes", "search"].includes(n), `${n}: memglow_queries only on search tools`);
+    }
+    // "secretbody" alone already matches alice/bob/carol/big (cap = 4, the biggest single
+    // phrasing's own hit count); the other two phrasings narrow to alice/bob specifically, so
+    // those two are found by MORE phrasings and rank first — merge, dedup AND rank, visibly.
+    const r = await on.call("search_notes", { query: "secretbody", memglow_queries: ["alice", "bob"] });
+    assert.strictEqual(r.result.content.length, 1, "ONE merged result for the client's ONE call");
+    const text = r.result.content[0].text;
+    assert.match(text, /alice/); assert.match(text, /bob/); assert.match(text, /carol/); assert.match(text, /\bbig\b/);
+    assert.ok(text.indexOf("alice") < text.indexOf("carol"), "alice (found by 2 phrasings) ranks before carol (found by 1)");
+    const log = fs.readFileSync(fx.log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.deepStrictEqual(log.map((l) => l.args.query), ["secretbody", "alice", "bob"], "one upstream call per phrasing, sequential, original first");
+    for (const l of log) assert.ok(!("memglow_queries" in l.args), "memglow_queries never reaches the upstream server");
+  } finally { await on.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+
+  const fx2 = makeNotes();
+  const off = start(fx2, { MEMGLOW_PROXY_MULTI_QUERY: "0" });
+  try {
+    await off.rpc("initialize", {});
+    const list = await off.rpc("tools/list", {});
+    assert.ok(!JSON.stringify(list).includes("memglow_queries"), "off: never advertised");
+    const r = await off.call("search_notes", { query: "SECRETBODY-alice", memglow_queries: ["SECRETBODY-bob"] });
+    assert.strictEqual(texts(r).length, 1);
+    const log = fs.readFileSync(fx2.log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.strictEqual(log.length, 1, "off: exactly one upstream call, memglow_queries ignored");
+    assert.ok(!("memglow_queries" in log[0].args), "off: still stripped before reaching the server");
+  } finally { await off.close(); fs.rmSync(fx2.root, { recursive: true, force: true }); }
+});
+
+test("multiQuery over stdio: a plain search (no memglow_queries) is unaffected by the lever being on — still exactly one call", async () => {
+  const fx = makeNotes();
+  const c = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "1" });
+  try {
+    const plain = await c.call("search_notes", { query: "SECRETBODY-alice" });
+    assert.strictEqual(texts(plain).length, 1);
+    const log = fs.readFileSync(fx.log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.strictEqual(log.length, 1, "a plain search (no memglow_queries) is still exactly one call");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("multiQuery over HTTP: one merged response, upstream received one POST per phrasing, Content-Length correct", async () => {
+  const fx = makeNotes();
+  const cfg = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_MEMORY_DIR: fx.notes, MEMGLOW_DATA_DIR: fx.data, MEMGLOW_LARGE_NOTE_TOKENS: "1000", MEMGLOW_PROXY_MULTI_QUERY: "1" });
+  const engine = L.createLevers({ config: cfg, index: L.createNoteIndex(cfg), savings: L.createSavings({ ...cfg, savingsFile: false, log: false }) });
+  const received = [];
+  const upstream = http.createServer((req, res) => {
+    let b = ""; req.on("data", (c) => (b += c));
+    req.on("end", () => {
+      const m = JSON.parse(b);
+      received.push(m.params.arguments.query);
+      const q = String(m.params.arguments.query || "").toLowerCase();
+      const hits = q.includes("alice") ? "### alice\npermalink: people/alice\nsnippet: s" : q.includes("bob") ? "### bob\npermalink: people/bob\nsnippet: s" : "No results";
+      const body = JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: hits }] } });
+      res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(body) });
+      res.end(body);
+    });
+  });
+  await new Promise((ok) => upstream.listen(0, "127.0.0.1", ok));
+  const proxy = createHttpProxy({ upstream: `http://127.0.0.1:${upstream.address().port}/mcp`, name: "notes", onReport: () => {}, levers: engine });
+  await new Promise((ok) => proxy.listen(0, "127.0.0.1", ok));
+  const base = `http://127.0.0.1:${proxy.address().port}/mcp`;
+  try {
+    const res = await fetch(base, { method: "POST", headers: { "content-type": "application/json", "mcp-session-id": "s1" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "search_notes", arguments: { query: "alice", memglow_queries: ["bob"] } } }) });
+    const bodyText = await res.text();
+    assert.strictEqual(Number(res.headers.get("content-length")), Buffer.byteLength(bodyText));
+    const j = JSON.parse(bodyText);
+    assert.strictEqual(j.id, 1);
+    // Each phrasing's own fake upstream call returns exactly ONE hit here, so cap = 1: only the
+    // best-ranked entry (alice, the original/first phrasing) survives — the merge/dedup/rank/cap
+    // logic itself is unit-tested on its own above; this test is about the HTTP wiring.
+    assert.match(j.result.content[0].text, /alice/);
+    assert.deepStrictEqual(received, ["alice", "bob"], "one upstream POST per phrasing, sequential");
   } finally {
     upstream.closeAllConnections(); upstream.close();
     proxy.closeAllConnections(); proxy.close();

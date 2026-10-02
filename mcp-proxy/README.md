@@ -113,6 +113,7 @@ about. Rules, for every lever:
 | 6 | `archiveHint` | off | A search that finds nothing in the live memory (an empty answer such as `No results` or `"results": []`, or hits only in the [archive folder](../README.md#archive)) → after the server's answer: `memglow: nothing found in the live memory — the archive summary lists: "Router setup" (from \`home-net\`, archived 2026-06-01 in \`habits-archive\`, ≈420 tokens)`. Titles of the archived sections matching the query (up to `archiveHintMax`, 5), read from the archive summary note — never their text. Nothing matches: a one-line pointer to the summary note. No archive summary: nothing added. |
 | 7 | `hideUnsupportedTools` | off | Removes, from `tools/list`, the tools a per-server table marks unsupported for the client that just said hello — never from a `tools/call`, which always reaches the real server untouched. |
 | 8 | `alreadyLoaded` | off | A single-note read (never `build_context` or another `multiNoteTools` entry) of a note memglow knows is loaded into the context at the start of **every** session — the index note(s), or an `alwaysLoaded` entry (see `README.md`'s "Always loaded" cost, `lib/always-loaded.js`) that resolves to a note — gets `memglow: "<label>" (≈N tokens) is already in your context — it is loaded at the start of every session and has not changed since this session began (sha <8 hex chars>). Use it from there. To get the full text anyway, call again with "memglow_fresh": true.` instead of its content, for as long as the note's file (read directly off disk) matches the hash captured at the start of the session. A note that changed meanwhile is never stubbed: its full, current text comes back with one extra line saying so. |
+| 9 | `multiQuery` | **on** | A search tool call carrying `memglow_queries` (2-4 extra phrasings, up to `MULTI_QUERY_MAX` total, added to the search tools' schemas in `tools/list`) is sent upstream as ONE call per phrasing — sequentially, the original query first — instead of the assistant spending a separate turn on each one. Hits are merged, deduped by note id (found by more phrasings ranks higher), capped to the biggest single phrasing's own hit count, and returned as ONE result: in the upstream's own format when safe (plain-text hits reassembled from the server's own blocks), else a compact listing of whatever note ids resolve; a later phrasing's failed call fails the whole thing open to the FIRST phrasing's own result — what a plain single search would have returned. `memglow_queries` is always stripped before a call reaches the server, even with this lever off. |
 | — | `indexWarning` | off | Before the content of the **index** note when it is over `indexWarningTokens` (top-level key, default 2,000): `⚠ memglow: the index note "…" is ≈N tokens (index threshold T) and it is loaded at every session. Consider offering the user to trim it…`. Once per session. Replaces lever 1 for the index note when on. |
 
 ### Stage 0.4.2.2 — "lean defaults"
@@ -245,6 +246,58 @@ the short stub back would be actively wrong, not just unhelpful. A file that can
 moment of the check (removed, permissions) is treated the same as "not already loaded": full
 content, no note.
 
+### Lever 9 — `multiQuery`: several phrasings, one call
+
+memglow's own [memory rules](../README.md#memory-rules) tell the assistant to search in 2-3
+phrasings before reading or writing — good advice, but without this lever each phrasing is a
+separate `tools/call`, i.e. a separate model turn: a real usage log showed 20 of 40 searches were
+immediately followed by ANOTHER search, with no read in between, each one costing latency and
+re-sent context for nothing the model couldn't have asked for in one go.
+
+`multiQuery` adds an argument to every search tool's schema in `tools/list`:
+
+```json
+"memglow_queries": { "type": "array", "items": { "type": "string", "maxLength": 200 }, "maxItems": 4 }
+```
+
+When a call carries it (alongside the tool's own query argument, which always stays the FIRST
+phrasing), the proxy makes one upstream call per phrasing — **sequentially**, never in parallel
+or as a JSON-RPC batch — and merges the hits into ONE answer:
+
+1. **Dedup and rank** by note id: a note found by several phrasings ranks ahead of one found by
+   only one, ties broken by the best (lowest) rank it had in any single phrasing, then by which
+   phrasing found it first.
+2. **Cap** to the biggest single phrasing's own hit count ("the upstream's usual result count") —
+   several phrasings never balloon the answer past what one search normally returns.
+3. **Format**: when every phrasing's answer is plain text (no `structuredContent` other than the
+   FastMCP text wrap), the merged answer is reassembled from the SERVER'S OWN hit blocks (split on
+   blank lines, the same convention basic-memory and this proxy's own test fixtures use) — "the
+   upstream's own format", just reordered and deduped, never a line memglow invented. Otherwise
+   (a non-text part, or real structured hit data the proxy does not understand) it falls back to a
+   compact listing of whatever note ids it can resolve, same style as lever 2 (`searchDetails`).
+4. **Fail open**: a phrasing's call that errors or rejects stops the run right there. If it was the
+   FIRST phrasing, its own error is relayed — exactly what a plain single search would have
+   returned. If it was a LATER one, the FIRST phrasing's own successful result is relayed
+   unchanged, never a partial merge. If nothing resolves to a note id anywhere (and the text isn't
+   safe to reassemble as is), the first phrasing's result is relayed unchanged too.
+
+`memglow_queries` is **always** stripped before a call reaches the server, even with this lever
+off — a client that sends it anyway (having seen it advertised once, then the lever got turned
+off) never leaks it upstream as an unrecognised argument.
+
+**On by default** — stage 0.4.2.2b, measured with the free replay harness
+([bench/replay.js](../bench/README.md)): `bench/replay-demo.jsonl` has no back-to-back searches
+to collapse (no change either way); `bench/replay-heavy.jsonl` (after adding a few bursts of 2-3
+consecutive searches) drops from 67 to 60 calls AND from 17,581 to 16,864 tokens with the lever
+on (alone, vs off: -717 tokens AND 7 fewer calls — one per burst), 0 violations on both files.
+Unlike levers 2/3/6 (which only ever ADD explanatory text) this lever can genuinely remove both
+calls and tokens, which is why it ships on, alongside `sizeWarning`.
+
+Reused by [`lib/memory-rules.js`](../lib/memory-rules.js)'s first rule: "if that tool's
+`memglow_queries` argument is offered, pass all the phrasings in that ONE call; otherwise call it
+2-3 times as before" — so an assistant that already follows memglow's search-in-phrasings habit
+switches to one call for free, the day its memory server is wrapped by a proxy with this lever on.
+
 ### Examples
 
 (Levers 2 and 3 are off by default since stage 0.4.2.2 — these examples assume they were turned
@@ -305,6 +358,7 @@ sets `memoryDir`), or the file named by `MEMGLOW_CONFIG`:
     "hideUnsupportedTools": false,
     "unsupportedTools": { "basic-memory": { "search": ["openai-mcp"], "fetch": ["openai-mcp"] } },
     "alreadyLoaded": false,
+    "multiQuery": true,
     "readTools": ["read_note", "view_note", "read_content", "fetch", "build_context"],
     "multiNoteTools": ["build_context"],
     "searchTools": ["search_notes", "search"],
@@ -324,7 +378,7 @@ Environment variables win over the file:
 
 | Variable | Meaning |
 |---|---|
-| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_INDEX_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT`, `MEMGLOW_PROXY_HIDE_UNSUPPORTED`, `MEMGLOW_PROXY_ALREADY_LOADED` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
+| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_INDEX_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT`, `MEMGLOW_PROXY_HIDE_UNSUPPORTED`, `MEMGLOW_PROXY_ALREADY_LOADED`, `MEMGLOW_PROXY_MULTI_QUERY` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
 | `MEMGLOW_PROXY_READ_TOOLS`, `MEMGLOW_PROXY_MULTI_NOTE_TOOLS`, `MEMGLOW_PROXY_SEARCH_TOOLS`, `MEMGLOW_PROXY_WRITE_TOOLS` | comma-separated tool names (defaults above: basic-memory's) |
 | `MEMGLOW_LARGE_NOTE_TOKENS` | the threshold (default 5000) |
 | `MEMGLOW_MEMORY_DIR` (or `MEMORY_DIR`) | the notes folder, if not in the config file |

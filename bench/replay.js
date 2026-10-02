@@ -56,11 +56,14 @@ const LEVER_ENV = {
   archiveHint: "MEMGLOW_PROXY_ARCHIVE_HINT",
   hideUnsupportedTools: "MEMGLOW_PROXY_HIDE_UNSUPPORTED",
   alreadyLoaded: "MEMGLOW_PROXY_ALREADY_LOADED",
+  multiQuery: "MEMGLOW_PROXY_MULTI_QUERY",
 };
 const LEVER_NAMES = Object.keys(LEVER_ENV);
 // The shipped defaults (lib/proxy-levers.js DEFAULTS), named here explicitly so this file keeps
 // working unchanged even if that module's own defaults ever drift.
-const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false };
+const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false, multiQuery: true };
+// multiQuery (lever 9, 0.4.2.2b): "no read in between, within 2 min" — see mergeSearchBursts below.
+const MULTI_QUERY_GAP_MS = 2 * 60 * 1000;
 
 function sha1(s) { return crypto.createHash("sha1").update(s).digest("hex"); }
 
@@ -195,6 +198,48 @@ function loadEvents(file) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// multiQuery (lever 9, 0.4.2.2b): models what the lever turns a model's habit of several
+// searches in a row into — ONE call carrying `memglow_queries` — so runConfig can measure it the
+// same way every other lever is measured: feed `--with multiQuery` (or the `defaults` row, since
+// it ships on) the SAME event file as `off`, and see what changes.
+
+/**
+ * Collapses a run of consecutive SEARCH-tool calls by the SAME session, with no OTHER tool call
+ * between them and each at most MULTI_QUERY_GAP_MS ("2 min") after the previous, into ONE call
+ * carrying `memglow_queries` (lib/proxy-levers.js ARG_QUERIES) — the owner's real log that
+ * motivated this stage: 20 of 40 searches were followed by ANOTHER search before any read, each
+ * one a separate model turn under the old "search in 2-3 phrasings" rule (lib/memory-rules.js).
+ * Pure, order-preserving; a non-search call, a different session, too long a silence, or a run
+ * already at `L.MULTI_QUERY_MAX` phrasings all end the current run (the latter starts a fresh
+ * one on the same call instead of dropping it). A lone search is returned unchanged — only a RUN
+ * of 2 or more gets `memglow_queries` added.
+ */
+function mergeSearchBursts(calls, searchTools) {
+  const tools = new Set(searchTools && searchTools.length ? searchTools : ["search_notes", "search"]);
+  const out = [];
+  let run = null; // { call, phrasings: [string, ...], lastT }
+  function flush() {
+    if (!run) return;
+    out.push(run.phrasings.length > 1 ? { ...run.call, args: { ...run.call.args, [L.ARG_QUERIES]: run.phrasings.slice(1) } } : run.call);
+    run = null;
+  }
+  for (const c of calls) {
+    const isSearch = tools.has(c.tool);
+    if (isSearch && run && run.call.session === c.session && c.t - run.lastT <= MULTI_QUERY_GAP_MS && run.phrasings.length < L.MULTI_QUERY_MAX) {
+      const q = L.queryOf(c.args);
+      if (q) run.phrasings.push(q);
+      run.lastT = c.t;
+      continue; // absorbed into the run, no longer its own call
+    }
+    flush();
+    if (isSearch) run = { call: c, phrasings: [L.queryOf(c.args)], lastT: c.t };
+    else out.push(c);
+  }
+  flush();
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Correctness guard (pure, exported, tested on its own in test/bench-replay.test.js)
 
 /**
@@ -248,7 +293,7 @@ function eachLeverConfigs() {
   return LEVER_NAMES.map((name) => ({ key: "alone:" + name, label: name + " (alone)", flags: { ...off, [name]: true } }));
 }
 
-function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
+async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-replay-"));
   const notesDir = path.join(work, "notes");
   copyDir(memoryDir, notesDir);
@@ -295,16 +340,30 @@ function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
     return s;
   }
 
-  for (const ev of events) {
+  // multiQuery (lever 9): a run of several consecutive searches becomes ONE call carrying
+  // `memglow_queries` BEFORE the main loop — "calls" below then counts CLIENT-facing round trips
+  // (what the model actually spends a turn on), which is exactly what this lever is meant to cut;
+  // the merged call itself still makes one upstream call per phrasing (see engine.multiQuery.run).
+  const mergedEvents = config.multiQuery ? mergeSearchBursts(events, config.searchTools) : events;
+
+  for (const ev of mergedEvents) {
     if (memory) memory.scan(); // deterministic: metadata is never stale across a synchronous replay
     const s = sessionState(ev.session);
     const reqId = nextId++;
     const req = { jsonrpc: "2.0", id: reqId, method: "tools/call", params: { name: ev.tool, arguments: ev.args } };
-    const afterClient = engine.clientMessage(req, ev.session).msg;
-    const upRes = upstream.call(afterClient.params.name, afterClient.params.arguments);
-    if (memory) memory.scan(); // a write just happened: see it before the next call
-    const resMsg = { jsonrpc: "2.0", id: reqId, ...upRes };
-    const afterServer = engine.serverMessage(resMsg, ev.session).msg;
+    let afterServer;
+    if (config.multiQuery && engine.multiQuery.applies(req)) {
+      const sendUpstream = (args) => Promise.resolve(upstream.call(ev.tool, args));
+      const r = await engine.multiQuery.run(req, sendUpstream);
+      if (memory) memory.scan();
+      afterServer = engine.serverMessage(r.message, ev.session).msg;
+    } else {
+      const afterClient = engine.clientMessage(req, ev.session).msg;
+      const upRes = upstream.call(afterClient.params.name, afterClient.params.arguments);
+      if (memory) memory.scan(); // a write just happened: see it before the next call
+      const resMsg = { jsonrpc: "2.0", id: reqId, ...upRes };
+      afterServer = engine.serverMessage(resMsg, ev.session).msg;
+    }
     calls++;
 
     const contentArr = afterServer.result && Array.isArray(afterServer.result.content) ? afterServer.result.content : [];
@@ -394,7 +453,7 @@ function printEachBreakdown(rows) {
   }
 }
 
-function main() {
+async function main() {
   const o = parseArgs(process.argv.slice(2));
   if (o.help) {
     console.log("usage: node bench/replay.js [--memory-dir <dir> | --memory <dir>] [--events <file>] [--with lever,lever]... [--always-loaded entry,entry] [--each] [--json]");
@@ -412,7 +471,7 @@ function main() {
   if (!events.length) { console.error("bench/replay: no events to replay"); process.exitCode = 2; return; }
 
   const configs = [...namedConfigs(o.withCombos), ...(o.each ? eachLeverConfigs() : [])];
-  const results = configs.map((c) => ({ key: c.key, label: c.label, ...runConfig(c.flags, events, { memoryDir: o.memoryDir, alwaysLoaded: o.alwaysLoaded }) }));
+  const results = await Promise.all(configs.map(async (c) => ({ key: c.key, label: c.label, ...(await runConfig(c.flags, events, { memoryDir: o.memoryDir, alwaysLoaded: o.alwaysLoaded })) })));
   const rows = summarize(results);
   const anyViolations = rows.some((r) => r.violations > 0);
 
@@ -425,8 +484,9 @@ function main() {
   process.exitCode = anyViolations ? 1 : 0;
 }
 
-if (require.main === module) main();
+if (require.main === module) main().catch((e) => { console.error("bench/replay: " + (e && e.stack || e)); process.exitCode = 1; });
 module.exports = {
   loadEvents, normalizeCalls, portalToCalls, namedConfigs, eachLeverConfigs, runConfig, summarize,
   isReachable, idsOfReadCall, withPermalink, makeUpstream, sha1, parseArgs, LEVER_NAMES, SHIPPED_DEFAULTS, GAP_MS,
+  mergeSearchBursts, MULTI_QUERY_GAP_MS,
 };
