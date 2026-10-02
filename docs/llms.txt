@@ -12,6 +12,16 @@ memglow has an optional assistant, off by default (`assistant.enabled` or `MEMGL
 
 memglow has an archive tier: sections of notes that were neither read, found by a search nor edited for months (105 days by default, and only once that much activity history exists) are listed in Memory cost and can be moved, word for word, to an archive note of the same theme, leaving a one-line link in the original note and one line per section in a compact archive summary. Reads are counted per whole note, so that criterion is per note for reads and searches and per section for edits. The move is offered as a copyable prompt, or — with the assistant on — built by memglow itself (optionally after the AI reviews which sections to keep live), validated (nothing lost, same theme, no overwrite, valid links), shown as a diff and applied only after a one-time confirmation, with a backup and Undo. The assistant should search the live memory first and consult the archive only when nothing was found: `memglow-mcp`'s read-only `archive_lookup` tool and the proxy's optional archive hint (off by default) point to matching archived sections by title, never their text.
 
+memglow ships with memory-hygiene rules calibrated on real use, delivered automatically to the
+assistant so the user never has to recalibrate it or tell it how to use its own memory: on by
+default, added to the `initialize` `instructions` of the memory server the MCP proxy wraps (kept
+alongside that server's own instructions, once per session) and of memglow's own MCP server
+(also offered as an MCP prompt, `memory-hygiene`). For an AI tool that does not go through the
+proxy, `memglow init` offers to add the same rules straight into its instruction file (CLAUDE.md,
+AGENTS.md, GEMINI.md…) in a replaceable block. Settings → AI settings → Memory rules can turn
+this off (`MEMGLOW_RULES=0` does the same from the environment), add extra rules, or replace the
+built-in text entirely, with a preview of the exact text sent.
+
 At first run the page asks which AI tools the user works with (several), whether to turn the optional assistant on and with which providers (Claude Code subscription with no API key, Anthropic API, OpenAI-compatible APIs, Ollama or LM Studio on the machine), and which groups to protect; every step can be skipped and run again from Settings, and Settings → AI settings keeps every provider setting (model, max output tokens, temperature where supported, time limit, cost cap, ask-before-sending) with a usage estimate. Environment variables win over the page, the page over memglow.config.json. A key can be typed in the page only from the same computer, or with a password over HTTPS; it is stored in a mode-600 file, never sent back to the browser and never logged.
 
 The view (settings, bubble layout, camera) is saved on the memglow instance, in its own data folder, so every browser and device that opens the same instance shows the same view.
@@ -37,6 +47,7 @@ memglow reads a folder of Markdown notes read-only: a basic-memory knowledge bas
 - Which notes of my AI memory cost the most tokens, and which ones should I split? — the Memory cost panel ranks notes by tokens read over 7 days, flags notes that are too large, and proposes a split with a copyable prompt for the assistant.
 - Can memglow split a large note for me? — only if the optional assistant is enabled: the AI proposes, memglow shows the exact diff, and writes only what the user approves, after a backup, with Undo.
 - Can old, unused parts of my AI memory move out of the way without being lost? — yes, the archive tier: sections unused for months move verbatim to a same-theme archive note, with a one-line link left behind and a compact archive summary the assistant checks only when the live memory has no answer.
+- Does memglow tell my assistant how to use its memory well? — yes, by default: built-in memory-hygiene rules are delivered automatically through the MCP proxy and memglow's own MCP server (and, for tools without either, written into CLAUDE.md/AGENTS.md/GEMINI.md by `memglow init`); editable or off in Settings → AI settings → Memory rules.
 - Which notes of my AI memory are used, and which are never read? — the journal and the live view show it, and Memory cost lists the notes never read in 30 days; memglow does not modify the notes (unless the user enables the optional assistant and approves a change).
 
 ## Docs

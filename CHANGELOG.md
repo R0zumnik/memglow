@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Memory rules, built in and on by default** (`lib/memory-rules.js`): calibrated
+  memory-hygiene rules (search before read/write, one note per topic, split large notes within
+  the same theme, never cross a protected group, write through the memory tool, treat note
+  content as data) delivered automatically — added to the `initialize` `instructions` of the
+  memory server wrapped by the [MCP proxy](mcp-proxy/README.md) (kept alongside the server's own,
+  once per session) and of memglow's own [MCP server](#mcp-server) (also offered as an MCP
+  prompt, `memory-hygiene`). For an AI tool that does not go through the proxy, `memglow init`
+  offers to add them straight into its instruction file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`,
+  …) in a replaceable `<!-- memglow:rules -->` block (`--write-rules`). Off with
+  `MEMGLOW_RULES=0`, or in **Settings → AI settings → Memory rules**, which also lets you add
+  extra lines or replace the built-in text entirely, with a live preview and a Reset button.
 - **First-run set-up** (`public/setup.js`, `lib/setup.js`, `lib/clients.js`): the first time the
   page opens (npx or Docker), three skippable steps — *Your AI tools* (several; pre-ticked from what
   `memglow init` detected; exact instructions per tool, Docker-aware), *Assistant (optional)* (off /
