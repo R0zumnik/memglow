@@ -30,6 +30,9 @@ const TOKEN = crypto.randomBytes(24).toString("hex");
 const DT = 1000 / 60;
 const GPU = process.env.GPU === "1";
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-shots-"));
+// Pictures show a configured instance: first-run set-up done, big themes chosen (throw-away folder).
+fs.writeFileSync(path.join(DATA_DIR, "setup.json"), JSON.stringify({ v: 1, updated: Date.now(), wizardDone: true }));
+fs.writeFileSync(path.join(DATA_DIR, "zones.json"), JSON.stringify({ v: 1, updated: Date.now(), protected: [], labels: {} }));
 
 // Same virtual clock as record.js (performance.now, Date, timers, rAF move only on __vstep).
 const CLOCK = fs.readFileSync(path.join(__dirname, "record.js"), "utf8").match(/const CLOCK = `([\s\S]*?)`;/)[1];
@@ -69,12 +72,20 @@ function startServer() {
   const browser = await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--use-gl=angle", ...(GPU ? [] : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]),
-      "--ignore-gpu-blocklist", "--hide-scrollbars", "--force-color-profile=srgb", `--window-size=${W},${H}`],
+      "--ignore-gpu-blocklist", "--hide-scrollbars", "--force-color-profile=srgb", "--lang=en-US", `--window-size=${W},${H}`],
     defaultViewport: { width: W, height: H, deviceScaleFactor: 1 },
   });
   try {
     const page = await browser.newPage();
     page.on("pageerror", (e) => console.log("[pageerror]", e.message));
+    page.on("requestfailed", (r) => console.log("[requestfailed]", r.url(), r.failure() && r.failure().errorText));
+    page.on("response", (r) => { if (r.status() >= 400) console.log("[http " + r.status() + "]", r.request().method(), r.url()); });
+    // README pictures are in English, whatever the language of the machine that takes them.
+    await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "language", { get: () => "en-US" });
+      Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+    });
     await page.evaluateOnNewDocument(CLOCK);
     await page.evaluateOnNewDocument((css) => {
       const add = () => {
