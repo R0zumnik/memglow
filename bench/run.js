@@ -11,7 +11,9 @@
  *
  * Variants: A = the memory server directly; B = through the proxy, every lever off (control: must
  * match A); C = proxy, default levers (sizeWarning + searchDetails + suggestions); D = C + dedupe;
- * E = C + toc. The (question × variant × repetition) list is shuffled with the seed and run one at
+ * E = C + toc; I = C + alreadyLoaded (stage 0.4.2.1 — needs a session with an index note the
+ * fixture's `memglow.config.json` points at; not run by default, see VARIANTS below). The
+ * (question × variant × repetition) list is shuffled with the seed and run one at
  * a time. Each run is a fresh `claude -p` with: an empty working folder, a clean environment
  * (no CLAUDE_* variable of the calling session), --restricted (no user/project settings, so no
  * hooks), --strict-mcp-config with ONE server named "memory", --tools "" (no built-in tool at all:
@@ -54,7 +56,7 @@ const WRITE_TOOLS = ["write_note", "edit_note", "delete_note", "move_note", "cre
 const PROMPT = (q) => "Answer the question below from the user's notes, which you can reach only through the memory tools. " +
   "Reply with the answer in one short sentence. If the notes do not contain the answer, say that you could not find it.\n\nQuestion: " + q;
 
-const LEVERS_OFF = { MEMGLOW_PROXY_SIZE_WARNING: "0", MEMGLOW_PROXY_SEARCH_DETAILS: "0", MEMGLOW_PROXY_SUGGESTIONS: "0", MEMGLOW_PROXY_DEDUPE: "0", MEMGLOW_PROXY_TOC: "0", MEMGLOW_PROXY_INDEX_WARNING: "0", MEMGLOW_PROXY_ARCHIVE_HINT: "0", MEMGLOW_PROXY_HIDE_UNSUPPORTED: "0" };
+const LEVERS_OFF = { MEMGLOW_PROXY_SIZE_WARNING: "0", MEMGLOW_PROXY_SEARCH_DETAILS: "0", MEMGLOW_PROXY_SUGGESTIONS: "0", MEMGLOW_PROXY_DEDUPE: "0", MEMGLOW_PROXY_TOC: "0", MEMGLOW_PROXY_INDEX_WARNING: "0", MEMGLOW_PROXY_ARCHIVE_HINT: "0", MEMGLOW_PROXY_HIDE_UNSUPPORTED: "0", MEMGLOW_PROXY_ALREADY_LOADED: "0" };
 const DEFAULTS_ON = { ...LEVERS_OFF, MEMGLOW_PROXY_SIZE_WARNING: "1", MEMGLOW_PROXY_SEARCH_DETAILS: "1", MEMGLOW_PROXY_SUGGESTIONS: "1" };
 const VARIANTS = {
   A: { label: "direct (no memglow)", proxy: null },
@@ -64,6 +66,10 @@ const VARIANTS = {
   E: { label: "C + toc", proxy: { ...DEFAULTS_ON, MEMGLOW_PROXY_TOC: "1" } },
   // H = B + hideUnsupportedTools only (isolates lever 7's own effect against the B control).
   H: { label: "B + hideUnsupportedTools", proxy: { ...LEVERS_OFF, MEMGLOW_PROXY_HIDE_UNSUPPORTED: "1" } },
+  // I = C + alreadyLoaded (lever 8, stage 0.4.2.1). Only meaningful in --mode sessions, with a
+  // session's first question re-reading the index note memglow.config.json's `indexNote` points
+  // at — not exercised by bench/sessions.json yet, so not in any --variants default; not run here.
+  I: { label: "C + alreadyLoaded", proxy: { ...DEFAULTS_ON, MEMGLOW_PROXY_ALREADY_LOADED: "1" } },
 };
 
 function args(argv) {

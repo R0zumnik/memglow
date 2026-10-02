@@ -88,8 +88,8 @@ about. Rules, for every lever:
   sizes), through the same code as the viewer, and cached: it is rescanned at most once per
   `pollMs` (2 s), plus once after each successful write.
 - **The server's answer is kept as is.** Levers 1-3 only *add* a text block before or after the
-  server's own `content` items, which stay byte-for-byte identical. Only levers 4 and 5, both off by
-  default, replace an answer — and only a plain-text read answer (never one carrying other
+  server's own `content` items, which stay byte-for-byte identical. Only levers 4, 5 and 8, all off
+  by default, replace an answer — and only a plain-text read answer (never one carrying other
   `structuredContent`, never `build_context`, which returns several notes).
 - **FastMCP text wrapper.** basic-memory (like any FastMCP server with `wrap_result`) sends each
   answer twice: in `content` and as `structuredContent: { "result": "<the same text>" }`. Claude
@@ -112,6 +112,7 @@ about. Rules, for every lever:
 | 5 | `toc` | off | A note over the threshold first comes back as its description plus its sections with ≈tokens each; the assistant then asks for one section (`"memglow_section": "Decisions"` or `"3"`), cut verbatim from the server's answer. |
 | 6 | `archiveHint` | off | A search that finds nothing in the live memory (an empty answer such as `No results` or `"results": []`, or hits only in the [archive folder](../README.md#archive)) → after the server's answer: `memglow: nothing found in the live memory — the archive summary lists: "Router setup" (from \`home-net\`, archived 2026-06-01 in \`habits-archive\`, ≈420 tokens)`. Titles of the archived sections matching the query (up to `archiveHintMax`, 5), read from the archive summary note — never their text. Nothing matches: a one-line pointer to the summary note. No archive summary: nothing added. |
 | 7 | `hideUnsupportedTools` | off | Removes, from `tools/list`, the tools a per-server table marks unsupported for the client that just said hello — never from a `tools/call`, which always reaches the real server untouched. |
+| 8 | `alreadyLoaded` | off | A single-note read (never `build_context` or another `multiNoteTools` entry) of a note memglow knows is loaded into the context at the start of **every** session — the index note(s), or an `alwaysLoaded` entry (see `README.md`'s "Always loaded" cost, `lib/always-loaded.js`) that resolves to a note — gets `memglow: "<label>" (≈N tokens) is already in your context — it is loaded at the start of every session and has not changed since this session began (sha <8 hex chars>). Use it from there. To get the full text anyway, call again with "memglow_fresh": true.` instead of its content, for as long as the note's file (read directly off disk) matches the hash captured at the start of the session. A note that changed meanwhile is never stubbed: its full, current text comes back with one extra line saying so. |
 | — | `indexWarning` | off | Before the content of the **index** note when it is over `indexWarningTokens` (top-level key, default 2,000): `⚠ memglow: the index note "…" is ≈N tokens (index threshold T) and it is loaded at every session. Consider offering the user to trim it…`. Once per session. Replaces lever 1 for the index note when on. |
 
 ### Lever 7 — `hideUnsupportedTools`: one client, one tool list
@@ -157,30 +158,64 @@ relayed untouched), but the measured gain was not large or certain enough on thi
 memglow's own bar for an on-by-default lever. Turning it on is reasonable for a basic-memory setup
 behind a non-OpenAI client: `MEMGLOW_PROXY_HIDE_UNSUPPORTED=1`.
 
-> **Levers 4 and 5 change what the assistant receives. Measure answer quality before enabling
+> **Levers 4, 5 and 8 change what the assistant receives. Measure answer quality before enabling
 > them**, not only the tokens saved: an assistant whose context was compacted may no longer have
-> the earlier copy of a note, and an outline is not the note.
+> the earlier copy of a note, and an outline — or "it's already in your context" — is not the note.
 
 **Measured** (Claude Code + basic-memory, 225 test notes, 21 questions, Haiku and Sonnet —
 [bench/RESULTS.md](../bench/RESULTS.md)): the default levers 1-3 made no measurable difference;
 `toc` cut the note text the assistant received by about two thirds with every answer still
 correct, but added a round trip (≈ +12 % input tokens and time, ≈ −13 % cost with Haiku);
-`dedupe` could not be judged with one question per session.
+`dedupe` could not be judged with one question per session. `alreadyLoaded` (stage 0.4.2.1) has
+not been benchmarked yet — see variant `I` in `bench/run.js`, not run by default.
 
-**Getting the full note back (levers 4 and 5).** When either is on, the proxy adds an optional
-`memglow_fresh` argument (and `memglow_section` for lever 5) to the read tools it lists in
-`tools/list`; the proxy strips them before the call reaches the server. And for clients that cannot
-send extra arguments: **the read that follows a short answer always returns the full content** —
-repeating the same call is enough.
+**Getting the full note back (levers 4, 5 and 8).** When any of them is on, the proxy adds an
+optional `memglow_fresh` argument (and `memglow_section` for lever 5) to the read tools it lists in
+`tools/list`; the proxy strips them before the call reaches the server. For levers 4 and 5, clients
+that cannot send extra arguments have another way out: **the read that follows a short answer
+always returns the full content** — repeating the same call is enough. Lever 8 does not work that
+way: unlike a dedupe stub (shown once, for the second-and-later read of the same note), its stub
+would come back on every matching read for as long as the note stays unchanged, exactly because
+the note is *still* already loaded — so only `"memglow_fresh": true` brings the full text back.
 
 Why lever 5 works this way: basic-memory's `read_note` has no section parameter (`page` /
 `page_size` only page fallback-search results and never cut the note), so the proxy fetches the
 whole note from the server and returns the outline or the requested section itself.
 
-**Savings** from levers 4 and 5 are written as one line on the proxy's stderr (your MCP client's
+**Savings** from levers 4, 5 and 8 are written as one line on the proxy's stderr (your MCP client's
 log: `memglow-mcp-proxy: dedupe saved ≈5291 tokens on garden-project (session total ≈5291)`) and
 added per day to `proxy-savings.json` in memglow's data folder (`~/.memglow` by default, never the
 notes folder). The read itself is still reported to the viewer, which lights the note up as usual.
+
+### Lever 8 — `alreadyLoaded`: skip what the assistant's context already has
+
+Prompted by real basic-memory usage logs where the always-loaded index note (already injected at
+session start by a host's own mechanism — a `SessionStart` hook, a `CLAUDE.md` import) was ALSO
+read explicitly several times through the MCP server: a pure duplicate, every time.
+
+"Known always loaded" is the index note(s) (`memory.indexNote` / `indexNote`, default
+`["MEMORY", "index"]`) plus any `alwaysLoaded` entry (the main config's own list, used for the
+Memory cost panel's "Always loaded" figure, `lib/always-loaded.js`) that **resolves to an existing
+note** — an instruction file outside the notes folder (`CLAUDE.md`, `AGENTS.md`…) simply never
+matches and is harmlessly skipped: this lever can only ever replace an answer the memory server
+itself would have returned.
+
+**Default: off.** memglow has no way to know whether your setup truly re-injects the index at the
+start of every session — turning this on when it does not would hide a note the assistant has
+in fact never seen. `memglow init` does not install any such injection itself (checked: it only
+offers to add memglow's own *memory rules* to `CLAUDE.md`/`AGENTS.md`, instructions to use the MCP
+tools — never the index's actual content); if your own setup does inject it (your own
+`SessionStart` hook, or a `CLAUDE.md` `@import` of the index file), turn this on with
+`MEMGLOW_PROXY_ALREADY_LOADED=1` or `"proxy": { "alreadyLoaded": true }`.
+
+**"Has not changed since this session began"** is checked against a sha1 of the note's file, read
+directly off disk (never through the memory server) and captured once per proxy session — at
+`initialize` (every reconnect gets a fresh one), or lazily at the first read if a read arrives
+first. A note that changed since is **never stubbed**: its full, current text comes back, with one
+extra line saying it changed — the assistant's in-context copy of it really is stale, so handing it
+the short stub back would be actively wrong, not just unhelpful. A file that cannot be read at the
+moment of the check (removed, permissions) is treated the same as "not already loaded": full
+content, no note.
 
 ### Examples
 
@@ -226,6 +261,7 @@ sets `memoryDir`), or the file named by `MEMGLOW_CONFIG`:
 {
   "memoryDir": "/path/to/notes",
   "largeNoteTokens": 5000,
+  "alwaysLoaded": ["~/.claude/CLAUDE.md"],
   "proxy": {
     "sizeWarning": true,
     "searchDetails": true,
@@ -237,6 +273,7 @@ sets `memoryDir`), or the file named by `MEMGLOW_CONFIG`:
     "archiveHintMax": 5,
     "hideUnsupportedTools": false,
     "unsupportedTools": { "basic-memory": { "search": ["openai-mcp"], "fetch": ["openai-mcp"] } },
+    "alreadyLoaded": false,
     "readTools": ["read_note", "view_note", "read_content", "fetch", "build_context"],
     "multiNoteTools": ["build_context"],
     "searchTools": ["search_notes", "search"],
@@ -248,11 +285,15 @@ sets `memoryDir`), or the file named by `MEMGLOW_CONFIG`:
 }
 ```
 
+`alwaysLoaded` is the top-level key (not under `proxy`): the same list the Memory cost panel's
+"Always loaded" figure already reads (`lib/always-loaded.js`). Lever 8 reuses it as is; an entry
+that is not a note (most instruction files) is simply never matched.
+
 Environment variables win over the file:
 
 | Variable | Meaning |
 |---|---|
-| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_INDEX_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT`, `MEMGLOW_PROXY_HIDE_UNSUPPORTED` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
+| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_INDEX_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT`, `MEMGLOW_PROXY_HIDE_UNSUPPORTED`, `MEMGLOW_PROXY_ALREADY_LOADED` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
 | `MEMGLOW_PROXY_READ_TOOLS`, `MEMGLOW_PROXY_MULTI_NOTE_TOOLS`, `MEMGLOW_PROXY_SEARCH_TOOLS`, `MEMGLOW_PROXY_WRITE_TOOLS` | comma-separated tool names (defaults above: basic-memory's) |
 | `MEMGLOW_LARGE_NOTE_TOKENS` | the threshold (default 5000) |
 | `MEMGLOW_MEMORY_DIR` (or `MEMORY_DIR`) | the notes folder, if not in the config file |

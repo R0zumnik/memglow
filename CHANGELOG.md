@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.2.1 — internal (not published)
+
+### Added
+
+- **MCP proxy lever 8, `alreadyLoaded`** (`lib/proxy-levers.js`, off by default): real usage data
+  on the owner's own memory showed the always-loaded index note — already injected into context
+  at session start by a host's `SessionStart` hook — was ALSO read explicitly 6 times through the
+  memory MCP server over two days (≈16k tokens, ≈17 % of all tokens read): a pure duplicate. The
+  new lever stubs a single-note read (never a `multiNoteTools` call) of a note memglow knows is
+  always loaded — the index note(s), or a configured `alwaysLoaded` entry that resolves to a note
+  — with a short `memglow: "<label>" (≈N tokens) is already in your context — … has not changed
+  since this session began (sha …8 chars). Use it from there. To get the full text anyway, call
+  again with "memglow_fresh": true.` A note that changed since the session began is never stubbed:
+  its full, current text is returned instead, with a one-line "(changed since the start of this
+  session)" note. Default **off**: memglow cannot know whether a given setup truly re-injects the
+  index at session start (checked: `memglow init` does not install any such injection itself, only
+  memglow's memory rules in `CLAUDE.md`/`AGENTS.md`) — turn it on (`proxy.alreadyLoaded` /
+  `MEMGLOW_PROXY_ALREADY_LOADED`) only when it does. Tokens saved are counted the same way as
+  `dedupe`/`toc` (`createSavings`, kind `"alreadyLoaded"`), coexisting with stage 0.4.2's per-client
+  accounting in the same `proxy-savings.json`. Config-only for now (no settings-page toggle), like
+  every other lever before a settings UI exists. Documented in `README.md` and
+  `mcp-proxy/README.md`; a non-run `I` variant added to `bench/run.js` for a future benchmark.
+
 ## 0.4.2 — internal (not published)
 
 ### Added

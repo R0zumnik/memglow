@@ -387,6 +387,121 @@ test("table of contents first (opt-in): outline, one section verbatim, full on d
   }
 });
 
+/** Overwrites the test fixture's index note with enough text that its stub (lever 8) is shorter than it. */
+function growIndex(fx) {
+  fs.writeFileSync(path.join(fx.notes, "MEMORY.md"), "# Index\n[[alice]] [[big]]\n\n" + "Paragraph about the project context. ".repeat(40));
+}
+
+test("alreadyLoaded (opt-in): the index note is stubbed every read while unchanged, memglow_fresh bypasses it, other notes and multi-note tools are untouched, savings counted", async () => {
+  const fx = makeNotes();
+  growIndex(fx);
+  const c = start(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_SUGGESTIONS: "0" });
+  try {
+    await c.rpc("initialize", {});
+    const list = await c.rpc("tools/list", {});
+    const rn = list.result.tools.find((t) => t.name === "read_note");
+    assert.strictEqual(rn.inputSchema.properties.memglow_fresh.type, "boolean", "lever 8 alone is enough to advertise memglow_fresh");
+    assert.ok(!rn.inputSchema.properties.memglow_section, "lever 8 never adds memglow_section (that one is lever 5's)");
+    assert.ok(!list.result.tools.find((t) => t.name === "build_context").inputSchema.properties.memglow_fresh, "multi-note tools untouched");
+
+    const full = rawNote(fx, "MEMORY");
+    const stub = texts(await c.call("read_note", { identifier: "MEMORY" }));
+    assert.strictEqual(stub.length, 1);
+    assert.match(stub[0], /^memglow: "MEMORY" \(≈\d+ tokens\) is already in your context — it is loaded at the start of every session and has not changed since this session began \(sha [0-9a-f]{8}\)\. Use it from there\. To get the full text anyway, call again with "memglow_fresh": true\.$/);
+    assert.ok(!stub[0].includes("Paragraph about"), "no body in the stub");
+
+    // Unlike dedupe (second+ read only), every read of an unchanged always-loaded note is stubbed.
+    assert.deepStrictEqual(texts(await c.call("read_note", { identifier: "MEMORY" })), stub);
+
+    // Escape hatch: memglow_fresh gives the real content back.
+    assert.deepStrictEqual(texts(await c.call("read_note", { identifier: "MEMORY", memglow_fresh: true })), [full]);
+    const logged = fs.readFileSync(fx.log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.ok(logged.every((e) => !("memglow_fresh" in e.args)), "memglow_fresh never reaches the server");
+
+    // A note that is neither the index nor a configured `alwaysLoaded` entry is never touched.
+    assert.deepStrictEqual(texts(await c.call("read_note", { identifier: "alice" })), [rawNote(fx, "people/alice")]);
+
+    // Multi-note tools never get the stub, even for the index note.
+    const ctx = texts(await c.call("build_context", { url: "memory://MEMORY" }));
+    assert.ok(ctx.some((t) => t.includes("Paragraph about")), "build_context (multi-note) is never shortened by lever 8");
+  } finally {
+    await c.close();
+    assert.match(c.stderr(), /memglow-mcp-proxy: alreadyLoaded saved ≈\d+ tokens on MEMORY/);
+    const sv = JSON.parse(fs.readFileSync(path.join(fx.data, "proxy-savings.json"), "utf8"));
+    const day = Object.values(sv.days)[0];
+    assert.ok(day.alreadyLoaded > 0 && day.alreadyLoadedCalls >= 2, JSON.stringify(sv));
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test("alreadyLoaded (opt-in): a resolved `alwaysLoaded` config entry is stubbed too; an entry that is not a note is simply ignored", async () => {
+  const fx = makeNotes();
+  fs.writeFileSync(path.join(fx.home, "memglow.config.json"), JSON.stringify({ alwaysLoaded: ["projects/big.md", "/etc/some-other-tool/AGENTS.md"] }));
+  const c = start(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_SUGGESTIONS: "0", MEMGLOW_LARGE_NOTE_TOKENS: "100000" });
+  try {
+    await c.rpc("initialize", {});
+    const stub = texts(await c.call("read_note", { identifier: "big" }));
+    assert.strictEqual(stub.length, 1);
+    assert.match(stub[0], /^memglow: "Big plan" \(≈\d+ tokens\) is already in your context/);
+    assert.ok(!stub[0].includes("SECRETBODY"));
+    // A note that is not listed (and not the index) is never touched.
+    assert.deepStrictEqual(texts(await c.call("read_note", { identifier: "alice" })), [rawNote(fx, "people/alice")]);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("alreadyLoaded (opt-in): a note changed since the session began is never stubbed — full content, with a one-line note; a fresh session re-captures the baseline", async () => {
+  const fx = makeNotes();
+  growIndex(fx);
+  const c = start(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_SUGGESTIONS: "0" });
+  try {
+    await c.rpc("initialize", {});
+    assert.strictEqual(texts(await c.call("read_note", { identifier: "MEMORY" })).length, 1, "unchanged: stubbed");
+
+    fs.writeFileSync(path.join(fx.notes, "MEMORY.md"), "# Index\n[[alice]] [[big]] [[carol]]\n\nSomething NEW was added.\n");
+    const changed = texts(await c.call("read_note", { identifier: "MEMORY" }));
+    assert.strictEqual(changed.length, 2);
+    assert.strictEqual(changed[0], rawNote(fx, "MEMORY"), "full, current content — never a stub for a changed note");
+    assert.match(changed[1], /^memglow: "MEMORY" was already in your context at the start of this session, but it has changed since the start of this session \(now sha [0-9a-f]{8}\) — shown in full\.$/);
+
+    // Still "changed" on a further read of the same session: the baseline is not updated mid-session.
+    const again = texts(await c.call("read_note", { identifier: "MEMORY" }));
+    assert.strictEqual(again.length, 2);
+    assert.match(again[1], /has changed since the start of this session/);
+
+    // A new session (re-`initialize`) captures a fresh baseline: the new content is "unchanged" again.
+    await c.rpc("initialize", {});
+    assert.strictEqual(texts(await c.call("read_note", { identifier: "MEMORY" })).length, 1, "new session, new baseline: stubbed again");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("alreadyLoaded: off by default — the index note is delivered in full, exactly as every other lever would be", async () => {
+  const fx = makeNotes();
+  growIndex(fx);
+  const c = start(fx, { MEMGLOW_PROXY_SUGGESTIONS: "0" });
+  try {
+    const t = texts(await c.call("read_note", { identifier: "MEMORY" }));
+    assert.ok(t.some((x) => x.includes("Paragraph about")), "full content still delivered, lever 8 is off by default");
+    assert.ok(!t.some((x) => x.includes("already in your context")));
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("alreadyLoaded: a lever failure (fileHash throwing on the live check) never breaks the relay", () => {
+  const cfg = { ...L.proxyConfig({ MEMGLOW_HOME: os.tmpdir(), MEMGLOW_CONFIG: path.join(os.tmpdir(), "none.json") }), alreadyLoaded: true, readTools: ["read_note"], multiNoteTools: [] };
+  let calls = 0;
+  const idx = {
+    resolve: (r) => (r === "MEMORY" ? "MEMORY" : null),
+    note: (id) => (id === "MEMORY" ? { id: "MEMORY", label: "MEMORY", theme: "index", tokens: 999 } : null),
+    related: () => [], afterWrite() {}, isArchive: () => false, archiveEntries: () => [],
+    alwaysLoadedIds: () => new Set(["MEMORY"]),
+    fileHash() { calls++; if (calls === 1) return "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"; throw new Error("disk exploded"); },
+  };
+  const e = L.createLevers({ config: cfg, index: idx, savings: { add() {}, addClient() {} } });
+  e.clientMessage({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }); // baseline captured here (call #1)
+  e.clientMessage({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "read_note", arguments: { identifier: "MEMORY" } } });
+  const msg = { jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "permalink: MEMORY\n" + "z".repeat(4000) }] } };
+  assert.deepStrictEqual(e.serverMessage(msg), { msg, changed: false }, "the live fileHash check (call #2) throws: relay unchanged");
+});
+
 test("levers 4/5 never touch structuredContent answers; the proxy writes nothing in the notes folder", async () => {
   const fx = makeNotes();
   const before = snapshot(fx.notes);
@@ -466,7 +581,8 @@ test("config: file `proxy` key, env overrides, clamping", () => {
   const fx = makeNotes();
   fs.writeFileSync(path.join(fx.home, "memglow.config.json"), JSON.stringify({
     memoryDir: fx.notes, largeNoteTokens: 3000,
-    proxy: { dedupe: true, suggestions: false, suggestionsMax: 99, readTools: ["read_note"] },
+    alwaysLoaded: ["  CLAUDE.md  ", "", "bad\u0001name", "a".repeat(600), ...Array.from({ length: 25 }, (_, i) => "f" + i)],
+    proxy: { dedupe: true, suggestions: false, suggestionsMax: 99, readTools: ["read_note"], alreadyLoaded: true },
   }));
   try {
     const c = L.proxyConfig({ MEMGLOW_HOME: fx.home });
@@ -475,13 +591,20 @@ test("config: file `proxy` key, env overrides, clamping", () => {
     assert.deepStrictEqual(c.readTools, ["read_note"]);
     assert.strictEqual(c.largeNoteTokens, 3000);
     assert.strictEqual(c.memoryDir, fx.notes);
-    const e = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_PROXY_DEDUPE: "0", MEMGLOW_PROXY_TOC: "yes", MEMGLOW_PROXY_SEARCH_TOOLS: "find,lookup" });
-    assert.deepStrictEqual([e.dedupe, e.toc], [false, true]);
+    assert.strictEqual(c.alreadyLoaded, true);
+    assert.ok(c.alwaysLoaded.includes("CLAUDE.md"), "trimmed");
+    assert.ok(!c.alwaysLoaded.some((s) => s.includes("\u0001")), "control characters rejected");
+    assert.ok(!c.alwaysLoaded.includes("a".repeat(600)), "over-long entry rejected");
+    assert.strictEqual(c.alwaysLoaded.length, 20, "capped at 20");
+    const e = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_PROXY_DEDUPE: "0", MEMGLOW_PROXY_TOC: "yes", MEMGLOW_PROXY_SEARCH_TOOLS: "find,lookup", MEMGLOW_PROXY_ALREADY_LOADED: "0" });
+    assert.deepStrictEqual([e.dedupe, e.toc, e.alreadyLoaded], [false, true, false]);
     assert.deepStrictEqual(e.searchTools, ["find", "lookup"]);
     assert.strictEqual(L.anyLever({ ...e, sizeWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false }), false);
     const def = L.proxyConfig({ MEMGLOW_HOME: path.join(fx.root, "nowhere") });
-    assert.deepStrictEqual([def.sizeWarning, def.searchDetails, def.suggestions, def.dedupe, def.toc], [true, true, true, false, false]);
+    assert.deepStrictEqual([def.sizeWarning, def.searchDetails, def.suggestions, def.dedupe, def.toc, def.alreadyLoaded], [true, true, true, false, false, false]);
+    assert.deepStrictEqual(def.alwaysLoaded, [], "no config file: nothing always-loaded beyond the index");
     assert.strictEqual(def.memoryDir, null);
+    assert.strictEqual(L.anyLever({ alreadyLoaded: true }), true, "alreadyLoaded alone is enough to turn levers on");
     // hideUnsupportedTools: off by default, basic-memory's search/fetch gated to openai-mcp by default.
     assert.strictEqual(def.hideUnsupportedTools, false);
     assert.deepStrictEqual(def.unsupportedTools, L.DEFAULT_UNSUPPORTED_TOOLS);

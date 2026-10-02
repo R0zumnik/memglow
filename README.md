@@ -722,7 +722,7 @@ Tool-name mapping is configurable. Details: [mcp-proxy/README.md](mcp-proxy/READ
 
 **Token-saving and speed levers (v0.4).** The proxy annotates the memory server's *answers* —
 never your notes, which it only reads. Levers 1-3 only add a short block before or after the
-server's own content; 4 and 5 may replace a read answer, so they are off by default.
+server's own content; 4, 5 and 8 may replace a read answer, so they are off by default.
 
 | # | Lever (`proxy` key / variable) | Default | Effect |
 |---|---|---|---|
@@ -733,11 +733,14 @@ server's own content; 4 and 5 may replace a read answer, so they are off by defa
 | 5 | `toc` / `MEMGLOW_PROXY_TOC` | off | A large note → its outline with ≈tokens per section first; then one section on demand. |
 | 6 | `archiveHint` / `MEMGLOW_PROXY_ARCHIVE_HINT` | off | A search that finds nothing in the live memory (no result, or only [archive](#archive) notes) → `memglow: nothing found in the live memory — the archive summary lists: …` with the **titles** of the archived sections that match the query (never their text). |
 | 7 | `hideUnsupportedTools` / `MEMGLOW_PROXY_HIDE_UNSUPPORTED` | off | Hides, from `tools/list` and **per client session**, the tools a config table marks unsupported for that client — default: basic-memory's `search`/`fetch` (its ChatGPT-only adapters) hidden from any client that is not OpenAI's MCP client. A client that calls a hidden tool anyway is relayed unchanged; one unrecognised client is never filtered. |
+| 8 | `alreadyLoaded` / `MEMGLOW_PROXY_ALREADY_LOADED` | off | A read of a note memglow knows is **already loaded into the assistant's context at the start of every session** (the index note(s), or an `alwaysLoaded` entry that resolves to a note) → `memglow: "…" is already in your context — … has not changed since this session began (sha …)`, instead of its content, for as long as it stays unchanged. Off by default: memglow cannot know whether your setup truly re-injects the index at session start (a `SessionStart` hook, a `CLAUDE.md` import…) — turn it on only when it does; `memglow init` does not install such an injection on its own. |
 | — | `indexWarning` / `MEMGLOW_PROXY_INDEX_WARNING` | off | The **index** note read while above `indexWarningTokens` (default 2,000): `⚠ memglow: the index note … is loaded at every session` — suggests trimming it. Once per session. |
 
-Levers 4 and 5 change what the assistant receives: **measure answer quality before enabling
-them**. Repeating the same read, or adding `"memglow_fresh": true`, always brings the full note
-back. Configuration (`memglow.config.json` → `"proxy": {…}`), examples and the exact rules:
+Levers 4, 5 and 8 change what the assistant receives: **measure answer quality before enabling
+them**. Adding `"memglow_fresh": true` always brings the full note back; for 4 and 5, repeating
+the same read works too (lever 8 keeps stubbing a still-unchanged, still-already-loaded note on
+every read, so only `memglow_fresh` escapes it). Configuration (`memglow.config.json` →
+`"proxy": {…}`), examples and the exact rules:
 [mcp-proxy/README.md](mcp-proxy/README.md#token-saving-and-speed-levers-v04).
 
 <a id="mcp-server"></a>
