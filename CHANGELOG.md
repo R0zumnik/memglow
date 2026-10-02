@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.2.1b — internal (not published)
+
+### Added
+
+- **Free replay harness, `bench/replay.js`** (+ `bench/replay-demo.jsonl`, `bench/README.md`): a
+  self-verification loop for every future change to the MCP proxy levers, with zero model calls,
+  zero network, deterministic. Drives `lib/proxy-levers.js::createLevers` directly — the same
+  `clientMessage`/`serverMessage` entry points the real proxy uses — against a tiny in-process
+  fake upstream answering from a notes folder, under named configurations (`off`, `defaults`, and
+  any `--with lever,lever` combination on top of `defaults`). Reports calls, tokens delivered to
+  the model, and savings against `off`; accepts either a JSONL/JSON-array file of tool calls
+  (`{session,tool,args,t}`) or the r0zumnik portal's own `{evenements:[...]}` activity shape
+  (sessions inferred from `source` + a 30-minute silence). A **correctness guard** checks, for
+  every read, that the note's full current text stays reachable (delivered in full earlier in
+  the same session and unchanged, in the always-loaded context and unchanged, or the stub names
+  the `memglow_fresh` escape hatch) — exit code 1 on any violation. `test/bench-replay.test.js`
+  pins the guard (including an artificially broken lever), event loading/grouping, and the demo
+  table's own invariant (`off` vs `+alreadyLoaded`: positive saving, 0 violations).
+
 ## 0.4.2.1 — internal (not published)
 
 ### Added
