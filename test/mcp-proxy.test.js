@@ -61,8 +61,10 @@ test("stdio proxy: bytes relayed unchanged, ids reported (no content), exit code
   const { srv, got, url } = await receiver();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-px-"));
   try {
+    // MEMGLOW_RULES=0: this test is about the watcher/relay mechanics (ids reported, byte-exact
+    // relay, exit code), not about memglow's built-in memory rules — see memory-rules.test.js.
     const p = spawn(process.execPath, [PROXY, "--name", "basic-memory", "--source", "test", "--", process.execPath, FAKE],
-      { env: { ...process.env, MEMGLOW_URL: url, MEMGLOW_TOKEN: "p".repeat(40), MEMGLOW_HOME: home, MEMGLOW_FAKE_MCP: "1" } });
+      { env: { ...process.env, MEMGLOW_URL: url, MEMGLOW_TOKEN: "p".repeat(40), MEMGLOW_HOME: home, MEMGLOW_FAKE_MCP: "1", MEMGLOW_RULES: "0" } });
     let out = ""; p.stdout.on("data", (d) => (out += d));
     const exited = new Promise((ok) => p.on("exit", ok));
     const msgs = [

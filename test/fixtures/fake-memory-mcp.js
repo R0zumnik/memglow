@@ -81,7 +81,13 @@ process.stdin.on("data", (c) => {
     let out;
     if (m.method === "tools/list") out = { jsonrpc: "2.0", id: m.id, result: { tools: TOOLS } };
     else if (m.method === "tools/call") out = { jsonrpc: "2.0", id: m.id, ...call(m.params.name, m.params.arguments || {}) };
-    else if (m.id != null) out = { jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } } };
+    else if (m.id != null) {
+      var result = { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } };
+      // FAKE_INSTRUCTIONS=1: this upstream server already has its own `instructions` (so proxy
+      // tests can check memglow's rules are appended, not replacing them).
+      if (m.method === "initialize" && process.env.FAKE_INSTRUCTIONS) result.instructions = process.env.FAKE_INSTRUCTIONS;
+      out = { jsonrpc: "2.0", id: m.id, result: result };
+    }
     if (out) process.stdout.write(JSON.stringify(out) + "\n");
   }
 });
