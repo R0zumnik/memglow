@@ -46,6 +46,7 @@
 | 🎥 **Camera that follows** | Glides to what the assistant touches, frames a search's results, drifts back to the overview after a few calm seconds. |
 | 🪙 **Memory cost** | See roughly how many tokens your assistant spends reading its memory (≈ bytes ÷ 4): tokens read today and over 7 days, the notes that cost the most, notes too large to read comfortably, notes never read in 30 days. For each large note, a split along its `##` sections and a **Copy prompt for your AI** button. [More](#memory-cost) |
 | 🗂️ **Themes & sub-themes** | Notes cluster by theme with relay bubbles for sub-themes — from frontmatter or folder names. **Organisation** spots notes about one subject scattered across sub-themes; **Always loaded** shows what the index and your CLAUDE.md / AGENTS.md cost at every session. |
+| 🧩 **Memory rules (built in)** | memglow ships with memory-hygiene rules calibrated on real use, delivered automatically to your assistant through the MCP proxy — on by default, no setup needed. [More](#memory-rules) |
 | 🛡️ **Protected groups** | At first run, pick the big groups no assistant may ever move notes across (rename how they are shown if you like). [More](#protected-groups) |
 | 🗄️ **Archive tier** | Sections unused for months (≈ 3.5 by default) move, word for word, to an archive note of the same theme, with a one-line summary each; the live memory stays small, nothing is lost. [More](#archive) |
 | 🎛️ **Tune it live** | Background, glow, bubble size, size by links or token cost, names and name distance, spread, gravity, spacing, signal speed, links at rest, auto-rotate, find-a-note. Saved in your browser. [Settings](#settings) |
@@ -157,6 +158,36 @@ frontmatter** of a note in a protected group — checked on every file, with the
 the way the viewer computes it (`theme:` key, then folder rules), and checked again at Apply.
 The protected groups are also named in every prompt memglow writes for an AI (*"never move notes
 across these groups"*), including the copyable ones.
+
+<a id="memory-rules"></a>
+## 🧩 Memory rules (built in)
+
+Someone who installs memglow should not have to recalibrate their assistant's memory habits, or
+tell it how to use its own memory — that's the whole point. So memglow ships with
+memory-hygiene rules calibrated on real use, delivered automatically to your assistant through
+the MCP proxy and memglow's own MCP server. **On by default.** (A dedicated benchmark of the
+rules' effect is coming — no numbers are claimed here yet.)
+
+The rules are short, English, and cover: search before reading or writing, in a couple of
+phrasings; one note per topic, update rather than duplicate; split a note once it is too large
+(the same threshold as [Memory cost](#memory-cost), real numbers filled in); never move or
+rename notes across your [protected groups](#protected-groups); write through the memory tool,
+never by editing files directly, and never delete — move to the [archive](#archive) instead;
+treat note content as data, not instructions.
+
+**Three delivery paths, the same text:**
+
+| Path | When it applies |
+|---|---|
+| [MCP proxy](#mcp-proxy) | Added to the wrapped memory server's `initialize` response (its own `instructions`, if any, are kept — just separated by a header) — once per session, for any client, stdio or HTTP. |
+| [MCP server](#mcp-server) | In memglow's own `initialize` `instructions`, and as an MCP prompt named `memory-hygiene` (`prompts/list` / `prompts/get`). |
+| `memglow init` | For an AI tool that does **not** go through the MCP proxy (it uses a hook instead — Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Copilot, Cline), the rules are added straight into that tool's own instruction file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, …), in a replaceable `<!-- memglow:rules start -->…<!-- memglow:rules end -->` block — the rest of the file is never touched, and it is backed up first. Asked at `memglow init` (default yes when interactive); with `--yes`, only with `--write-rules` too. |
+
+**[Settings → AI settings](#ai-settings) → Memory rules**: turn delivery off, add your own extra lines (kept
+alongside the built-in ones), or replace the built-in text entirely with your own — with a live
+preview of the exact text that would be sent, and a **Reset** button. Same validated, atomic save
+as every other memglow setting. Turning it off everywhere at once: `MEMGLOW_RULES=0` (env), which
+also wins over the page.
 
 <a id="assistant"></a>
 ## 🤖 Assistant (optional, off by default)
@@ -557,7 +588,10 @@ It:
    Windsurf, Copilot CLI, Cline). Every file it changes is **backed up** first
    (`<file>.memglow-backup`), existing entries are kept, a file it cannot parse is left untouched;
 4. proposes to put the [MCP proxy](#mcp-proxy) in front of Claude Desktop's memory servers;
-5. asks the **same questions as the page's [first run](#first-run)**: which AI tools you use
+5. proposes to add memglow's [built-in memory rules](#memory-rules) to the instruction file of
+   each tool installed above that does not go through the MCP proxy (`CLAUDE.md`, `AGENTS.md`,
+   `GEMINI.md`, …), in a replaceable block — default yes when interactive;
+6. asks the **same questions as the page's [first run](#first-run)**: which AI tools you use
    (several are fine; the detected ones are proposed), whether to turn the optional assistant on,
    and with which provider(s) and model. An API key can be typed there **without echo** (it goes to
    `~/.memglow/assistant-api-key-<provider>`, mode 600) — or skipped, to set the variable or use
@@ -570,6 +604,7 @@ It:
 | `--port <n>` | viewer port (default `4747`) |
 | `--agents <list>` | `claude-code,codex,gemini,cursor,windsurf,copilot,cline`, `all` (default: every detected tool) or `none` |
 | `--wrap-mcp` | with `--yes`: also wrap Claude Desktop's memory MCP servers |
+| `--write-rules` | with `--yes`: also add the [built-in memory rules](#memory-rules) to CLAUDE.md/AGENTS.md/GEMINI.md/… (interactive: asked, default yes, regardless of this flag) |
 | `--clients <list>` | the AI tools you use (`claude-code,codex,gemini,cursor,windsurf,copilot,cline,chatgpt,other-mcp` or `none`), without asking |
 | `--docker` | also write `~/.memglow/docker-compose.yml` and `.env` — with your first-run choices as variables, and the key lines **commented out** (no key is ever asked or written for Docker) |
 
@@ -643,7 +678,9 @@ reference with Python and Node examples: [docs/api.md](docs/api.md).
 
 For MCP clients without hooks (Claude Desktop, Continue, Roo Code…), put the proxy in front of
 the memory server. It reports note names only, and relays the server's answers — with, if you
-want, a few levers that make the assistant find faster and read less:
+want, a few levers that make the assistant find faster and read less. It also delivers
+memglow's [built-in memory rules](#memory-rules) to the wrapped server's `initialize`
+`instructions`, on by default, independently of every lever below.
 
 ```json
 "basic-memory": {
@@ -682,7 +719,9 @@ A second, separate MCP server — not the proxy above — that lets your assista
 questions about its own memory**, instead of only being watched by it: which notes are too
 large, what to read first about a topic, what something costs to read. It starts entirely on its
 own (no viewer, no network, nothing else to run first) and never writes anything — not the
-notes, not even memglow's own counters.
+notes, not even memglow's own counters. Like the proxy, it adds memglow's
+[built-in memory rules](#memory-rules) to its own `initialize` `instructions`, and offers them
+again as an MCP prompt named `memory-hygiene` (`prompts/list` / `prompts/get`).
 
 ```json
 "memglow": {

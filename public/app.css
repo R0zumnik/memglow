@@ -764,6 +764,9 @@ a { color: var(--bn-accent-teal); }
 .mg-setup__tuning { display: grid; }
 .mg-setup__onoff legend, .mg-setup__tuning legend { padding: 0 6px; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--bn-ink-dim); }
 .mg-setup__usage li { font-size: 12px; color: var(--bn-ink); }
+.mg-setup__rules-preview { width: 100%; }
+.mg-setup__rules-preview summary { cursor: pointer; font-size: 12px; color: var(--bn-ink-dim); }
+.mg-setup__rules-preview .mg-setup__code { max-height: 220px; overflow: auto; }
 /* Phone: one column, full-width fields and buttons, 16 px text in the fields (no zoom on focus in
    iOS Safari), 40 px touch targets. After the rules above so it wins. */
 @media (max-width: 640px) {

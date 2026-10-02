@@ -148,7 +148,9 @@ test("write crossing the threshold is flagged; unknown tools and errors pass thr
 
 test("all levers off: every response line is byte-identical to the upstream's", async () => {
   const fx = makeNotes();
-  const off = { MEMGLOW_PROXY_SIZE_WARNING: "0", MEMGLOW_PROXY_SEARCH_DETAILS: "false", MEMGLOW_PROXY_SUGGESTIONS: "off", MEMGLOW_PROXY_HIDE_UNSUPPORTED: "0" };
+  // MEMGLOW_RULES=0: memglow's built-in memory rules are a separate, independent layer (ON by
+  // default) — this test is about the LEVERS being off, see memory-rules.test.js for the rules.
+  const off = { MEMGLOW_PROXY_SIZE_WARNING: "0", MEMGLOW_PROXY_SEARCH_DETAILS: "false", MEMGLOW_PROXY_SUGGESTIONS: "off", MEMGLOW_PROXY_HIDE_UNSUPPORTED: "0", MEMGLOW_RULES: "0" };
   const c = start(fx, off);
   const d = start(fx, {}, { direct: true });
   try {

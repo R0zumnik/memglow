@@ -20,6 +20,12 @@
  * relayed unchanged, as before; with levers on, only whole JSON-RPC lines a lever rewrites differ.
  * Nothing is ever written in the notes folder.
  *
+ * memglow's built-in memory rules (lib/memory-rules.js) are NOT a lever: ON by default (off with
+ * MEMGLOW_RULES=0, or rules.enabled=false in Settings), they add memglow's calibrated
+ * memory-hygiene rules to the upstream server's `initialize` response `instructions` field — kept
+ * if already present, separated by a header — once per session, independently of every lever
+ * above. Nothing else in that response changes.
+ *
  *   stdio:  memglow-mcp-proxy [--name basic-memory] -- uvx basic-memory mcp
  *   HTTP:   memglow-mcp-proxy --upstream http://127.0.0.1:8000/mcp --listen 127.0.0.1:8765 [--name x]
  *           (then point the client at http://127.0.0.1:8765/mcp)
@@ -33,6 +39,7 @@ const https = require("https");
 const { spawn } = require("child_process");
 const core = require("../lib/agent-core");
 const levers = require("../lib/proxy-levers");
+const memoryRules = require("../lib/memory-rules");
 const { StringDecoder } = require("string_decoder");
 
 function parseArgs(argv) {
@@ -188,29 +195,41 @@ function setupLevers(env = process.env, serverName = "") {
   }
 }
 
+/** memglow's built-in memory rules (not a lever): null when disabled (env, or the saved setting). */
+function setupRules(env = process.env, rules = undefined) {
+  if (rules !== undefined) return rules; // tests pass their own (or null)
+  try { return memoryRules.createRulesRelay({ text: memoryRules.computeRulesText(env) }); } catch { return null; }
+}
+
 function runStdio(o) {
   if (!o.cmd.length) { process.stderr.write("memglow-mcp-proxy: nothing to run (usage: memglow-mcp-proxy -- <server command>)\n"); process.exit(2); }
   const server = o.name || o.cmd.join(" ").match(/[A-Za-z0-9_-]*(memory|obsidian|notes|filesystem)[A-Za-z0-9_-]*/i)?.[0] || "memory";
   const w = createWatcher({ server, source: o.source });
   const lv = setupLevers(process.env, server);
+  const rules = setupRules(process.env, o.rules);
   const child = spawn(o.cmd[0], o.cmd.slice(1), { stdio: ["pipe", "pipe", "inherit"], shell: process.platform === "win32" });
-  if (lv) {
-    // Levers on: whole lines are relayed (rewritten only when a lever changes them).
+  if (lv || rules) {
+    // Levers on, or the memory rules active: whole lines are relayed (rewritten only when one of
+    // the two layers changes them — rules only ever touches an `initialize` response).
     const up = lineRelay((b) => child.stdin.write(b), (m) => {
       try { w.fromClient(m); } catch { /* keep relaying */ }
-      const r = lv.clientMessage(m);
-      return r.changed ? JSON.stringify(r.msg) : null;
+      let msg = m, changed = false;
+      if (rules) { const r = rules.clientMessage(msg); if (r.changed) { msg = r.msg; changed = true; } }
+      if (lv) { const r = lv.clientMessage(msg); if (r.changed) { msg = r.msg; changed = true; } }
+      return changed ? JSON.stringify(msg) : null;
     });
     const down = lineRelay((b) => process.stdout.write(b), (m) => {
       try { w.fromServer(m); } catch { /* keep relaying */ }
-      const r = lv.serverMessage(m);
-      return r.changed ? JSON.stringify(r.msg) : null;
+      let msg = m, changed = false;
+      if (rules) { const r = rules.serverMessage(msg); if (r.changed) { msg = r.msg; changed = true; } }
+      if (lv) { const r = lv.serverMessage(msg); if (r.changed) { msg = r.msg; changed = true; } }
+      return changed ? JSON.stringify(msg) : null;
     });
     process.stdin.on("data", (c) => up.push(c));
     process.stdin.on("end", () => { up.end(); child.stdin.end(); });
     child.stdout.on("data", (c) => down.push(c));
     child.stdout.on("end", () => down.end());
-    process.on("exit", () => lv.savings.flush());
+    if (lv) process.on("exit", () => lv.savings.flush());
   } else {
     const fromClient = lineTap((m) => w.fromClient(m));
     const fromServer = lineTap((m) => w.fromServer(m));
@@ -253,6 +272,7 @@ function createHttpProxy(o) {
   const lib = up.protocol === "https:" ? https : http;
   const server = o.name || up.hostname;
   const lv = o.levers === undefined ? setupLevers(process.env, server) : o.levers; // tests pass their own (or null)
+  const rules = setupRules(process.env, o.rules);
   return http.createServer((req, res) => {
     const w = createWatcher({ server, source: o.source, onReport: o.onReport });
     const sk = String(req.headers["mcp-session-id"] || "default");
@@ -267,18 +287,20 @@ function createHttpProxy(o) {
         try { parsed = JSON.parse(body.toString("utf8")); } catch { parsed = undefined; /* not JSON */ }
         if (parsed !== undefined) {
           try { w.fromClient(parsed); } catch { /* keep relaying */ }
-          if (lv) {
-            const r = lv.clientMessage(parsed, sk);
-            if (r.changed) body = Buffer.from(JSON.stringify(r.msg), "utf8");
-            const ids = (Array.isArray(parsed) ? parsed : [parsed]).map((m) => m && m.id);
-            wanted = lv.wants(ids, sk);
-          }
+          let msg = parsed, changed = false;
+          if (rules) { const r = rules.clientMessage(msg, sk); if (r.changed) { msg = r.msg; changed = true; } }
+          if (lv) { const r = lv.clientMessage(msg, sk); if (r.changed) { msg = r.msg; changed = true; } }
+          if (changed) body = Buffer.from(JSON.stringify(msg), "utf8");
+          const ids = (Array.isArray(parsed) ? parsed : [parsed]).map((m) => m && m.id);
+          wanted = (!!lv && lv.wants(ids, sk)) || (!!rules && rules.wants(ids, sk));
         }
       }
       const transform = (m) => {
         try { w.fromServer(m); } catch { /* ignore */ }
-        const r = lv.serverMessage(m, sk);
-        return r.changed ? JSON.stringify(r.msg) : null;
+        let msg = m, changed = false;
+        if (rules) { const r = rules.serverMessage(msg, sk); if (r.changed) { msg = r.msg; changed = true; } }
+        if (lv) { const r = lv.serverMessage(msg, sk); if (r.changed) { msg = r.msg; changed = true; } }
+        return changed ? JSON.stringify(msg) : null;
       };
       const headers = hopless(req.headers);
       delete headers.host; delete headers["content-length"];
@@ -337,7 +359,7 @@ function createHttpProxy(o) {
 if (require.main === module) {
   const o = parseArgs(process.argv.slice(2));
   if (o.help) {
-    process.stdout.write("usage:\n  memglow-mcp-proxy [--name NAME] -- <memory MCP server command>\n  memglow-mcp-proxy --upstream URL --listen HOST:PORT [--name NAME]\nlevers (v0.4): MEMGLOW_PROXY_SIZE_WARNING, _SEARCH_DETAILS, _SUGGESTIONS (default on), MEMGLOW_PROXY_DEDUPE, _TOC, _ARCHIVE_HINT, _HIDE_UNSUPPORTED (default off)\n  or memglow.config.json → \"proxy\": { ... } — see mcp-proxy/README.md\n");
+    process.stdout.write("usage:\n  memglow-mcp-proxy [--name NAME] -- <memory MCP server command>\n  memglow-mcp-proxy --upstream URL --listen HOST:PORT [--name NAME]\nlevers (v0.4): MEMGLOW_PROXY_SIZE_WARNING, _SEARCH_DETAILS, _SUGGESTIONS (default on), MEMGLOW_PROXY_DEDUPE, _TOC, _ARCHIVE_HINT, _HIDE_UNSUPPORTED (default off)\n  or memglow.config.json → \"proxy\": { ... } — see mcp-proxy/README.md\nmemory rules (default on): MEMGLOW_RULES=0 to turn off, or Settings → Memory rules — see README.md\n");
     process.exit(0);
   }
   if (o.upstream) {
@@ -347,4 +369,4 @@ if (require.main === module) {
   } else runStdio(o);
 }
 
-module.exports = { createWatcher, createHttpProxy, lineTap, sseTap, lineRelay, sseRelay, setupLevers, parseArgs };
+module.exports = { createWatcher, createHttpProxy, lineTap, sseTap, lineRelay, sseRelay, setupLevers, setupRules, parseArgs };

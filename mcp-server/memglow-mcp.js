@@ -35,6 +35,7 @@ const fs = require("fs");
 const { loadConfig, DEFAULT_THEMES } = require("../lib/config");
 const { createMemory, maskSecrets } = require("../lib/memory");
 const { createCounters } = require("../lib/counters");
+const memoryRules = require("../lib/memory-rules");
 const { estimateTokens, sectionsOf, packSections, dayOf, daysBefore, WINDOW_DAYS } = require("../lib/cost");
 const { rankRelated } = require("../lib/related");
 const organise = require("../lib/organise");
@@ -46,6 +47,8 @@ const SERVER_NAME = "memglow-mcp";
 let SERVER_VERSION = "0.0.0";
 try { SERVER_VERSION = require("../package.json").version; } catch { /* keep default */ }
 const DEFAULT_PROTOCOL_VERSION = "2024-11-05";
+const RULES_PROMPT_NAME = "memory-hygiene";
+const RULES_PROMPT_DESCRIPTION = "memglow's built-in memory-hygiene rules — same text added to this server's `initialize` instructions.";
 
 // ---- configuration: never throws, never blocks startup ----
 
@@ -446,15 +449,34 @@ function createRpc(write) {
   const errorResult = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
   const toolError = (id, message) => result(id, { content: [{ type: "text", text: message }], isError: true });
 
-  function handleInitialize(id, params) {
+  /** "" when memglow's built-in memory rules are off (MEMGLOW_RULES=0, or disabled in Settings). */
+  function rulesTextFor(ctx) { try { return memoryRules.rulesTextFor(ctx.config, process.env); } catch { return ""; } }
+
+  function handleInitialize(ctx, id, params) {
     const requested = params && typeof params.protocolVersion === "string" ? params.protocolVersion : null;
     const protocolVersion = requested && /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : DEFAULT_PROTOCOL_VERSION;
+    const base = "Read-only inspector of a memglow Markdown memory folder: which notes are too large, how to split them, which notes are related, which notes are scattered across sub-themes, their estimated reading cost, and (archive_lookup) which archived sections match a topic when the live memory had no answer. Never modifies notes.";
+    const rules = rulesTextFor(ctx);
     result(id, {
       protocolVersion,
-      capabilities: { tools: {} },
+      capabilities: { tools: {}, prompts: {} },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-      instructions: "Read-only inspector of a memglow Markdown memory folder: which notes are too large, how to split them, which notes are related, which notes are scattered across sub-themes, their estimated reading cost, and (archive_lookup) which archived sections match a topic when the live memory had no answer. Never modifies notes.",
+      instructions: rules ? `${base}\n\n--- ${memoryRules.HEADER} ---\n${rules}` : base,
     });
+  }
+
+  /** `prompts/list`: the `memory-hygiene` prompt, only while memglow's built-in rules are on. */
+  function handlePromptsList(ctx, id) {
+    const rules = rulesTextFor(ctx);
+    result(id, { prompts: rules ? [{ name: RULES_PROMPT_NAME, description: RULES_PROMPT_DESCRIPTION, arguments: [] }] : [] });
+  }
+
+  /** `prompts/get`: same text as the `initialize` instructions, as a single user message. */
+  function handlePromptsGet(ctx, id, params) {
+    const name = params && typeof params.name === "string" ? params.name : "";
+    const rules = rulesTextFor(ctx);
+    if (name !== RULES_PROMPT_NAME || !rules) return errorResult(id, -32602, `Unknown prompt: ${JSON.stringify(name)}`);
+    result(id, { description: RULES_PROMPT_DESCRIPTION, messages: [{ role: "user", content: { type: "text", text: rules } }] });
   }
 
   function handleToolsCall(ctx, id, params) {
@@ -478,10 +500,12 @@ function createRpc(write) {
     if (typeof method !== "string") return; // not a request/notification we understand: ignore
     if (id === undefined) return; // notification (e.g. notifications/initialized, notifications/cancelled): no response, ever
     try {
-      if (method === "initialize") return handleInitialize(id, params);
+      if (method === "initialize") return handleInitialize(ctx, id, params);
       if (method === "ping") return result(id, {});
       if (method === "tools/list") return result(id, { tools: TOOLS });
       if (method === "tools/call") return handleToolsCall(ctx, id, params);
+      if (method === "prompts/list") return handlePromptsList(ctx, id);
+      if (method === "prompts/get") return handlePromptsGet(ctx, id, params);
       return errorResult(id, -32601, `Method not found: ${method}`);
     } catch (e) {
       return errorResult(id, -32603, `Internal error: ${e.message}`);
@@ -516,4 +540,4 @@ function main(env = process.env, cwd = process.cwd()) {
 
 if (require.main === module) main();
 
-module.exports = { main, createContext, createRpc, validate, semanticCheck, TOOLS, HANDLERS, resolveNote };
+module.exports = { main, createContext, createRpc, validate, semanticCheck, TOOLS, HANDLERS, resolveNote, RULES_PROMPT_NAME };
