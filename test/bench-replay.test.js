@@ -10,7 +10,7 @@ const path = require("path");
 const {
   loadEvents, normalizeCalls, portalToCalls, namedConfigs, eachLeverConfigs, runConfig, summarize,
   isReachable, withPermalink, parseArgs, LEVER_NAMES, SHIPPED_DEFAULTS, GAP_MS,
-  mergeSearchBursts, MULTI_QUERY_GAP_MS,
+  mergeSearchBursts, MULTI_QUERY_GAP_MS, DEFAULT_TURN_TOKENS,
 } = require("../bench/replay.js");
 const { ARG_FRESH, ARG_QUERIES, MULTI_QUERY_MAX, DEFAULTS: LIB_DEFAULTS } = require("../lib/proxy-levers");
 
@@ -331,6 +331,47 @@ test("parseArgs: an unrecognised flag is recorded as unknown, not silently dropp
 test("parseArgs: --each parses to a boolean, off by default", () => {
   assert.strictEqual(parseArgs([]).each, false);
   assert.strictEqual(parseArgs(["--each"]).each, true);
+});
+
+// ---------------------------------------------------------------------------------------------
+// "effective tokens" (0.4.2.5): tokensTotal + calls * turnTokens, and the --turn-tokens flag.
+
+test("parseArgs: --turn-tokens defaults to DEFAULT_TURN_TOKENS, accepts a number >= 0, rejects garbage", () => {
+  assert.strictEqual(parseArgs([]).turnTokens, DEFAULT_TURN_TOKENS);
+  assert.strictEqual(parseArgs(["--turn-tokens", "0"]).turnTokens, 0);
+  assert.strictEqual(parseArgs(["--turn-tokens", "1234.5"]).turnTokens, 1234.5);
+  assert.strictEqual(parseArgs(["--turn-tokens", "-1"]).badTurnTokens, "-1");
+  assert.strictEqual(parseArgs(["--turn-tokens", "nope"]).badTurnTokens, "nope");
+});
+
+test("summarize: effectiveTokens = tokensTotal + calls * turnTokens; effSavings compares baseline's OWN effective tokens, not raw", () => {
+  const results = [
+    { key: "off", label: "off", calls: 10, tokensTotal: 1000, violations: 0 },
+    // Fewer calls, slightly MORE raw tokens — exactly lever 10 "aliases"'s real shape.
+    { key: "+aliases", label: "+aliases", calls: 8, tokensTotal: 1025, violations: 0 },
+  ];
+  const rows = summarize(results, "off", 100);
+  const off = rows.find((r) => r.key === "off");
+  const aliases = rows.find((r) => r.key === "+aliases");
+  assert.strictEqual(off.effectiveTokens, 1000 + 10 * 100);
+  assert.strictEqual(aliases.effectiveTokens, 1025 + 8 * 100);
+  // Raw tokens: aliases is WORSE (+25) — unchanged behaviour, still reported.
+  assert.strictEqual(aliases.savingsAbs, 1000 - 1025);
+  assert.ok(aliases.savingsAbs < 0, "raw savings vs off: negative (more raw tokens)");
+  // Effective tokens: aliases is BETTER (2 fewer calls at 100 "tokens" each outweighs +25 raw).
+  assert.strictEqual(aliases.effSavingsAbs, off.effectiveTokens - aliases.effectiveTokens);
+  assert.ok(aliases.effSavingsAbs > 0, "effective savings vs off: positive (fewer calls win)");
+});
+
+test("summarize: turnTokens = 0 makes effectiveTokens collapse to tokensTotal (no behaviour change for a 0 overhead)", () => {
+  const results = [
+    { key: "off", label: "off", calls: 5, tokensTotal: 500, violations: 0 },
+    { key: "+x", label: "+x", calls: 3, tokensTotal: 480, violations: 0 },
+  ];
+  const rows = summarize(results, "off", 0);
+  for (const r of rows) assert.strictEqual(r.effectiveTokens, r.tokensTotal);
+  const x = rows.find((r) => r.key === "+x");
+  assert.strictEqual(x.effSavingsAbs, x.savingsAbs);
 });
 
 // ---------------------------------------------------------------------------------------------

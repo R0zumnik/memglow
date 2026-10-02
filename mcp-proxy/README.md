@@ -114,7 +114,7 @@ about. Rules, for every lever:
 | 7 | `hideUnsupportedTools` | off | Removes, from `tools/list`, the tools a per-server table marks unsupported for the client that just said hello — never from a `tools/call`, which always reaches the real server untouched. |
 | 8 | `alreadyLoaded` | off | A single-note read (never `build_context` or another `multiNoteTools` entry) of a note memglow knows is loaded into the context at the start of **every** session — the index note(s), or an `alwaysLoaded` entry (see `README.md`'s "Always loaded" cost, `lib/always-loaded.js`) that resolves to a note — gets `memglow: "<label>" (≈N tokens) is already in your context — it is loaded at the start of every session and has not changed since this session began (sha <8 hex chars>). Use it from there. To get the full text anyway, call again with "memglow_fresh": true.` instead of its content, for as long as the note's file (read directly off disk) matches the hash captured at the start of the session. A note that changed meanwhile is never stubbed: its full, current text comes back with one extra line saying so. |
 | 9 | `multiQuery` | **on** | A search tool call carrying `memglow_queries` (2-4 extra phrasings, up to `MULTI_QUERY_MAX` total, added to the search tools' schemas in `tools/list`) is sent upstream as ONE call per phrasing — sequentially, the original query first — instead of the assistant spending a separate turn on each one. Hits are merged, deduped by note id (found by more phrasings ranks higher), capped to the biggest single phrasing's own hit count, and returned as ONE result: in the upstream's own format when safe (plain-text hits reassembled from the server's own blocks), else a compact listing of whatever note ids resolve; a later phrasing's failed call fails the whole thing open to the FIRST phrasing's own result — what a plain single search would have returned. `memglow_queries` is always stripped before a call reaches the server, even with this lever off. |
-| 10 | `aliases` + `learnAliases` | off | **`learnAliases`** (0.4.2.3, "query log"): when a search is followed, in the SAME session within 2 minutes and before another search, by a single-note read of a note NOT in that search's own results, the query's significant words (lowercased, EN+FR stop-words dropped, ≥ 3 letters, secret-masked) are learned as aliases of that note, with a count — in one small local file, `learned-aliases.json` (mode 600, bounded to `aliasesMax` = 2,000 entries, oldest dropped). Nothing is ever sent anywhere. **`aliases`** (0.4.2.4, "learned aliases"): on a LATER search, a note whose learned aliases match ≥ 2 of the query's words (or 1 alias seen ≥ 2 times), and that is not already among this search's own results, is added at the TOP of the answer — the upstream's own per-hit row shape when the answer is plain text, else one compact line `memglow: likely relevant — <label> (<id>), learned from your past searches`. Never removes a result, never duplicates a note already present; an alias whose note no longer exists is forgotten. The two switches are independent (recording vs. using what was recorded). Off by default: a search carrying lever 9's own `memglow_queries` bypasses this lever entirely (same reason as 2/6 below); on the free-replay fixture (`bench/replay-aliases.jsonl`) it had 0 violations and a much better hit rate but cost slightly MORE tokens (it only ever adds a row) — see CHANGELOG 0.4.2.4. |
+| 10 | `aliases` + `learnAliases` | **on** | **`learnAliases`** (0.4.2.3, "query log"): when a search is followed, in the SAME session within 2 minutes and before another search, by a single-note read of a note NOT in that search's own results, the query's significant words (lowercased, EN+FR stop-words dropped, ≥ 3 letters, secret-masked) are learned as aliases of that note, with a count — in one small local file, `learned-aliases.json` (mode 600, bounded to `aliasesMax` = 2,000 entries, oldest dropped). Nothing is ever sent anywhere. **`aliases`** (0.4.2.4, "learned aliases"): on a LATER search, a note whose learned aliases match ≥ 2 of the query's words (or 1 alias seen ≥ 2 times), and that is not already among this search's own results, is added at the TOP of the answer — the upstream's own per-hit row shape when the answer is plain text, else one compact line `memglow: likely relevant — <label> (<id>), learned from your past searches`. Never removes a result, never duplicates a note already present; an alias whose note no longer exists is forgotten. The two switches are independent (recording vs. using what was recorded). Since 0.4.2.5, a search carrying lever 9's own `memglow_queries` no longer bypasses this lever: it learns from every phrasing's words and can inject into the merged result too. **On by default since 0.4.2.5** — see that stage's section below for why a lever that costs slightly MORE raw tokens now ships on. |
 | — | `indexWarning` | off | Before the content of the **index** note when it is over `indexWarningTokens` (top-level key, default 2,000): `⚠ memglow: the index note "…" is ≈N tokens (index threshold T) and it is loaded at every session. Consider offering the user to trim it…`. Once per session. Replaces lever 1 for the index note when on. |
 
 ### Stage 0.4.2.2 — "lean defaults"
@@ -299,6 +299,41 @@ Reused by [`lib/memory-rules.js`](../lib/memory-rules.js)'s first rule: "if that
 2-3 times as before" — so an assistant that already follows memglow's search-in-phrasings habit
 switches to one call for free, the day its memory server is wrapped by a proxy with this lever on.
 
+### Stage 0.4.2.5 — "count the turns": effective tokens, and `aliases`/`learnAliases` turned on
+
+Through 0.4.2.4, [`bench/replay.js`](../bench/README.md) scored a lever purely on tool-RESULT
+tokens, so a lever that trades a call for a few extra tokens always looked like a loss — exactly
+what happened to `aliases`/`learnAliases`: 2 fewer calls, but +25 raw tokens on
+`bench/replay-aliases.jsonl`, so it shipped off. In reality every extra tool call is a whole extra
+**model turn**, which re-sends the system prompt, every MCP tool's schema, and the conversation so
+far — not just that one tool's result.
+
+`bench/replay.js` now also reports **effective tokens** = raw tokens + calls × a per-call
+`turnTokens` overhead (`--turn-tokens`, default 5,000 — a deliberate UNDER-estimate of the
+~6,500-13,000-per-call overhead measured across `bench/results/*.jsonl`'s real `claude -p` runs;
+see that file's `DEFAULT_TURN_TOKENS` comment for the derivation). A lever now earns ON by default
+only when, vs `off`: 0 violations, AND its effective tokens are `<=` off's, AND (its raw tokens
+are `<=` off's OR it makes fewer calls than off).
+
+Re-run against that rule on all three levers-relevant fixtures (`bench/replay-demo.jsonl`,
+`bench/replay-heavy.jsonl`, `bench/replay-aliases.jsonl`): `aliases`+`learnAliases` is a no-op
+(identical calls and tokens to `off`) on the first two, and on `replay-aliases.jsonl` its 2 fewer
+calls make its effective tokens 70,783 vs `off`'s 80,758 — a clear win even though raw tokens are
+still +25. The rule holds on all three files, so this lever now **ships on by default**. The
+`dedupe` lever (still off by default) was also re-checked against the same rule for completeness —
+it passes on all three files too (it only ever saves raw tokens, never costs any) — but its
+default is left unchanged pending the owner's own call: it replaces a note's content with a short
+stub mid-session, which carries a context-compaction risk the effective-tokens number does not
+capture.
+
+This stage also fixed a real gap, not just a scoring one: a search carrying lever 9's own
+`memglow_queries` bypassed `aliases`/`learnAliases` entirely (`multiQuery.run` answers the whole
+burst outside the normal `clientMessage`/`serverMessage` cycle that lever 10 hooks into) — so it
+could neither learn from a multi-phrasing search nor inject into one. Fixed in
+`applyAliasesToSearch()` (`lib/proxy-levers.js`): `s.lastSearch` now records the UNION of every
+phrasing's significant words (not just the main query's), and the same injection rule applies to
+the merged result.
+
 ### Examples
 
 (Levers 2 and 3 are off by default since stage 0.4.2.2 — these examples assume they were turned
@@ -360,8 +395,8 @@ sets `memoryDir`), or the file named by `MEMGLOW_CONFIG`:
     "unsupportedTools": { "basic-memory": { "search": ["openai-mcp"], "fetch": ["openai-mcp"] } },
     "alreadyLoaded": false,
     "multiQuery": true,
-    "aliases": false,
-    "learnAliases": false,
+    "aliases": true,
+    "learnAliases": true,
     "aliasesMax": 2000,
     "readTools": ["read_note", "view_note", "read_content", "fetch", "build_context"],
     "multiNoteTools": ["build_context"],

@@ -391,7 +391,7 @@ function createHttpProxy(o) {
       if (parsed !== undefined && !Array.isArray(parsed) && lv && lv.multiQuery.applies(parsed)) {
         try { w.fromClient(parsed); } catch { /* keep relaying */ }
         const sendUpstream = (args) => postJsonRpc(lib, target, baseHeaders, "memglow-mq:" + process.pid + ":" + (++mqN), parsed.params.name, args);
-        lv.multiQuery.run(parsed, sendUpstream).then((r) => {
+        lv.multiQuery.run(parsed, sendUpstream, sk).then((r) => {
           try { w.fromServer(r.message); } catch { /* ignore: the call is still answered below */ }
           const out = Buffer.from(JSON.stringify(r.message), "utf8");
           res.writeHead(200, { "content-type": "application/json", "content-length": String(out.length) });

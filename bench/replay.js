@@ -10,7 +10,7 @@
  * nothing a lever ever stubs or cuts may be information the model cannot actually still reach.
  *
  *   node bench/replay.js [--memory-dir <dir>] [--events <file>] [--with <lever,lever,...>]...
- *                         [--always-loaded <entry,entry,...>] [--json]
+ *                         [--always-loaded <entry,entry,...>] [--turn-tokens <n>] [--json]
  *
  * --memory-dir   a folder of notes (default demo/memory).
  * --events       a JSONL or JSON-array file of tool calls `{ session, tool, args, t }`, OR a
@@ -24,6 +24,8 @@
  *                archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery, aliases, learnAliases.
  * --always-loaded a,b   extra `alwaysLoaded` entries (note references) for lever 8, on top of the
  *                index note(s) it already covers by default.
+ * --turn-tokens n   per-call overhead used for the "effective tokens" column (0.4.2.5), see
+ *                DEFAULT_TURN_TOKENS above for how the default (5000) was derived.
  * --json         machine-readable output instead of the table.
  *
  * Every configuration gets its OWN throw-away copy of --memory-dir (writes in the event stream
@@ -36,6 +38,15 @@
  * "defaults cost more tokens than off", which is expected (suggestions/searchDetails/sizeWarning
  * add explanatory text, they do not cut anything; only dedupe/toc/alreadyLoaded can save tokens,
  * and only by replacing an answer with a stub — which is exactly what the guard checks).
+ *
+ * "effective tokens" (0.4.2.5) = tokensTotal + calls * turnTokens — see DEFAULT_TURN_TOKENS below
+ * for what that per-call constant is and how it was derived. The RAW `tokens`/`calls` columns are
+ * always kept alongside it. The rule this stage uses to decide a lever's DEFAULT (applied by a
+ * human reading the table, same as every earlier stage — see bench/README.md and the CHANGELOG):
+ * a lever earns ON by default only when, vs `off`, it has 0 violations AND its effective tokens
+ * are <= off's AND (its raw result tokens are <= off's OR it makes fewer calls than off) — i.e. a
+ * lever that trades calls for a few extra tokens (like `aliases`) can now win on the EFFECTIVE
+ * number even though it still loses on raw tokens alone.
  */
 const fs = require("fs");
 const os = require("os");
@@ -49,6 +60,28 @@ const ROOT = path.join(__dirname, "..");
 const DEFAULT_MEMORY = path.join(ROOT, "demo", "memory");
 const DEFAULT_EVENTS = path.join(__dirname, "replay-demo.jsonl");
 const GAP_MS = 30 * 60 * 1000; // portal format: a new session after this much silence
+
+// 0.4.2.5 — "effective tokens" = tokensTotal + calls * turnTokens. This harness used to score a
+// lever purely on tool-RESULT tokens, so a lever that trades a call for a few extra tokens (e.g.
+// lever 10 "aliases": -2 calls, +25 tokens on bench/replay-aliases.jsonl, see CHANGELOG 0.4.2.4)
+// always looked worse, even though every extra tool call is a whole extra MODEL TURN, which
+// re-sends the system prompt, every MCP tool's schema, and the growing conversation so far — not
+// just the tool's own result. `turnTokens` puts a number on that re-send cost.
+//
+// DEFAULT_TURN_TOKENS is derived from bench/results/*.jsonl (326 real recorded turns, real
+// `claude -p` runs: sonnet.jsonl, haiku.jsonl, haiku-prefix.jsonl, split-gain.jsonl — see
+// bench/run.js). For each row, "overhead per call" = (tokens.input + tokens.cacheCreate +
+// tokens.cacheRead) - estimateTokens(toolResultChars) — i.e. everything the API billed for that
+// run's turns MINUS what the tool results themselves are worth, divided by toolCalls. Across all
+// 326 rows this ranges ~4,051-19,000+ per call (median ≈12,754; 10th percentile ≈6,471) — mostly
+// the system prompt + tool schemas resent on every turn, which dwarfs any one tool result. 5,000
+// is a DELIBERATE UNDER-estimate (below the 10th percentile, not the median): the goal here is to
+// stop penalizing a lever for cutting a call, not to inflate how much cutting one is worth. A
+// fixture or host with much smaller tool schemas will see a smaller real overhead than this, so
+// treat 5,000 as a floor, not a measurement of any specific setup — pass `--turn-tokens` to use a
+// number measured for yours. (The 1,000 fallback below is for the hypothetical case where
+// bench/results/*.jsonl is empty/missing — it is not, so 5,000 is what ships.)
+const DEFAULT_TURN_TOKENS = 5000; // see derivation above; falls back to 1000 if ever unmeasurable
 
 const LEVER_ENV = {
   sizeWarning: "MEMGLOW_PROXY_SIZE_WARNING",
@@ -67,7 +100,7 @@ const LEVER_ENV = {
 const LEVER_NAMES = Object.keys(LEVER_ENV);
 // The shipped defaults (lib/proxy-levers.js DEFAULTS), named here explicitly so this file keeps
 // working unchanged even if that module's own defaults ever drift.
-const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false, multiQuery: true, aliases: false, learnAliases: false };
+const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false, multiQuery: true, aliases: true, learnAliases: true };
 // multiQuery (lever 9, 0.4.2.2b): "no read in between, within 2 min" — see mergeSearchBursts below.
 const MULTI_QUERY_GAP_MS = 2 * 60 * 1000;
 
@@ -381,7 +414,7 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
     let afterServer;
     if (config.multiQuery && engine.multiQuery.applies(req)) {
       const sendUpstream = (args) => Promise.resolve(upstream.call(ev.tool, args));
-      const r = await engine.multiQuery.run(req, sendUpstream);
+      const r = await engine.multiQuery.run(req, sendUpstream, ev.session);
       if (memory) memory.scan();
       afterServer = engine.serverMessage(r.message, ev.session).msg;
     } else {
@@ -423,12 +456,21 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
   return { calls, tokensTotal, violations, violationDetails, aliasSearches, aliasHits, droppedCalls };
 }
 
-function summarize(results, baselineKey = "off") {
-  const baseline = results.find((r) => r.key === baselineKey);
-  return results.map((r) => {
+/**
+ * `turnTokens` (0.4.2.5, default DEFAULT_TURN_TOKENS above): each row gets an `effectiveTokens`
+ * = tokensTotal + calls * turnTokens, and `effSavingsAbs`/`effSavingsPct` against the baseline's
+ * OWN effectiveTokens — the number the merge rule in this file's top comment is about. The raw
+ * `savingsAbs`/`savingsPct` (tokensTotal only, turnTokens = 0) are kept unchanged alongside it.
+ */
+function summarize(results, baselineKey = "off", turnTokens = DEFAULT_TURN_TOKENS) {
+  const withEffective = results.map((r) => ({ ...r, effectiveTokens: r.tokensTotal + r.calls * turnTokens }));
+  const baseline = withEffective.find((r) => r.key === baselineKey);
+  return withEffective.map((r) => {
     const savingsAbs = baseline ? baseline.tokensTotal - r.tokensTotal : null;
     const savingsPct = baseline && baseline.tokensTotal > 0 ? (savingsAbs / baseline.tokensTotal) * 100 : null;
-    return { ...r, savingsAbs, savingsPct };
+    const effSavingsAbs = baseline ? baseline.effectiveTokens - r.effectiveTokens : null;
+    const effSavingsPct = baseline && baseline.effectiveTokens > 0 ? (effSavingsAbs / baseline.effectiveTokens) * 100 : null;
+    return { ...r, savingsAbs, savingsPct, effSavingsAbs, effSavingsPct };
   });
 }
 
@@ -443,7 +485,7 @@ function summarize(results, baselineKey = "off") {
 const FLAG_ALIASES = { "--memory": "--memory-dir" };
 
 function parseArgs(argv) {
-  const o = { memoryDir: DEFAULT_MEMORY, events: DEFAULT_EVENTS, withCombos: [], alwaysLoaded: [], json: false, each: false, unknown: [] };
+  const o = { memoryDir: DEFAULT_MEMORY, events: DEFAULT_EVENTS, withCombos: [], alwaysLoaded: [], json: false, each: false, turnTokens: DEFAULT_TURN_TOKENS, unknown: [], badTurnTokens: null };
   for (let i = 0; i < argv.length; i++) {
     let a = argv[i];
     if (Object.prototype.hasOwnProperty.call(FLAG_ALIASES, a)) a = FLAG_ALIASES[a];
@@ -452,6 +494,12 @@ function parseArgs(argv) {
     else if (a === "--events") o.events = path.resolve(v());
     else if (a === "--with") o.withCombos.push(String(v()).split(",").map((s) => s.trim()).filter(Boolean));
     else if (a === "--always-loaded") o.alwaysLoaded.push(...String(v()).split(",").map((s) => s.trim()).filter(Boolean));
+    else if (a === "--turn-tokens") {
+      const raw = v();
+      const n = Number(raw);
+      if (Number.isFinite(n) && n >= 0) o.turnTokens = n;
+      else o.badTurnTokens = raw; // reported by main(), same shape as an unknown lever name
+    }
     else if (a === "--json") o.json = true;
     else if (a === "--each") o.each = true;
     else if (a === "--help" || a === "-h") o.help = true;
@@ -460,13 +508,15 @@ function parseArgs(argv) {
   return o;
 }
 
-function printTable(rows) {
-  const head = `${"configuration".padEnd(26)}${"calls".padStart(6)}${"tokens".padStart(9)}${"savings vs off".padStart(20)}${"violations".padStart(13)}`;
+/** `turnTokens` is only for the header note (0 means "effective === raw", worth saying so). */
+function printTable(rows, turnTokens = DEFAULT_TURN_TOKENS) {
+  console.log(`(effective tokens = tokens + calls × turn-tokens; turn-tokens = ${turnTokens})`);
+  const head = `${"configuration".padEnd(26)}${"calls".padStart(6)}${"tokens".padStart(9)}${"effective".padStart(11)}${"eff. savings vs off".padStart(22)}${"violations".padStart(13)}`;
   console.log(head);
   console.log("-".repeat(head.length));
   for (const r of rows) {
-    const savings = r.savingsAbs == null ? "n/a" : `${r.savingsAbs >= 0 ? "+" : ""}${r.savingsAbs} (${r.savingsPct >= 0 ? "+" : ""}${r.savingsPct.toFixed(1)}%)`;
-    console.log(`${r.label.padEnd(26)}${String(r.calls).padStart(6)}${String(r.tokensTotal).padStart(9)}${savings.padStart(20)}${String(r.violations).padStart(13)}`);
+    const savings = r.effSavingsAbs == null ? "n/a" : `${r.effSavingsAbs >= 0 ? "+" : ""}${r.effSavingsAbs} (${r.effSavingsPct >= 0 ? "+" : ""}${r.effSavingsPct.toFixed(1)}%)`;
+    console.log(`${r.label.padEnd(26)}${String(r.calls).padStart(6)}${String(r.tokensTotal).padStart(9)}${String(r.effectiveTokens).padStart(11)}${savings.padStart(22)}${String(r.violations).padStart(13)}`);
   }
 }
 
@@ -488,25 +538,31 @@ function printEachBreakdown(rows) {
   const alone = rows.filter((r) => r.key.startsWith("alone:"));
   if (!alone.length) return;
   console.log("\nper-lever breakdown (each lever alone, vs off):");
-  const head = `${"lever".padEnd(24)}${"tokens added/saved".padStart(20)}${"violations".padStart(13)}`;
+  const head = `${"lever".padEnd(24)}${"tokens added/saved".padStart(20)}${"effective".padStart(20)}${"violations".padStart(13)}`;
   console.log(head);
   console.log("-".repeat(head.length));
   for (const r of alone) {
     const name = r.key.slice("alone:".length);
     const delta = -r.savingsAbs; // positive = this lever ADDS tokens, negative = it SAVES tokens
+    const effDelta = -r.effSavingsAbs; // same sign convention, but on effective tokens (0.4.2.5)
     const text = delta === 0 ? "0" : `${delta > 0 ? "+" : ""}${delta} ${delta > 0 ? "added" : "saved"}`;
-    console.log(`${name.padEnd(24)}${text.padStart(20)}${String(r.violations).padStart(13)}`);
+    const effText = effDelta === 0 ? "0" : `${effDelta > 0 ? "+" : ""}${effDelta} ${effDelta > 0 ? "added" : "saved"}`;
+    console.log(`${name.padEnd(24)}${text.padStart(20)}${effText.padStart(20)}${String(r.violations).padStart(13)}`);
   }
 }
 
 async function main() {
   const o = parseArgs(process.argv.slice(2));
   if (o.help) {
-    console.log("usage: node bench/replay.js [--memory-dir <dir> | --memory <dir>] [--events <file>] [--with lever,lever]... [--always-loaded entry,entry] [--each] [--json]");
+    console.log("usage: node bench/replay.js [--memory-dir <dir> | --memory <dir>] [--events <file>] [--with lever,lever]... [--always-loaded entry,entry] [--turn-tokens n] [--each] [--json]");
     return;
   }
   if (o.unknown.length) {
     console.error(`bench/replay: unknown flag${o.unknown.length > 1 ? "s" : ""}: ${o.unknown.join(", ")} — run with --help for the list of flags`);
+    process.exitCode = 2; return;
+  }
+  if (o.badTurnTokens != null) {
+    console.error(`bench/replay: --turn-tokens must be a number >= 0, got "${o.badTurnTokens}"`);
     process.exitCode = 2; return;
   }
   for (const combo of o.withCombos) for (const n of combo) {
@@ -519,12 +575,12 @@ async function main() {
 
   const configs = [...namedConfigs(o.withCombos), ...(o.each ? eachLeverConfigs() : [])];
   const results = await Promise.all(configs.map(async (c) => ({ key: c.key, label: c.label, ...(await runConfig(c.flags, events, { memoryDir: o.memoryDir, alwaysLoaded: o.alwaysLoaded })) })));
-  const rows = summarize(results);
+  const rows = summarize(results, "off", o.turnTokens);
   const anyViolations = rows.some((r) => r.violations > 0);
 
-  if (o.json) console.log(JSON.stringify({ events: events.length, rows, anyViolations }, null, 2));
+  if (o.json) console.log(JSON.stringify({ events: events.length, turnTokens: o.turnTokens, rows, anyViolations }, null, 2));
   else {
-    printTable(rows.filter((r) => !r.key.startsWith("alone:")));
+    printTable(rows.filter((r) => !r.key.startsWith("alone:")), o.turnTokens);
     if (o.each) printEachBreakdown(rows);
     printAliasHitRate(rows);
     if (anyViolations) console.error("\nbench/replay: CORRECTNESS GUARD FAILED — see violations above");
@@ -536,5 +592,5 @@ if (require.main === module) main().catch((e) => { console.error("bench/replay: 
 module.exports = {
   loadEvents, normalizeCalls, portalToCalls, namedConfigs, eachLeverConfigs, runConfig, summarize,
   isReachable, idsOfReadCall, withPermalink, makeUpstream, sha1, parseArgs, LEVER_NAMES, SHIPPED_DEFAULTS, GAP_MS,
-  mergeSearchBursts, MULTI_QUERY_GAP_MS,
+  mergeSearchBursts, MULTI_QUERY_GAP_MS, DEFAULT_TURN_TOKENS,
 };

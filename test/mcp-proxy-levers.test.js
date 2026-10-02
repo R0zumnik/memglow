@@ -629,11 +629,11 @@ test("config: file `proxy` key, env overrides, clamping", () => {
     const e = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_PROXY_DEDUPE: "0", MEMGLOW_PROXY_TOC: "yes", MEMGLOW_PROXY_SEARCH_TOOLS: "find,lookup", MEMGLOW_PROXY_ALREADY_LOADED: "0" });
     assert.deepStrictEqual([e.dedupe, e.toc, e.alreadyLoaded], [false, true, false]);
     assert.deepStrictEqual(e.searchTools, ["find", "lookup"]);
-    assert.strictEqual(L.anyLever({ ...e, sizeWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, multiQuery: false }), false);
+    assert.strictEqual(L.anyLever({ ...e, sizeWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, multiQuery: false, aliases: false, learnAliases: false }), false);
     const def = L.proxyConfig({ MEMGLOW_HOME: path.join(fx.root, "nowhere") });
     assert.deepStrictEqual([def.sizeWarning, def.searchDetails, def.suggestions, def.dedupe, def.toc, def.alreadyLoaded], [true, false, false, false, false, false]);
     assert.strictEqual(def.multiQuery, true, "multiQuery on by default since 0.4.2.2b");
-    assert.deepStrictEqual([def.aliases, def.learnAliases], [false, false], "aliases/learnAliases off by default (0.4.2.4: tokens were worse on the replay fixture)");
+    assert.deepStrictEqual([def.aliases, def.learnAliases], [true, true], "aliases/learnAliases on by default since 0.4.2.5 (effective-tokens rule: fewer calls on the replay fixture)");
     assert.strictEqual(def.aliasesMax, 2000);
     assert.deepStrictEqual(def.alwaysLoaded, [], "no config file: nothing always-loaded beyond the index");
     assert.strictEqual(def.memoryDir, null);
@@ -1040,15 +1040,27 @@ test("multiQuery over HTTP: one merged response, upstream received one POST per 
 // matchAlias, forgetMissing, createAliasStore) are unit-tested on their own in
 // test/learned-aliases.test.js; this section is about the WIRING into createLevers/the real proxy.
 
-test("aliases: off by default — a search that misses, then a read of that note, then a similar later search: nothing is ever learned or injected", async () => {
+test("aliases: on by default since 0.4.2.5 — the same miss -> read -> similar-search scenario now learns and injects with NO env override", async () => {
   const fx = makeNotes();
   const c = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "0" });
   try {
     assert.strictEqual(texts(await c.call("search_notes", { query: "roster assignment sheet" }))[0], "No results");
     await c.call("read_note", { identifier: "carol" });
     const r = texts(await c.call("search_notes", { query: "roster assignment update" }));
+    assert.strictEqual(r.length, 2, "aliases AND learnAliases on by default (0.4.2.5): carol is injected, no env override needed");
+    assert.match(r[0], /^- Carol `carol`$/);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("aliases: explicitly off (MEMGLOW_PROXY_ALIASES=0, MEMGLOW_PROXY_LEARN_ALIASES=0) — a search that misses, then a read of that note, then a similar later search: nothing is ever learned or injected", async () => {
+  const fx = makeNotes();
+  const c = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "0", MEMGLOW_PROXY_ALIASES: "0", MEMGLOW_PROXY_LEARN_ALIASES: "0" });
+  try {
+    assert.strictEqual(texts(await c.call("search_notes", { query: "roster assignment sheet" }))[0], "No results");
+    await c.call("read_note", { identifier: "carol" });
+    const r = texts(await c.call("search_notes", { query: "roster assignment update" }));
     assert.strictEqual(r.length, 1);
-    assert.strictEqual(r[0], "No results", "aliases AND learnAliases default off: nothing changes");
+    assert.strictEqual(r[0], "No results", "both switches explicitly off: nothing changes");
   } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
@@ -1121,16 +1133,18 @@ test("aliases (opt-in): a note already among this search's own results is never 
 
 test("aliases (opt-in): `learnAliases` and `aliases` are independent — learning alone injects nothing, injection alone has nothing to learn from", async () => {
   const fx = makeNotes();
-  // learnAliases only: records aliases, never surfaces them.
-  const c1 = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "0", MEMGLOW_PROXY_LEARN_ALIASES: "1" });
+  // learnAliases only: records aliases, never surfaces them. Both default to true since
+  // 0.4.2.5, so `aliases` must be explicitly forced off here to isolate "learning only".
+  const c1 = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "0", MEMGLOW_PROXY_LEARN_ALIASES: "1", MEMGLOW_PROXY_ALIASES: "0" });
   try {
     await c1.call("search_notes", { query: "roster assignment sheet" });
     await c1.call("read_note", { identifier: "carol" });
     const r1 = texts(await c1.call("search_notes", { query: "roster assignment update" }));
     assert.deepStrictEqual(r1, ["No results"], "aliases off: nothing injected even though it was learned");
   } finally { await c1.close(); }
-  // aliases only, same data folder: whatever was just learned above is now USED.
-  const c2 = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "0", MEMGLOW_PROXY_ALIASES: "1" });
+  // aliases only, same data folder: whatever was just learned above is now USED. `learnAliases`
+  // forced off here, same reason as above, to isolate "injection only" from the default.
+  const c2 = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "0", MEMGLOW_PROXY_ALIASES: "1", MEMGLOW_PROXY_LEARN_ALIASES: "0" });
   try {
     const r2 = texts(await c2.call("search_notes", { query: "roster assignment update" }));
     assert.strictEqual(r2.length, 2, "learnAliases off here, but aliases on surfaces what c1 already learned");
@@ -1147,4 +1161,80 @@ test("aliases: a lever failure (a broken index/store) never breaks the relay", (
   broken.clientMessage({ id: 1, method: "tools/call", params: { name: "search_notes", arguments: { query: "x" } } });
   const m = { id: 1, result: { content: [{ type: "text", text: "No results" }] } };
   assert.deepStrictEqual(broken.serverMessage(m), { msg: m, changed: false });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 0.4.2.5 — aliases must learn from, and inject into, a multiQuery (lever 9, `memglow_queries`)
+// search too: before this stage, that path bypassed handleSearch (and so lever 10) entirely.
+
+test("aliases + multiQuery: a missed multi-phrasing search teaches EVERY phrasing's words, not just the main query", async () => {
+  const fx = makeNotes();
+  const c = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "1", MEMGLOW_PROXY_ALIASES: "1", MEMGLOW_PROXY_LEARN_ALIASES: "1" });
+  try {
+    // 1 — a multi-phrasing search (3 phrasings total — "roster", "assignment", "sheet") misses
+    // carol entirely upstream: each phrasing's own call returns "No results", so the merge tier
+    // fails open to responses[0].
+    const miss = texts(await c.call("search_notes", { query: "roster", memglow_queries: ["assignment", "sheet"] }));
+    assert.deepStrictEqual(miss, ["No results"]);
+    // 2 — reading carol right after: without this stage's fix, s.lastSearch would still be null
+    // (handleSearch never ran for a multiQuery call), so nothing would be learned at all.
+    await c.call("read_note", { identifier: "carol" });
+    // 3 — a later, single-phrasing search sharing "roster" + "assignment" (2 of the learned
+    // words) gets carol injected first — proving the UNION of all 3 phrasings' words was learned,
+    // not only "roster" (the main query), which alone would be just 1 shared word.
+    const r = texts(await c.call("search_notes", { query: "roster assignment update" }));
+    assert.strictEqual(r.length, 2);
+    assert.match(r[0], /^- Carol `carol`$/);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("aliases + multiQuery: a learned candidate is injected into the multiQuery search's own MERGED result", async () => {
+  const fx = makeNotes();
+  const c = start(fx, { MEMGLOW_PROXY_MULTI_QUERY: "1", MEMGLOW_PROXY_ALIASES: "1", MEMGLOW_PROXY_LEARN_ALIASES: "1" });
+  try {
+    // Teach carol's aliases via a plain, single-phrasing search + read (same recipe as the
+    // non-multiQuery alias test above) — multiQuery is on throughout but has nothing to multiply
+    // here (no memglow_queries), so this step is unaffected by it.
+    await c.call("search_notes", { query: "roster assignment sheet" });
+    await c.call("read_note", { identifier: "carol" });
+    // A LATER search that itself carries memglow_queries: without this stage's fix, the merged
+    // result would never pass through handleSearch, so carol would never be injected.
+    const r = texts(await c.call("search_notes", { query: "roster assignment update", memglow_queries: ["timetable change"] }));
+    assert.strictEqual(r.length, 2, "candidate injected into the MERGED multiQuery result, not just a plain search");
+    assert.match(r[0], /^- Carol `carol`$/);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("applyAliasesToSearch: pure helper — learns from all phrasings, injects once, never duplicates an already-present note, no-op when both switches are off", () => {
+  const cfg = { aliases: true, learnAliases: true, searchDetailsMax: 20 };
+  const index = {
+    resolve(r) { return r === "carol" ? "carol" : null; },
+    note(id) { return id === "carol" ? { id: "carol", label: "Carol" } : null; },
+  };
+  let learned = null;
+  const aliases = {
+    available: () => true,
+    learn(note, words) { learned = { note, words }; },
+    match(words, exclude) { return !exclude.has("carol") && words.includes("roster") && words.includes("assignment") ? "carol" : null; },
+    forgetMissing() {},
+  };
+  const s = { lastSearch: null };
+  const result = { content: [{ type: "text", text: "No results" }] };
+
+  const out = L.applyAliasesToSearch(cfg, index, aliases, s, ["roster", "assignment update"], result);
+  assert.deepStrictEqual(s.lastSearch.words, ["roster", "assignment", "update"], "union of significant words from BOTH phrasings, order preserved");
+  assert.strictEqual(out.content.length, 2);
+  assert.match(out.content[0].text, /^- Carol `carol`$/);
+  assert.strictEqual(out.content[1], result.content[0]);
+
+  // Already present (resolved from the result's own text) — never duplicated.
+  const already = { content: [{ type: "text", text: "permalink: carol\nsome hit" }] };
+  const out2 = L.applyAliasesToSearch(cfg, index, aliases, { lastSearch: null }, ["roster", "assignment"], already);
+  assert.strictEqual(out2, already, "candidate already in the merged result: untouched (same reference)");
+
+  // Both switches off: untouched, nothing learned.
+  const s3 = { lastSearch: null };
+  const out3 = L.applyAliasesToSearch({ aliases: false, learnAliases: false, searchDetailsMax: 20 }, index, aliases, s3, ["roster"], result);
+  assert.strictEqual(out3, result);
+  assert.strictEqual(s3.lastSearch, null);
 });

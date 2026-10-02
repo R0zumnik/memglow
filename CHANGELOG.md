@@ -1,5 +1,83 @@
 # Changelog
 
+## 0.4.2.5 — internal (not published)
+
+"Count the turns; aliases learn from multi-phrasing searches."
+
+### Added
+
+- **`bench/replay.js`: "effective tokens" column** = raw tool-result tokens + `calls *
+  turnTokens` (`--turn-tokens`, default `DEFAULT_TURN_TOKENS` = 5,000). Before this stage, the
+  harness scored a lever purely on tool-result tokens, so a lever that trades a CALL for a few
+  extra tokens always looked like a loss — on `bench/replay-aliases.jsonl`,
+  `aliases`+`learnAliases` made 2 fewer calls but cost +25 raw tokens (758 → 783), which is why
+  it shipped off at 0.4.2.4. In reality every extra tool call is a whole extra model turn, which
+  re-sends the system prompt, every MCP tool's schema, and the conversation so far — not just
+  that one tool's own result.
+  - `DEFAULT_TURN_TOKENS` = 5,000 is derived from `bench/results/*.jsonl` (326 real recorded
+    turns from real `claude -p` runs: `sonnet.jsonl`, `haiku.jsonl`, `haiku-prefix.jsonl`,
+    `split-gain.jsonl`): "overhead per call" = `(tokens.input + tokens.cacheCreate +
+    tokens.cacheRead) - estimateTokens(toolResultChars)`, divided by `toolCalls`. Across all 326
+    rows this ranges ≈4,000-19,000 per call (median ≈12,750; 10th percentile ≈6,500) — mostly
+    the system prompt + tool schemas resent on every turn. 5,000 is a deliberate
+    UNDER-estimate (below the 10th percentile, not the median): the point is to stop penalizing
+    a lever for cutting a call, not to inflate how much cutting one is worth. See
+    `bench/replay.js`'s own `DEFAULT_TURN_TOKENS` comment for the full derivation.
+  - **New merge rule for a lever's default**: 0 violations AND effective tokens `<=` off's AND
+    (raw tokens `<=` off's OR calls `<` off's) — applied by eye against the table, same as every
+    earlier stage, not auto-verdicted by this file.
+  - Raw `tokens`/`calls` columns are unchanged and still printed; `printEachBreakdown` (`--each`)
+    also gained an "effective" column. `summarize()` takes a `turnTokens` parameter (default
+    `DEFAULT_TURN_TOKENS`); JSON output (`--json`) includes `effectiveTokens`/`effSavingsAbs`/
+    `effSavingsPct` per row plus the `turnTokens` used.
+
+### Changed
+
+- **MCP proxy: lever 10, `aliases` + `learnAliases` — ON by default** (`lib/proxy-levers.js`'s
+  `DEFAULTS`, mirrored in `bench/replay.js`'s `SHIPPED_DEFAULTS`). Re-decided with the new merge
+  rule above, on all three fixtures that exercise levers 9/10 (`--with
+  aliases,learnAliases,-multiQuery` vs `off`): a no-op (identical calls/tokens to `off`) on
+  `bench/replay-demo.jsonl` and `bench/replay-heavy.jsonl`; on `bench/replay-aliases.jsonl`, 2
+  fewer calls (16 → 14) at +25 raw tokens (758 → 783) now reads as a clear win on EFFECTIVE
+  tokens (80,758 → 70,783). The rule holds on all three, so this lever flips from OFF to ON.
+  `MEMGLOW_PROXY_ALIASES=0` / `"proxy": { "aliases": false }` (and the `learnAliases` equivalent)
+  turn it back off for whoever wants that.
+  - **`dedupe` re-checked against the same rule, for completeness — default left UNCHANGED
+    (still off)**: it also PASSES the rule on all three fixtures (it only ever saves raw tokens,
+    `off`-or-better calls everywhere), but turning it on is left to the owner — it replaces a
+    note's content mid-session with a short "unchanged" stub, a context-compaction risk the
+    effective-tokens number does not capture. Reported in `bench/README.md`'s 0.4.2.5 section,
+    not acted on here.
+- **Lever 10 now learns from, and injects into, a lever 9 (`multiQuery`) multi-phrasing search**
+  — previously a known limitation (see 0.4.2.4's own entry below): a request carrying
+  `memglow_queries` bypasses the normal `clientMessage`/`serverMessage` cycle entirely
+  (`multiQuery.run()` answers the whole burst itself, merged, outside `handleSearch`), so
+  `aliases`/`learnAliases` could neither learn from such a search nor inject a candidate into its
+  merged result.
+  - New `applyAliasesToSearch(cfg, index, aliases, s, phrasings, result)` in
+    `lib/proxy-levers.js` (pure, exported, unit-tested): records `s.lastSearch.words` as the
+    UNION of every phrasing's own significant words (not just the main query's — a note read
+    right after now learns from every phrasing the model tried) and `resultIds` from the merged
+    result, then applies the same injection rule `handleSearch` already used (first learned
+    candidate, prepended, never replacing or removing a row; upstream's-own-format when the
+    merged result is plain text).
+  - `createLevers(...).multiQuery.run(reqMsg, sendUpstream, sessionKey)` gained a third
+    parameter — the same session identifier `clientMessage`/`serverMessage` already take — so it
+    can find (or create) the right session to record into and read from. `createHttpProxy` in
+    `mcp-proxy/memglow-mcp-proxy.js` now passes its `Mcp-Session-Id` (`sk`) through on this call
+    (it already did for every other lever entry point); the stdio path still omits it, same as
+    every other lever call there (stdio is already one single implicit "default" session, same
+    as before this change). `bench/replay.js`'s own `multiQuery` branch passes the event's
+    `session` through too, so the replay harness exercises the exact same code path.
+  - Tests: `test/mcp-proxy-levers.test.js` — a missed multi-phrasing search teaches every
+    phrasing's words (not just the main query), and a learned candidate is injected into a later
+    multi-phrasing search's own merged result; `applyAliasesToSearch` unit-tested directly
+    (learns from several phrasings, never duplicates an already-present note, no-op when both
+    switches are off). Pre-existing alias tests that relied on the old OFF-by-default behaviour
+    were updated to either assert the new ON-by-default behaviour directly, or explicitly force
+    the switches off/on with env vars where the test is specifically about isolating one switch
+    from the other.
+
 ## 0.4.2.4 — internal (not published)
 
 Includes 0.4.2.3 ("query log") below it: the recording half of this same feature, shipped in the

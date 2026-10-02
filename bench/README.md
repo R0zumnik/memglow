@@ -29,6 +29,7 @@ node bench/replay.js --with alreadyLoaded                # + a defaults-plus-alr
 node bench/replay.js --with dedupe,toc --with alreadyLoaded   # one row per --with (repeatable)
 node bench/replay.js --memory-dir path/to/notes --events path/to/events.jsonl --json
 node bench/replay.js --memory path/to/notes                # "--memory" is an alias for "--memory-dir"
+node bench/replay.js --turn-tokens 8000                 # a different per-call overhead (default 5000, see 0.4.2.5)
 ```
 
 - `--events` accepts a JSONL file (or a plain JSON array) of tool calls, one call per line:
@@ -48,10 +49,13 @@ node bench/replay.js --memory path/to/notes                # "--memory" is an al
   every other fixture) and `dropIfHinted` (a retry search skipped entirely — no call, nothing
   counted — once the session's most recent `expect` search already found that exact note,
   modelling "a later re-search that becomes unnecessary once the note is already there").
-- `--with a,b,c` adds a configuration: the shipped **defaults** (stage 0.4.2.2b: sizeWarning +
-  multiQuery — see below) with levers `a`, `b`, `c` also forced on. Repeat the flag for more rows.
-  A name prefixed with `-` forces that lever OFF instead (e.g. `-multiQuery`), to isolate one
-  lever from another's own effect on the same fixture — see `aliases`/`learnAliases` below.
+- `--with a,b,c` adds a configuration: the shipped **defaults** (sizeWarning + multiQuery +
+  aliases + learnAliases — see 0.4.2.2b and 0.4.2.5 below) with levers `a`, `b`, `c` also forced
+  on. Repeat the flag for more rows. A name prefixed with `-` forces that lever OFF instead (e.g.
+  `-multiQuery`), to isolate one lever from another's own effect on the same fixture — see
+  `aliases`/`learnAliases` below.
+- `--turn-tokens n` (0.4.2.5, default 5000) sets the per-call overhead used for the **effective
+  tokens** column — see that stage's section below.
 - `--each` adds one row per lever (sizeWarning, indexWarning, searchDetails, suggestions, dedupe,
   toc, archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery, aliases, learnAliases), each ALONE against the `off`
   baseline (every other lever off) — unlike `--with`, which starts from the shipped defaults. This
@@ -78,12 +82,17 @@ Sample output on the shipped demo (`off` vs `defaults` vs `+alreadyLoaded`, `dem
 `bench/replay-demo.jsonl`, 3 sessions with two re-reads of the index note each):
 
 ```
-configuration              calls   tokens      savings vs off   violations
---------------------------------------------------------------------------
-off                           14     5288          +0 (+0.0%)            0
-defaults                      14     5288          +0 (+0.0%)            0
-+alreadyLoaded                14     1578      +3710 (+70.2%)            0
+(effective tokens = tokens + calls × turn-tokens; turn-tokens = 5000)
+configuration              calls   tokens  effective   eff. savings vs off   violations
+---------------------------------------------------------------------------------------
+off                           14     5288      75288            +0 (+0.0%)            0
+defaults                      14     5288      75288            +0 (+0.0%)            0
++alreadyLoaded                14     1578      71578         +3710 (+4.9%)            0
 ```
+
+(The "effective" column and its `turn-tokens` constant are new at stage 0.4.2.5 — see that
+stage's section below. `defaults` here already includes `aliases`+`learnAliases` since that same
+stage; neither has anything to learn or inject on this fixture, so the row is unchanged.)
 
 **Stage 0.4.2.2 ("lean defaults")**: `defaults` no longer costs more than `off`. Before this
 stage, `searchDetails` and `suggestions` were ON by default and only ADDED explanatory text (they
@@ -109,18 +118,25 @@ keep / shorten / off by default:
 
 ```
 per-lever breakdown (each lever alone, vs off):
-lever                     tokens added/saved   violations
----------------------------------------------------------
-sizeWarning                                0            0
-indexWarning                               0            0
-searchDetails                     +483 added            0
-suggestions                       +331 added            0
-dedupe                           -1449 saved            0
-toc                                        0            0
-archiveHint                                0            0
-hideUnsupportedTools                       0            0
-alreadyLoaded                    -3710 saved            0
+lever                     tokens added/saved           effective   violations
+-----------------------------------------------------------------------------
+sizeWarning                                0                   0            0
+indexWarning                               0                   0            0
+searchDetails                     +483 added          +483 added            0
+suggestions                       +331 added          +331 added            0
+dedupe                           -1449 saved         -1449 saved            0
+toc                                        0                   0            0
+archiveHint                                0                   0            0
+hideUnsupportedTools                       0                   0            0
+alreadyLoaded                    -3710 saved         -3710 saved            0
+multiQuery                                 0                   0            0
+aliases                                    0                   0            0
+learnAliases                               0                   0            0
 ```
+
+(The extra `effective` column is 0.4.2.5; on this fixture it never differs from the raw column
+because no row here changes the CALL count. `bench/replay-aliases.jsonl`, below, is where it
+differs — that is the whole point of this stage.)
 
 On `bench/replay-heavy.jsonl` (67 calls, 4 sessions, closer to a real working session — the same
 handful of notes read and searched repeatedly across a few topics, a few bursts of 2-3 searches
@@ -151,3 +167,73 @@ that pins what an artificially broken lever looks like to the guard; event loadi
 `<=` `off` tokens AND `defaults` calls `<=` `off` calls, 0 violations everywhere; a guard against
 `SHIPPED_DEFAULTS` drifting from `lib/proxy-levers.js`'s own `DEFAULTS`; `parseArgs` — the
 `--memory` alias, unknown flags rejected, `--each`).
+
+### Stage 0.4.2.5 — "count the turns": effective tokens, and `aliases`+`learnAliases` turned on
+
+**The problem.** Scoring a lever on raw tool-result tokens alone undercounts what a tool CALL
+costs: every extra call is an extra model turn, which re-sends the system prompt, every MCP
+tool's schema, and the conversation so far — not just that one tool's own result. On
+`bench/replay-aliases.jsonl`, `aliases`+`learnAliases` (isolated from `multiQuery`'s own
+call-merging with `-multiQuery`) makes 2 FEWER calls than `off` but costs 25 MORE raw tokens
+(758 → 783) — a real win on calls that the raw-tokens column alone makes look like a loss,
+which is exactly why this lever shipped off at 0.4.2.4.
+
+**The fix: effective tokens.** Every row now also reports `effective = tokens + calls *
+turnTokens` (`--turn-tokens`, default `DEFAULT_TURN_TOKENS` = 5000). That default is derived from
+`bench/results/*.jsonl` (326 real recorded turns from real `claude -p` runs — `sonnet.jsonl`,
+`haiku.jsonl`, `haiku-prefix.jsonl`, `split-gain.jsonl`, see `bench/run.js`): for each row,
+"overhead per call" = `(tokens.input + tokens.cacheCreate + tokens.cacheRead) -
+estimateTokens(toolResultChars)`, divided by `toolCalls` — i.e. everything the API billed for
+MINUS what the tool results themselves are worth. Across all 326 rows that ranges roughly
+4,000-19,000 per call (median ≈12,750; 10th percentile ≈6,500), almost all of it the system
+prompt and tool schemas resent on every turn. **5,000 is a deliberate UNDER-estimate** (below the
+10th percentile, not the median): the goal is to stop penalizing a lever for cutting a call, not
+to inflate how much cutting one is worth. See `bench/replay.js`'s `DEFAULT_TURN_TOKENS` comment
+for the exact numbers; a host or fixture with smaller tool schemas will see a smaller REAL
+overhead than this default, so treat it as a floor and pass `--turn-tokens` with a number measured
+for your own setup when it matters.
+
+**The new merge rule.** A lever earns ON by default only when, vs `off`: 0 violations, AND its
+effective tokens are `<=` off's, AND (its raw tokens are `<=` off's OR it makes fewer calls than
+off). This is still a human reading the table and applying the rule by eye — same as every earlier
+stage — not something this file auto-verdicts.
+
+**Re-decided**, on all three fixtures that exercise levers 9/10 (`bench/replay-demo.jsonl`,
+`bench/replay-heavy.jsonl`, `bench/replay-aliases.jsonl`), `--with aliases,learnAliases,
+-multiQuery` vs `off`:
+
+| fixture | calls (off → lever) | raw tokens (off → lever) | effective (off → lever) | rule holds? |
+|---|---|---|---|---|
+| replay-demo.jsonl | 14 → 14 | 5288 → 5288 | 75288 → 75288 | yes (no-op, nothing to learn/inject here) |
+| replay-heavy.jsonl | 67 → 67 | 17581 → 17581 | 352581 → 352581 | yes (no-op, same reason) |
+| replay-aliases.jsonl | 16 → 14 | 758 → 783 | 80758 → 70783 | yes (fewer calls wins: effective 70,783 < 80,758) |
+
+The rule holds on all three, so **`aliases` and `learnAliases` now ship ON by default**
+(`lib/proxy-levers.js`'s `DEFAULTS.aliases`/`DEFAULTS.learnAliases`, and `SHIPPED_DEFAULTS` here,
+mirrored in lockstep as always).
+
+**`dedupe` was also re-checked** against the same rule, for completeness — it is still OFF by
+default and this stage does **not** change that (left to the owner: it replaces a note's content
+with a short "unchanged" stub mid-session, a context-compaction risk the effective-tokens number
+does not capture). For the record, it also PASSES the rule on all three files (it only ever saves
+raw tokens, same `off`-or-better calls everywhere), so there is nothing in this harness's own
+numbers blocking turning it on too — purely a judgment call left for later.
+
+**Also fixed**: a search carrying lever 9's own `memglow_queries` used to bypass
+`aliases`/`learnAliases` entirely — `multiQuery.run()` answers the whole multi-phrasing burst
+OUTSIDE the normal `clientMessage`/`serverMessage` cycle that lever 10 hooks into via
+`handleSearch`, so it could neither learn from a multi-phrasing search nor inject into one (see
+the "known limitation" callout in CHANGELOG 0.4.2.4's own entry, now resolved). Fixed by
+`applyAliasesToSearch()` (`lib/proxy-levers.js`), called from `multiQuery.run()` on the merged
+result: `s.lastSearch` now records the UNION of every phrasing's own significant words (not just
+the main query's), and the same injection rule (first learned candidate, prepended, never
+replacing a row) applies to the merged result. `bench/replay.js`'s own `multiQuery` branch passes
+the event's `session` through to `engine.multiQuery.run()` so this has a session to record into
+during a replay, same as the real proxy (`mcp-proxy/memglow-mcp-proxy.js` now passes the HTTP
+`Mcp-Session-Id` through too; stdio already used a single implicit session).
+
+Tests: `test/mcp-proxy-levers.test.js` (end to end, stdio: a multi-phrasing search that misses
+teaches EVERY phrasing's words, not just the main query; a learned candidate is injected into a
+multi-phrasing search's own merged result; `applyAliasesToSearch` unit-tested on its own) and
+`test/bench-replay.test.js` (`--turn-tokens` parsing, `summarize`'s `effectiveTokens`/
+`effSavingsAbs` arithmetic, including the `turnTokens = 0` no-op case).
