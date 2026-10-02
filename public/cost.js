@@ -63,6 +63,9 @@ var EN_COST = {
   "speed.read": "Read",
   "speed.write": "Write",
   "speed.hint": "Time the memory server takes to answer each call, measured by the memglow MCP proxy (request to response). Alert when the search median of the last 24 hours is at least twice that of the 6 days before, and at least 250 ms slower.",
+  "cost.byAiTool": "By AI tool · {days} days:",
+  "cost.byAiToolCalls": { "one": "{n} call", "other": "{n} calls" },
+  "cost.byAiToolUnknown": "Unknown tool",
   "org.none": "No scattered notes found: every subject sits in one sub-theme.", "org.why": "Why",
   "org.scattered": "{n} notes about “{topic}” are spread across {k} sub-themes of {group} — group them under “{target}”?",
   "org.alone": "“{label}” is alone in the sub-theme “{from}” — move it to “{target}”?",
@@ -512,6 +515,39 @@ function costEngineSpeed(e, T) {
   return html;
 }
 
+// Product names: never translated (same reasoning, and the same list, as app.js's SOURCE_LABELS —
+// kept duplicated here so cost.js stays self-contained; the ids are lib/clients.js's CLIENTS,
+// lib/proxy-levers.js's clientBucket() picks one of these ids, its own raw unlisted name, or
+// "unknown" when the MCP client sent neither a name nor a title at all).
+var COST_CLIENT_LABELS = {
+  "claude-code": "Claude Code", codex: "Codex", gemini: "Gemini CLI", cursor: "Cursor", windsurf: "Windsurf",
+  copilot: "GitHub Copilot", cline: "Cline", chatgpt: "ChatGPT", "other-mcp": "Other MCP client"
+};
+function costClientLabel(id, T) {
+  if (id === "unknown") return T("cost.byAiToolUnknown");
+  return COST_CLIENT_LABELS[id] || id; // an unlisted MCP client: shown exactly as it introduced itself
+}
+
+/**
+ * Tiny "By AI tool" line: baseline tokens the MCP proxy relayed per client (lib/proxy-levers.js
+ * createSavings/addClient, <dataDir>/proxy-savings.json, via /api/cost's `clientTokens`), busiest
+ * first. Counts only, never note content. No data at all (most installs, single client, or the
+ * proxy's savingsFile off) → nothing rendered, not even an empty-state message: this is one line
+ * of extra context on top of Memory engine speed, not its own block.
+ */
+function costClientTokens(ct, T) {
+  T = T || defaultCostT;
+  if (!ct || !ct.byClient) return "";
+  var names = Object.keys(ct.byClient);
+  if (!names.length) return "";
+  names.sort(function (a, b) { return ct.byClient[b].tokens - ct.byClient[a].tokens; });
+  var items = names.map(function (name) {
+    var v = ct.byClient[name];
+    return costClientLabel(name, T) + " " + costTokens(v.tokens) + " (" + T("cost.byAiToolCalls", { n: v.calls }) + ")";
+  });
+  return '<p class="mg-cost__hint mg-cost__byclient">' + costEsc(T("cost.byAiTool", { days: ct.days })) + " " + costEsc(items.join(" · ")) + "</p>";
+}
+
 // ---- Archive tier (lib/archive.js): dormant sections ----
 
 // Label of the default AI, for "Do it with <provider>" (set by the page).
@@ -634,7 +670,7 @@ function costRender(c, colors, T) {
   html += '</div>';
   html += '<div class="mg-cost__grid mg-cost__grid--two">';
   html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.findTime")) + '</figcaption>' + costFindTime(c.findTime, T) + '</figure>';
-  html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.engineSpeed")) + '</figcaption>' + costEngineSpeed(c.engineSpeed, T) + '</figure>';
+  html += '<figure class="mg-cost__block"><figcaption>' + costEsc(T("cost.engineSpeed")) + '</figcaption>' + costEngineSpeed(c.engineSpeed, T) + costClientTokens(c.clientTokens, T) + '</figure>';
   html += '</div>';
   if (c.archive) html += '<figure class="mg-cost__block mg-arch" id="mg-arch"><figcaption>' + costEsc(T("cost.archive", { n: costNumber(c.archive.afterDays) })) + '</figcaption>' + costArchive(c.archive, colors, T) + '</figure>';
   if (c.structure) html += '<figure class="mg-cost__block mg-struct" id="mg-struct"><figcaption>' + costEsc(T("cost.structure")) + '</figcaption>' + costStructure(c.structure, T) + '</figure>';
@@ -642,7 +678,7 @@ function costRender(c, colors, T) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costStructure: costStructure, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costPercent: costPercent, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, costDuration: costDuration, costFindTime: costFindTime, costEngineSpeed: costEngineSpeed, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT, mgBannerKind: mgBannerKind, mgErrorBanner: mgErrorBanner, mgClearBanner: mgClearBanner };
+  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costStructure: costStructure, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costPercent: costPercent, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, costDuration: costDuration, costFindTime: costFindTime, costEngineSpeed: costEngineSpeed, costClientTokens: costClientTokens, costClientLabel: costClientLabel, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT, mgBannerKind: mgBannerKind, mgErrorBanner: mgErrorBanner, mgClearBanner: mgClearBanner };
 }
 
 (function () {

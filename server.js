@@ -26,6 +26,7 @@ const archive = require("./lib/archive");
 const hubSpoke = require("./lib/hub-spoke");
 const { createFindTime } = require("./lib/find-time");
 const { createEngineSpeed, cleanDuration } = require("./lib/engine-speed");
+const { readClientSavings } = require("./lib/proxy-levers");
 
 const PUBLIC = path.join(__dirname, "public");
 // Interface languages shipped (public/i18n/<code>.json); must match lib/view.js SETTINGS.language
@@ -300,6 +301,15 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       files: measureFiles(config.alwaysLoaded || [], { cwd: config.cwd || process.cwd() }),
       days: counters.days(), now: Date.now(), sessionsPerDay: config.sessionsPerDay || 5, indexWarningTokens: config.indexWarningTokens || 2000,
     });
+  }
+  /**
+   * Per-client baseline tokens relayed by the MCP proxy (lib/proxy-levers.js createSavings,
+   * <dataDir>/proxy-savings.json, last 7 days) — the Memory cost panel's "By AI tool" line.
+   * Counts only, never note content. Not cached: a small file, read fresh each request, like
+   * alwaysLoaded() above; null when there is no data folder at all.
+   */
+  function clientTokensNow() {
+    return readClientSavings(dataDir, { now: Date.now() });
   }
   /**
    * Archive tier (lib/archive.js): dormant sections, read only. Section titles only when note bodies
@@ -638,7 +648,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       return;
     }
     if (p === "/api/graph") return json(res, 200, memory.graph());
-    if (p === "/api/cost") return json(res, 200, { ...cost(), alwaysLoaded: alwaysLoaded(), findTime: findTimeNow(), engineSpeed: engineSpeed.summary() });
+    if (p === "/api/cost") return json(res, 200, { ...cost(), alwaysLoaded: alwaysLoaded(), findTime: findTimeNow(), engineSpeed: engineSpeed.summary(), clientTokens: clientTokensNow() });
     if (p === "/api/zones") {
       const z = zones.read();
       return json(res, 200, { ...z, themes: zonesLib.overview(config, memory.costNotes(), z.labels) });
