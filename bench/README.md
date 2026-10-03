@@ -55,6 +55,13 @@ node bench/replay.js --turn-tokens 8000                 # a different per-call o
   `expect` (it has nothing to do with a note id): the retry is dropped whenever the most recent
   search in that session already carried the `negativeCache` hint text, tracked the same way as
   the `expect`-based case but independently of it (see `runConfig`'s `lastNegativeCacheHinted`).
+  `bench/replay-delta-read.jsonl` (stage 0.4.3) is for the `deltaRead` lever: a note is read, then
+  edited and read again in the SAME session (mechanism 2, the within-session diff), then edited
+  once more and read from a BRAND NEW session (mechanism 1, the cross-session header) — plus a
+  same-session re-read and a later unchanged first read, to pin "no header/diff when nothing
+  changed". `bench/replay-delta-read-portal.json` is the SAME lever replayed through the portal
+  shape instead — see that stage's section below for why it comes back a no-op there, by
+  construction, not because the lever did nothing.
 - `--with a,b,c` adds a configuration: the shipped **defaults** (sizeWarning + multiQuery +
   aliases + learnAliases — see 0.4.2.2b and 0.4.2.5 below) with levers `a`, `b`, `c` also forced
   on. Repeat the flag for more rows. A name prefixed with `-` forces that lever OFF instead (e.g.
@@ -64,7 +71,7 @@ node bench/replay.js --turn-tokens 8000                 # a different per-call o
   tokens** column — see that stage's section below.
 - `--each` adds one row per lever (sizeWarning, indexWarning, searchDetails, suggestions, dedupe,
   toc, archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery, aliases, learnAliases,
-  negativeCache, indexHint), each ALONE against the `off`
+  negativeCache, indexHint, deltaRead), each ALONE against the `off`
   baseline (every other lever off) — unlike `--with`, which starts from the shipped defaults. This
   is the per-lever "does it add or save tokens, and how much" breakdown used to decide, lever by
   lever, whether to keep it as shipped, shorten its text, or turn it off by default (see
@@ -284,3 +291,45 @@ Tests: `test/negative-cache.test.js` (pure pieces — `normalizedKey`, `memoryFi
 `test/negative-cache-levers.test.js` (integration through `createLevers`: futile-then-hinted,
 read-redeemed, write-invalidated, never leaks query text, both `indexHint` cases, and the
 `alreadyLoaded` interaction).
+
+### Stage 0.4.3 — "cross-session delta reads"
+
+Lever 13 (`deltaRead`, `lib/delta-read.js`), re-run against the SAME merge rule, `--each` on all
+four existing fixtures plus a new, dedicated
+[`bench/replay-delta-read.jsonl`](replay-delta-read.jsonl):
+
+| fixture | `deltaRead` alone (raw / effective, vs off) |
+|---|---|
+| replay-demo.jsonl | -11 / -11 (one edit-then-reread already in the fixture) |
+| replay-heavy.jsonl | -11 / -11 (same shape, same note) |
+| replay-aliases.jsonl | 0 / 0 (no-op: no note is ever re-read after an edit) |
+| replay-negative-cache.jsonl | 0 / 0 (no-op, same reason) |
+| replay-delta-read.jsonl | **-5992 / -5992** (mechanism 2 fires once, mechanism 1 fires once) |
+
+Unlike `indexHint`/`negativeCache` at 0.4.2.6, there is no file here where this lever costs
+anything: the cross-session header (mechanism 1) never even fires outside its own dedicated
+fixture, so on every other file it is a pure no-op, and the within-session diff (mechanism 2)
+only ever saves. The rule (0 violations AND effective `<=` off AND (raw `<=` off OR calls `<`
+off)) holds on all five with margin. Still, `deltaRead` **ships off by default**: the two levers
+that DID flip on this cycle (`multiQuery` at 0.4.2.2b, `aliases` at 0.4.2.5) both had a real,
+multi-day usage log behind the decision, not just hand-built fixtures built to exercise exactly
+the scenario being measured — a clean sweep here is encouraging, not yet the same bar. It also
+starts a brand new per-client ledger file on disk the moment it is turned on, which is worth a
+cycle of real use before it writes by default.
+[`bench/replay-delta-read-portal.json`](replay-delta-read-portal.json) replays the SAME idea
+through the owner-style portal shape (`{"evenements": [...]}`) — and comes back identical to
+`defaults` (a no-op), **by construction**: `portalToCalls()` turns an `ecriture` event into an
+`edit_note` call with `content: ""` (the portal log never carries note text, only ids — the whole
+point of that format), so the replayed note never actually changes for either mechanism to
+notice. An honest limit of the measurement format, not evidence the lever is a no-op in practice.
+
+Tests: `test/delta-read.test.js` (pure pieces — `sectionFingerprints`, `changedSectionTitles`,
+`crossSessionHeader`, `renderDiff`/`applyDiff` round-trips including truncation and the
+fallback-to-full-text threshold, plus the one fs-touching `createDeltaReadStore`: atomic write,
+mode 600, bounded, per-client), `test/delta-read-levers.test.js` (integration through
+`createLevers`: first-read-is-always-full, the within-session diff and its escape hatch, the
+cross-session header and its persistence across a restart, the off-by-default no-op, and the
+"a broken store never breaks the relay" safety net), and `test/bench-replay.test.js`'s own
+`isReachable` extension (a valid diff reconstructs → reachable; a diff reconstructing the WRONG
+text, or missing its `previousFullText` entirely, → a violation EVEN THOUGH the header also
+names `memglow_fresh` — the escape-hatch loophole must not paper over a broken diff).

@@ -21,7 +21,8 @@
  *                isolate a lever from multiQuery's own call-merging on a fixture where the two
  *                would otherwise interact — see bench/replay-aliases.jsonl).
  *                Lever names: sizeWarning, indexWarning, searchDetails, suggestions, dedupe, toc,
- *                archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery, aliases, learnAliases.
+ *                archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery, aliases, learnAliases,
+ *                negativeCache, indexHint, deltaRead.
  * --always-loaded a,b   extra `alwaysLoaded` entries (note references) for lever 8, on top of the
  *                index note(s) it already covers by default.
  * --turn-tokens n   per-call overhead used for the "effective tokens" column (0.4.2.5), see
@@ -55,6 +56,7 @@ const crypto = require("crypto");
 const L = require("../lib/proxy-levers");
 const LA = require("../lib/learned-aliases");
 const NC = require("../lib/negative-cache");
+const DR = require("../lib/delta-read");
 const { estimateTokens } = require("../lib/cost");
 
 const ROOT = path.join(__dirname, "..");
@@ -99,11 +101,12 @@ const LEVER_ENV = {
   learnAliases: "MEMGLOW_PROXY_LEARN_ALIASES",
   negativeCache: "MEMGLOW_PROXY_NEGATIVE_CACHE",
   indexHint: "MEMGLOW_PROXY_INDEX_HINT",
+  deltaRead: "MEMGLOW_PROXY_DELTA_READ",
 };
 const LEVER_NAMES = Object.keys(LEVER_ENV);
 // The shipped defaults (lib/proxy-levers.js DEFAULTS), named here explicitly so this file keeps
 // working unchanged even if that module's own defaults ever drift.
-const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false, multiQuery: true, aliases: true, learnAliases: true, negativeCache: false, indexHint: false };
+const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false, multiQuery: true, aliases: true, learnAliases: true, negativeCache: false, indexHint: false, deltaRead: false };
 // multiQuery (lever 9, 0.4.2.2b): "no read in between, within 2 min" — see mergeSearchBursts below.
 const MULTI_QUERY_GAP_MS = 2 * 60 * 1000;
 
@@ -296,6 +299,13 @@ function mergeSearchBursts(calls, searchTools) {
 /**
  * Is the note's full CURRENT text still reachable for the model, given what was just delivered?
  *   - delivered in full just now (`deliveredText` contains `upstreamFull` verbatim) → yes
+ *   - a lever `deltaRead` diff (deliveredText carries DR.DELTA_READ_MARKER, see lib/delta-read.js):
+ *     reachable iff that diff, applied to `previousFullText` (version A, delivered earlier THIS
+ *     session), truly reconstructs `upstreamFull` (version B) — DR.applyDiff is the SAME code
+ *     the real proxy would need to get right; this is a REAL check, not the escape-hatch
+ *     loophole below, so a diff that reconstructs the WRONG text is a violation even though its
+ *     own header also names "memglow_fresh" (that only means "the model CAN ask again", not
+ *     "what it was just handed was correct").
  *   - delivered in full earlier in this SAME session and unchanged since (`previousFullHash`
  *     equals the note's current hash) → yes
  *   - in the always-loaded context (index note, or a configured `alwaysLoaded` entry) and
@@ -303,12 +313,18 @@ function mergeSearchBursts(calls, searchTools) {
  *   - the stub names the escape hatch (`memglow_fresh`, `L.ARG_FRESH`) → yes, the model can ask again
  *   - otherwise → NO: a violation.
  */
-function isReachable({ deliveredText, upstreamFull, previousFullHash = null, baselineHash = null }) {
+function isReachable({ deliveredText, upstreamFull, previousFullHash = null, previousFullText = null, baselineHash = null }) {
   const currentHash = sha1(upstreamFull);
   const deliveredFull = deliveredText.includes(upstreamFull);
-  if (deliveredFull) return { reachable: true, deliveredFull: true, hash: currentHash };
+  if (deliveredFull) return { reachable: true, deliveredFull: true, reconstructed: false, hash: currentHash };
+  const markerAt = deliveredText.indexOf(DR.DELTA_READ_MARKER);
+  if (markerAt >= 0) {
+    const rebuilt = previousFullText != null ? DR.applyDiff(previousFullText, deliveredText.slice(markerAt)) : null;
+    const reconstructed = rebuilt === upstreamFull;
+    return { reachable: reconstructed, deliveredFull: false, reconstructed, hash: currentHash };
+  }
   const reachable = previousFullHash === currentHash || baselineHash === currentHash || deliveredText.includes(L.ARG_FRESH);
-  return { reachable, deliveredFull: false, hash: currentHash };
+  return { reachable, deliveredFull: false, reconstructed: false, hash: currentHash };
 }
 
 /** Note ids a read-kind call targets, resolved through the SAME `index.resolve` the engine uses. */
@@ -372,7 +388,8 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
   const savings = L.createSavings(config, () => {});
   const aliasStore = LA.createAliasStore(config);
   const negativeCacheStore = NC.createNegativeCacheStore(config);
-  const engine = L.createLevers({ config, index, savings, serverName: "basic-memory", aliasStore, negativeCacheStore });
+  const deltaReadStore = DR.createDeltaReadStore(config);
+  const engine = L.createLevers({ config, index, savings, serverName: "basic-memory", aliasStore, negativeCacheStore, deltaReadStore });
   const upstream = makeUpstream(notesDir);
   const memory = index._memory();
 
@@ -400,7 +417,7 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
         if (h) baseline.set(id, h);
       }
     }
-    s = { fullDelivered: new Map(), baseline };
+    s = { fullDelivered: new Map(), fullText: new Map(), baseline };
     sessions.set(key, s);
     return s;
   }
@@ -458,8 +475,13 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
         if (!rel) continue;
         let upstreamFull;
         try { upstreamFull = withPermalink(fs.readFileSync(path.join(notesDir, rel), "utf8"), rel.replace(/\.md$/i, "")); } catch { continue; }
-        const r = isReachable({ deliveredText, upstreamFull, previousFullHash: s.fullDelivered.get(id) || null, baselineHash: s.baseline.get(id) || null });
-        if (r.deliveredFull) s.fullDelivered.set(id, r.hash);
+        const r = isReachable({
+          deliveredText, upstreamFull, previousFullHash: s.fullDelivered.get(id) || null,
+          previousFullText: s.fullText.has(id) ? s.fullText.get(id) : null, baselineHash: s.baseline.get(id) || null,
+        });
+        // A successful diff reconstruction leaves the model with B in full, same as a genuine
+        // full delivery: the NEXT read's "version A" is B, not the stale text before this one.
+        if (r.deliveredFull || r.reconstructed) { s.fullDelivered.set(id, r.hash); s.fullText.set(id, upstreamFull); }
         if (!r.reachable) { violations++; violationDetails.push({ session: ev.session, tool: ev.tool, id }); }
       }
     }

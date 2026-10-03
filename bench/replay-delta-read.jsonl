@@ -1,0 +1,7 @@
+{"session":"dr-1","tool":"read_note","args":{"identifier":"reference-incident-log"},"t":1}
+{"session":"dr-1","tool":"edit_note","args":{"identifier":"reference-incident-log","operation":"append","content":"\n**2025-09-01 — Reverse proxy.** Symptom: one upstream service returned 502 under load. Cause: a connection pool ran out under a traffic spike. Fix: raised the pool size and added a queue depth alert. Time to fix: 45 minutes. Alert added to the weekly review.\n"},"t":2}
+{"session":"dr-1","tool":"read_note","args":{"identifier":"reference-incident-log"},"t":3}
+{"session":"dr-1","tool":"edit_note","args":{"identifier":"reference-incident-log","operation":"append","content":"\n**2025-09-14 — Backups.** Symptom: a restore test failed halfway through. Cause: a snapshot was truncated by a disk running out of space. Fix: added a free-space check before each snapshot and alerted a week early. Time to fix: 80 minutes. Restore test planned for next month.\n"},"t":4}
+{"session":"dr-2","tool":"read_note","args":{"identifier":"reference-incident-log"},"t":5}
+{"session":"dr-2","tool":"read_note","args":{"identifier":"reference-incident-log"},"t":6}
+{"session":"dr-3","tool":"read_note","args":{"identifier":"reference-incident-log"},"t":7}

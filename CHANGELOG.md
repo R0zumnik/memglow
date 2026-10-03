@@ -1,5 +1,129 @@
 # Changelog
 
+## 0.4.3 — internal (not published)
+
+"Cross-session delta reads." Since 0.4.1, six internal micro-steps (0.4.2 → 0.4.2.6) built up the
+MCP proxy's lever system one measured lever at a time: lean defaults for `searchDetails`/
+`suggestions` (0.4.2.2), `multiQuery` — several search phrasings in one upstream round trip
+(0.4.2.2b, shipped ON), `aliases`/`learnAliases` — the owner's own search log taught back to the
+proxy (0.4.2.3/0.4.2.4, shipped ON at 0.4.2.5 once the harness learned to count a dropped CALL,
+not just raw tokens — "effective tokens" = tokens + calls × a per-turn overhead), and
+`negativeCache`/`indexHint` (0.4.2.6, both shipped OFF: a real, unmodelled cost on one fixture for
+the first, no call ever saved for the second). This stage adds a 13th lever, `deltaRead` (OFF by
+default), for a gap none of the first twelve cover: the hottest notes get **re-read in every new
+session** (≈21 reads/7 days for one note, in the owner's own log) — lever 4 (`dedupe`) only
+covers a re-read in the SAME session, and a brand new session's EMPTY context makes its short
+"unchanged" stub actively wrong there.
+
+### Added
+
+- **MCP proxy: lever 13, `deltaRead`** (`lib/delta-read.js`), OFF by default (see Changed below).
+  Two mechanisms:
+  1. **Cross-session.** The first read of a note in a session always gets the full current text
+     (never shortened for this) — the only addition is a one-line header, at most once, when the
+     note changed since the LAST time this SAME CLIENT read it, in an EARLIER session: `memglow:
+     changed since your last read on <date> — sections changed: <## titles>` (up to 5, "(intro)"
+     for the untitled lead section). Remembered in a small persisted ledger, per client
+     (`clientBucket`), `delta-read.json` in memglow's data folder — same house style as
+     `negative-cache.json`/`learned-aliases.json`: atomic write, mode 600, bounded
+     (`deltaReadMax`, default 5,000 entries, oldest dropped).
+  2. **Within-session, note CHANGED.** The gap `dedupe` leaves open: a note already delivered in
+     full THIS session (version A), re-read after it changed (now version B), falls through to a
+     second full delivery today. Since the model already has A, only the DIFF to B crosses the
+     wire — `renderDiff`, reusing `lib/assistant/diff.js`'s existing prefix/suffix + bounded-LCS
+     line diff (the same diff code the Assistant tab's proposals already use), rendered as a
+     compact, bounded, line-oriented format tagged with a `DELTA_READ_MARKER` sentinel and
+     reconstructable by `applyDiff` given version A — with a header naming the escape hatch. Too
+     large a diff (> 60% of B, `DIFF_FALLBACK_RATIO`) or one that hit the hard `MAX_DIFF_LINES`
+     safety bound falls back to B in full instead. Same escape hatch (`memglow_fresh`) and
+     "repeat the call → full content" rule as levers 4/5/8; a successful diff delivery updates
+     BOTH the within-session bookkeeping (`s.deltaText`) AND the cross-session ledger (this
+     client now has B, even though it arrived as a diff).
+  - Pure logic in `lib/delta-read.js`: `sha1Hex`, `sectionFingerprints` (reuses `lib/cost.js`'s
+    `sectionSpans`), `changedSectionTitles`, `crossSessionHeader`, `renderDiff`/`applyDiff`
+    (round-trip tested: `applyDiff(before, renderDiff(before, after).text) === after`),
+    `worthDelivering`; the one fs-touching piece, `createDeltaReadStore`.
+  - Wiring in `lib/proxy-levers.js` `handleRead`: a new session field `deltaText` (version A's
+    text, cleared on `initialize`), a `firstReadThisSession` flag captured BEFORE `s.read` is
+    updated for it (dedupe's `s.read` is reused, not duplicated), the within-session diff slot
+    placed right after lever 4's own "unchanged" check (so it only ever sees the "changed" case
+    dedupe's own `if` did not already handle), and the cross-session header/ledger-write folded
+    into the existing "full delivery" block (alongside levers 1/3) since mechanism 1 never
+    replaces anything. `createLevers` takes an optional `deltaReadStore` (new `NOOP_DELTA_READ_
+    STORE` default, same shape as the alias/negative-cache no-op stores); wired into
+    `mcp-proxy/memglow-mcp-proxy.js` (`setupLevers`, flushed on exit) and `bench/replay.js`.
+  - `createSavings` gained a `deltaRead`/`deltaReadCalls` bucket alongside `dedupe`/`toc`/
+    `alreadyLoaded`.
+- **`bench/replay.js` correctness guard**: `isReachable` now understands a delta-read diff
+  delivery (`deliveredText` carrying `DR.DELTA_READ_MARKER`) — reachable iff `DR.applyDiff`,
+  given the session's own `previousFullText` (now tracked alongside the existing
+  `previousFullHash`), truly reconstructs the real, current file. A REAL check, not the
+  escape-hatch loophole the other branches fall back to: a diff that reconstructs the WRONG text
+  (or arrives with no known `previousFullText` to check it against) is a VIOLATION even though
+  its own header also names `memglow_fresh`.
+- New fixtures: [`bench/replay-delta-read.jsonl`](../bench/replay-delta-read.jsonl) (one note
+  read, edited and re-read in the same session, edited again and read from a brand new session,
+  plus a same-session unchanged re-read and a later unchanged first read — pinning "no header/
+  diff when nothing changed") and
+  [`bench/replay-delta-read-portal.json`](../bench/replay-delta-read-portal.json) (the same idea
+  through the owner-style portal shape).
+
+### Changed
+
+- **`deltaRead` ships OFF by default.** `--each` against `off`, on all five fixtures above plus
+  the pre-existing three (`replay-demo.jsonl`, `replay-heavy.jsonl`, `replay-aliases.jsonl`,
+  `replay-negative-cache.jsonl`):
+
+  | fixture | raw / effective tokens, vs off |
+  |---|---|
+  | replay-demo.jsonl | -11 / -11 |
+  | replay-heavy.jsonl | -11 / -11 |
+  | replay-aliases.jsonl | 0 / 0 (no-op) |
+  | replay-negative-cache.jsonl | 0 / 0 (no-op) |
+  | replay-delta-read.jsonl | **-5992 / -5992** |
+
+  The merge rule (0 violations AND effective tokens `<=` off AND (raw tokens `<=` off OR calls
+  `<` off)) holds on every file, with margin, and unlike `negativeCache`/`indexHint` at 0.4.2.6
+  there is no file where it costs anything — the header never even fires outside its own
+  dedicated fixture. Still shipped OFF: `multiQuery` and `aliases` both flipped to ON only after
+  a real, multi-day usage log backed the decision (0.4.2.2b, 0.4.2.5) — a clean sweep on
+  hand-built replay files is encouraging, not the same bar, and this lever starts a brand new
+  per-client ledger file on disk the moment it is on. `MEMGLOW_PROXY_DELTA_READ=1` /
+  `"proxy": { "deltaRead": true }` to opt in.
+  [`bench/replay-delta-read-portal.json`](../bench/replay-delta-read-portal.json) comes back
+  identical to `defaults` — a no-op **by construction**: the portal log's `ecriture` events carry
+  only a note id, never content (the whole point of that format), so `portalToCalls()` turns one
+  into an `edit_note` call with `content: ""`, which never actually changes the replayed note.
+  An honest limit of the measurement format, not evidence against the lever.
+- `README.md`, `mcp-proxy/README.md` and `bench/README.md`: lever 13 documented in the levers
+  table, a new "Stage 0.4.3" section in each of the latter two, and the `deltaRead`/
+  `deltaReadMax` keys added to the `memglow.config.json` example.
+
+### Tests
+
+- `test/delta-read.test.js` — pure pieces (`sectionFingerprints`, `changedSectionTitles`,
+  `crossSessionHeader`, `renderDiff`/`applyDiff` round-trips including a brand-new note, a
+  deletion, truncation past `MAX_DIFF_LINES`, and the > 60% fallback threshold, `worthDelivering`)
+  plus the one fs-touching `createDeltaReadStore` (disabled without a data folder or with the
+  switch off, atomic write, mode 600, bounded with oldest dropped first, invalid entries never
+  stored, a malformed file on disk treated as empty).
+- `test/delta-read-levers.test.js` — integration through `createLevers`: the first read of a note
+  in a session is always full; a within-session re-read after a change gets a reconstructable
+  diff; repeating the call (or `memglow_fresh`) returns the full text again; an unchanged
+  re-read is untouched (dedupe's job, not this lever's); a near-total rewrite falls back to the
+  full text; a new session's first read of a changed note gets the header naming the changed
+  section; no header when nothing changed, even across sessions; a within-session diff delivery
+  also updates the cross-session ledger; the ledger persists across a brand new engine/store
+  pointed at the same data folder (a process restart); off by default end to end; and a
+  deliberately broken store never breaks the relay.
+- `test/bench-replay.test.js`: `isReachable`'s new diff-reconstruction branch (a valid diff with
+  its matching `previousFullText` → reachable; missing `previousFullText`, or a diff that
+  reconstructs the wrong text → a violation despite the escape-hatch text; `deliveredFull` still
+  takes priority even if the text happens to also contain the marker), plus an end-to-end
+  `runConfig` test over `bench/replay-delta-read.jsonl` pinning "0 violations everywhere, fewer
+  tokens with `deltaRead` on".
+- `npm test` green (465 tests).
+
 ## 0.4.2.6 — internal (not published)
 
 "Negative cache + the index already answers."

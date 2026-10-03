@@ -45,6 +45,7 @@ const core = require("../lib/agent-core");
 const levers = require("../lib/proxy-levers");
 const learnedAliases = require("../lib/learned-aliases");
 const negativeCacheLib = require("../lib/negative-cache");
+const deltaReadLib = require("../lib/delta-read");
 const memoryRules = require("../lib/memory-rules");
 const { StringDecoder } = require("string_decoder");
 
@@ -204,8 +205,9 @@ function setupLevers(env = process.env, serverName = "") {
     const savings = levers.createSavings(config);
     const aliasStore = learnedAliases.createAliasStore(config);
     const negativeCacheStore = negativeCacheLib.createNegativeCacheStore(config);
-    const engine = levers.createLevers({ config, index, savings, serverName, aliasStore, negativeCacheStore });
-    return { ...engine, savings, aliasStore, negativeCacheStore, config };
+    const deltaReadStore = deltaReadLib.createDeltaReadStore(config);
+    const engine = levers.createLevers({ config, index, savings, serverName, aliasStore, negativeCacheStore, deltaReadStore });
+    return { ...engine, savings, aliasStore, negativeCacheStore, deltaReadStore, config };
   } catch (e) {
     process.stderr.write(`memglow-mcp-proxy: levers disabled (${e.message})\n`);
     return null;
@@ -299,7 +301,7 @@ function runStdio(o) {
     process.stdin.on("end", () => { up.end(); child.stdin.end(); });
     child.stdout.on("data", (c) => down.push(c));
     child.stdout.on("end", () => down.end());
-    if (lv) process.on("exit", () => { lv.savings.flush(); lv.aliasStore.flush(); lv.negativeCache.flushPending(); lv.negativeCacheStore.flush(); });
+    if (lv) process.on("exit", () => { lv.savings.flush(); lv.aliasStore.flush(); lv.negativeCache.flushPending(); lv.negativeCacheStore.flush(); lv.deltaReadStore.flush(); });
   } else {
     const fromClient = lineTap((m) => w.fromClient(m));
     const fromServer = lineTap((m) => w.fromServer(m));
@@ -476,7 +478,7 @@ function createHttpProxy(o) {
 if (require.main === module) {
   const o = parseArgs(process.argv.slice(2));
   if (o.help) {
-    process.stdout.write("usage:\n  memglow-mcp-proxy [--name NAME] -- <memory MCP server command>\n  memglow-mcp-proxy --upstream URL --listen HOST:PORT [--name NAME]\nlevers (v0.4): MEMGLOW_PROXY_SIZE_WARNING, _MULTI_QUERY (default on), _SEARCH_DETAILS, _SUGGESTIONS, MEMGLOW_PROXY_DEDUPE, _TOC, _ARCHIVE_HINT, _HIDE_UNSUPPORTED, _ALREADY_LOADED (default off)\n  or memglow.config.json → \"proxy\": { ... } — see mcp-proxy/README.md\nmemory rules (default on): MEMGLOW_RULES=0 to turn off, or Settings → Memory rules — see README.md\n");
+    process.stdout.write("usage:\n  memglow-mcp-proxy [--name NAME] -- <memory MCP server command>\n  memglow-mcp-proxy --upstream URL --listen HOST:PORT [--name NAME]\nlevers (v0.4): MEMGLOW_PROXY_SIZE_WARNING, _MULTI_QUERY (default on), _SEARCH_DETAILS, _SUGGESTIONS, MEMGLOW_PROXY_DEDUPE, _TOC, _ARCHIVE_HINT, _HIDE_UNSUPPORTED, _ALREADY_LOADED, _NEGATIVE_CACHE, _INDEX_HINT, _DELTA_READ (default off)\n  or memglow.config.json → \"proxy\": { ... } — see mcp-proxy/README.md\nmemory rules (default on): MEMGLOW_RULES=0 to turn off, or Settings → Memory rules — see README.md\n");
     process.exit(0);
   }
   if (o.upstream) {

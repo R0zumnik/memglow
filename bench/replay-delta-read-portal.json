@@ -1,0 +1,7 @@
+{
+  "evenements": [
+    { "type": "lecture", "ids": ["reference-incident-log"], "source": "nas", "t": 1000000 },
+    { "type": "ecriture", "ids": ["reference-incident-log"], "source": "nas", "t": 1001000 },
+    { "type": "lecture", "ids": ["reference-incident-log"], "source": "nas", "t": 3000000 }
+  ]
+}
