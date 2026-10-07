@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.4.3.1 — internal (not published)
+
+"Never stub the injection hook." A production bug: lever 8 (`alreadyLoaded`) answers a read of
+the always-loaded index with a short stub ("already in your context…") — but a `SessionStart`
+hook that INJECTS the index at session start typically reads it through this SAME proxy. If that
+read gets stubbed, the session starts WITHOUT the index at all — the real hook sends
+`initialize` (`clientInfo: { name: "session-start-hook", version: "1" }`), then `tools/call
+read_note {identifier: "MEMORY"}` and/or `recent_activity`, with nothing in between.
+
+### Added
+
+- **MCP proxy: lever 8 rule 1, `alreadyLoadedExemptClients`** (config) /
+  `MEMGLOW_PROXY_ALREADY_LOADED_EXEMPT` (env, comma-separated) — a session is never stubbed by
+  lever 8 (not even given the "changed since session start" notice: the exact upstream text,
+  always) once its `clientInfo.name`/`.title` (sent at `initialize`) contains one of these
+  substrings, case-insensitively. Default `["hook", "inject", "session-start", "sessionstart",
+  "memglow-init"]`; `[]`, or the env var set to an empty string, is a deliberate empty list
+  (disables the exemption). New pure helper `clientInfoExempt(ci, substrings)` in
+  `lib/proxy-levers.js`, exported for tests.
+- **MCP proxy: lever 8 rule 2, `alreadyLoadedRequireActivity`** (default **true**) — independent
+  of any client name: the STUB itself (never the "changed" notice, which never shortens anything)
+  is refused unless this session already made at least one OTHER tool call, or a `tools/list`,
+  before this read. An injector characteristically reads the index as the very first thing after
+  `initialize`; an assistant mid-conversation has almost always listed tools or made another call
+  by the time it re-reads the index. `MEMGLOW_PROXY_ALREADY_LOADED_REQUIRE_ACTIVITY=0` / `"proxy":
+  { "alreadyLoadedRequireActivity": false }` to turn it off.
+- `mcp-proxy/README.md`: a new subsection under lever 8 documenting both guards for hook authors,
+  and the existing `memglow_fresh: true` escape hatch as the one unconditional, lever-proof way
+  for an injection hook's own read to always get the full text, with a worked `tools/call` example.
+
+### Measured (bench/replay.js, `--with alreadyLoaded`, `alreadyLoadedRequireActivity` at its
+shipped default of `true`, no exempt match in any fixture — none of their sessions name a
+`clientInfo`)
+
+Rule 2 costs some of lever 8's own measured gain wherever a fixture's session starts with an
+immediate read of the index (exactly the shape this rule is designed to be cautious about) — but
+never erases it, and 0 violations throughout:
+
+| fixture | +alreadyLoaded, before 0.4.3.1 | +alreadyLoaded, after (rule 2 on) | violations |
+|---|---|---|---|
+| `replay-demo.jsonl` | 14 calls / 1578 tok / +3710 eff. saved | 14 calls / 3062 tok / +2226 eff. saved | 0 |
+| `replay-heavy.jsonl` | 60 calls / 7226 tok / +45355 eff. saved | 60 calls / 10194 tok / +42387 eff. saved | 0 |
+| `replay-aliases.jsonl` | — | 14 calls / 783 tok / +9975 eff. saved | 0 |
+| `replay-negative-cache.jsonl` | — | 5 calls / 242 tok / +10748 eff. saved | 0 |
+| `replay-delta-read.jsonl` | — | no-op (lever never matches there) | 0 |
+
+The gain survives, with margin, on every fixture tested, so rule 2 ships ON by default as
+designed — see lib/proxy-levers.js DEFAULTS.alreadyLoadedRequireActivity for the reasoning. Had
+any fixture's gain gone to zero or negative, rule 2 would have shipped off, keeping only rule 1
+(the exempt-client list) — it did not.
+
+### Fixed
+
+- Two existing lever-8 tests in `test/mcp-proxy-levers.test.js` read the index right after
+  `initialize` with no other call in between — exactly the shape rule 2 now treats cautiously.
+  Updated to send a `tools/list` first (what any real assistant session does), so they keep
+  testing the stub itself rather than passing vacuously on content length alone.
+
+package.json stays at 0.4.3 (this tag is a local, unpublished micro-step).
+
 ## 0.4.3 — internal (not published)
 
 "Cross-session delta reads." Since 0.4.1, six internal micro-steps (0.4.2 → 0.4.2.6) built up the

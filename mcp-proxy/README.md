@@ -112,7 +112,7 @@ about. Rules, for every lever:
 | 5 | `toc` | off | A note over the threshold first comes back as its description plus its sections with ≈tokens each; the assistant then asks for one section (`"memglow_section": "Decisions"` or `"3"`), cut verbatim from the server's answer. |
 | 6 | `archiveHint` | off | A search that finds nothing in the live memory (an empty answer such as `No results` or `"results": []`, or hits only in the [archive folder](../README.md#archive)) → after the server's answer: `memglow: nothing found in the live memory — the archive summary lists: "Router setup" (from \`home-net\`, archived 2026-06-01 in \`habits-archive\`, ≈420 tokens)`. Titles of the archived sections matching the query (up to `archiveHintMax`, 5), read from the archive summary note — never their text. Nothing matches: a one-line pointer to the summary note. No archive summary: nothing added. |
 | 7 | `hideUnsupportedTools` | off | Removes, from `tools/list`, the tools a per-server table marks unsupported for the client that just said hello — never from a `tools/call`, which always reaches the real server untouched. |
-| 8 | `alreadyLoaded` | off | A single-note read (never `build_context` or another `multiNoteTools` entry) of a note memglow knows is loaded into the context at the start of **every** session — the index note(s), or an `alwaysLoaded` entry (see `README.md`'s "Always loaded" cost, `lib/always-loaded.js`) that resolves to a note — gets `memglow: "<label>" (≈N tokens) is already in your context — it is loaded at the start of every session and has not changed since this session began (sha <8 hex chars>). Use it from there. To get the full text anyway, call again with "memglow_fresh": true.` instead of its content, for as long as the note's file (read directly off disk) matches the hash captured at the start of the session. A note that changed meanwhile is never stubbed: its full, current text comes back with one extra line saying so. |
+| 8 | `alreadyLoaded` | off | A single-note read (never `build_context` or another `multiNoteTools` entry) of a note memglow knows is loaded into the context at the start of **every** session — the index note(s), or an `alwaysLoaded` entry (see `README.md`'s "Always loaded" cost, `lib/always-loaded.js`) that resolves to a note — gets `memglow: "<label>" (≈N tokens) is already in your context — it is loaded at the start of every session and has not changed since this session began (sha <8 hex chars>). Use it from there. To get the full text anyway, call again with "memglow_fresh": true.` instead of its content, for as long as the note's file (read directly off disk) matches the hash captured at the start of the session. A note that changed meanwhile is never stubbed: its full, current text comes back with one extra line saying so. 0.4.3.1: never stubs (nor alters) a read for a session whose `clientInfo` matches `alreadyLoadedExemptClients`, and the stub itself additionally requires prior activity this session (`alreadyLoadedRequireActivity`, default on) — see the dedicated section below. |
 | 9 | `multiQuery` | **on** | A search tool call carrying `memglow_queries` (2-4 extra phrasings, up to `MULTI_QUERY_MAX` total, added to the search tools' schemas in `tools/list`) is sent upstream as ONE call per phrasing — sequentially, the original query first — instead of the assistant spending a separate turn on each one. Hits are merged, deduped by note id (found by more phrasings ranks higher), capped to the biggest single phrasing's own hit count, and returned as ONE result: in the upstream's own format when safe (plain-text hits reassembled from the server's own blocks), else a compact listing of whatever note ids resolve; a later phrasing's failed call fails the whole thing open to the FIRST phrasing's own result — what a plain single search would have returned. `memglow_queries` is always stripped before a call reaches the server, even with this lever off. |
 | 10 | `aliases` + `learnAliases` | **on** | **`learnAliases`** (0.4.2.3, "query log"): when a search is followed, in the SAME session within 2 minutes and before another search, by a single-note read of a note NOT in that search's own results, the query's significant words (lowercased, EN+FR stop-words dropped, ≥ 3 letters, secret-masked) are learned as aliases of that note, with a count — in one small local file, `learned-aliases.json` (mode 600, bounded to `aliasesMax` = 2,000 entries, oldest dropped). Nothing is ever sent anywhere. **`aliases`** (0.4.2.4, "learned aliases"): on a LATER search, a note whose learned aliases match ≥ 2 of the query's words (or 1 alias seen ≥ 2 times), and that is not already among this search's own results, is added at the TOP of the answer — the upstream's own per-hit row shape when the answer is plain text, else one compact line `memglow: likely relevant — <label> (<id>), learned from your past searches`. Never removes a result, never duplicates a note already present; an alias whose note no longer exists is forgotten. The two switches are independent (recording vs. using what was recorded). Since 0.4.2.5, a search carrying lever 9's own `memglow_queries` no longer bypasses this lever: it learns from every phrasing's words and can inject into the merged result too. **On by default since 0.4.2.5** — see that stage's section below for why a lever that costs slightly MORE raw tokens now ships on. |
 | 11 | `negativeCache` | off | A search in a session not followed by a read (of anything) within 2 minutes, or superseded first by another search or a write in the same session, is remembered, locally, as "futile" for the live memory's current FINGERPRINT (note count + latest mtime — `lib/negative-cache.js`). A LATER search with the same significant words, while the fingerprint is unchanged, gets one line PREPENDED: `memglow: this search found nothing you used last time (<date>); the memory has not changed since.` The results that follow are always relayed right after, unchanged — this never hides anything. Any write anywhere changes the fingerprint, invalidating every remembered entry at once. A single switch gates both recording and using it. Off by default — see 0.4.2.6 below: a clear win on its own dedicated fixture (one dropped retry call), but `bench/replay-heavy.jsonl` triggers the hint for real on a naturally recurring search with no call saved there to offset it, since that fixture was never built to model the dropped turn. |
@@ -249,6 +249,49 @@ extra line saying it changed — the assistant's in-context copy of it really is
 the short stub back would be actively wrong, not just unhelpful. A file that cannot be read at the
 moment of the check (removed, permissions) is treated the same as "not already loaded": full
 content, no note.
+
+**0.4.3.1 — if you are writing an injection hook, your own read must get the full text.** This
+lever has one sharp edge: the SAME mechanism that is supposed to put the index into the
+assistant's context in the first place — a `SessionStart` hook, or anything else that reads the
+index through this proxy in order to inject it — is itself just another read, and lever 8 cannot
+tell it apart from the assistant re-reading a note it already saw. If YOUR hook's read gets
+stubbed, the session starts with no index at all: the bug this stage fixed.
+
+Two independent safety nets, neither needs the other to be enabled:
+
+- **`alreadyLoadedExemptClients`** (config) / `MEMGLOW_PROXY_ALREADY_LOADED_EXEMPT` (env,
+  comma-separated) — a session is never stubbed (not even given the "changed since session
+  start" notice — the exact upstream text, every time) once its `clientInfo.name` or `.title`
+  (sent at `initialize`) contains one of these substrings, case-insensitively. Default: `["hook",
+  "inject", "session-start", "sessionstart", "memglow-init"]` — `[]` (or env set to an empty
+  string) disables the exemption entirely. **If your hook announces a `clientInfo.name` that
+  contains one of the default words, you need to do nothing.** If it does not, either rename it or
+  add your own substring:
+  ```json
+  { "proxy": { "alreadyLoadedExemptClients": ["hook", "inject", "my-injector"] } }
+  ```
+- **`alreadyLoadedRequireActivity`** (default `true`) — independently of any name, the stub itself
+  is refused unless this session has already made at least one OTHER tool call, or a
+  `tools/list`, before this read. An injection hook is characteristically the FIRST thing to
+  happen after `initialize`; by the time an assistant re-reads the index it has almost always
+  listed tools or made another call first. `MEMGLOW_PROXY_ALREADY_LOADED_REQUIRE_ACTIVITY=0` /
+  `"proxy": { "alreadyLoadedRequireActivity": false }` turns this off if you ever need lever 8 to
+  stub a session's very first call (e.g. a trusted, named client you do not want to rely on
+  `tools/list` timing for).
+
+**The reliable way to write the hook itself**: whatever your hook's `clientInfo.name` ends up
+being, make its read of the index explicit about wanting the full text rather than relying on
+either safety net alone — pass the escape hatch:
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"tools/call",
+ "params":{"name":"read_note","arguments":{"identifier":"MEMORY","memglow_fresh":true}}}
+```
+
+`memglow_fresh: true` bypasses every one of levers 4/5/8/13, unconditionally, for that one call —
+the only thing that is true regardless of exempt lists, activity, or any future lever this stage
+did not anticipate. A hook author who sets it never has to track which of memglow's levers might
+one day apply to their own injection read.
 
 ### Lever 9 — `multiQuery`: several phrasings, one call
 
@@ -492,6 +535,8 @@ sets `memoryDir`), or the file named by `MEMGLOW_CONFIG`:
     "hideUnsupportedTools": false,
     "unsupportedTools": { "basic-memory": { "search": ["openai-mcp"], "fetch": ["openai-mcp"] } },
     "alreadyLoaded": false,
+    "alreadyLoadedExemptClients": ["hook", "inject", "session-start", "sessionstart", "memglow-init"],
+    "alreadyLoadedRequireActivity": true,
     "multiQuery": true,
     "aliases": true,
     "learnAliases": true,

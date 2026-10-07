@@ -470,6 +470,10 @@ test("alreadyLoaded (opt-in): a resolved `alwaysLoaded` config entry is stubbed 
   const c = start(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_SUGGESTIONS: "0", MEMGLOW_LARGE_NOTE_TOKENS: "100000" });
   try {
     await c.rpc("initialize", {});
+    // 0.4.3.1 rule 2: a `tools/list` first, like any real assistant session — otherwise this
+    // read (the session's very first call) looks exactly like an injection hook's and is never
+    // stubbed; see the dedicated rule-2 tests below for that case on its own.
+    await c.rpc("tools/list", {});
     const stub = texts(await c.call("read_note", { identifier: "big" }));
     assert.strictEqual(stub.length, 1);
     assert.match(stub[0], /^memglow: "Big plan" \(≈\d+ tokens\) is already in your context/);
@@ -485,7 +489,10 @@ test("alreadyLoaded (opt-in): a note changed since the session began is never st
   const c = start(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_SUGGESTIONS: "0" });
   try {
     await c.rpc("initialize", {});
-    assert.strictEqual(texts(await c.call("read_note", { identifier: "MEMORY" })).length, 1, "unchanged: stubbed");
+    await c.rpc("tools/list", {}); // 0.4.3.1 rule 2: prior activity, so this read can still be stubbed
+    const stub0 = texts(await c.call("read_note", { identifier: "MEMORY" }));
+    assert.strictEqual(stub0.length, 1, "unchanged: stubbed");
+    assert.match(stub0[0], /already in your context/);
 
     fs.writeFileSync(path.join(fx.notes, "MEMORY.md"), "# Index\n[[alice]] [[big]] [[carol]]\n\nSomething NEW was added.\n");
     const changed = texts(await c.call("read_note", { identifier: "MEMORY" }));
@@ -498,9 +505,14 @@ test("alreadyLoaded (opt-in): a note changed since the session began is never st
     assert.strictEqual(again.length, 2);
     assert.match(again[1], /has changed since the start of this session/);
 
-    // A new session (re-`initialize`) captures a fresh baseline: the new content is "unchanged" again.
+    // A new session (re-`initialize`) captures a fresh baseline: the new content is "unchanged"
+    // again (not literally re-stubbed here — growIndex's long body is gone, replaced above by a
+    // few words shorter than the stub text itself, so lever 8's own "stub only if it is shorter"
+    // guard declines either way — but it is no longer flagged "changed", which is what this part
+    // of the test is really checking).
     await c.rpc("initialize", {});
-    assert.strictEqual(texts(await c.call("read_note", { identifier: "MEMORY" })).length, 1, "new session, new baseline: stubbed again");
+    await c.rpc("tools/list", {}); // rule 2: prior activity, in case this content were long enough to stub
+    assert.strictEqual(texts(await c.call("read_note", { identifier: "MEMORY" })).length, 1, "new session, new baseline: no longer flagged as changed");
   } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 
@@ -513,6 +525,124 @@ test("alreadyLoaded: off by default — the index note is delivered in full, exa
     assert.ok(t.some((x) => x.includes("Paragraph about")), "full content still delivered, lever 8 is off by default");
     assert.ok(!t.some((x) => x.includes("already in your context")));
   } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("alreadyLoaded 0.4.3.1 rule 1 (alreadyLoadedExemptClients): a session whose clientInfo matches the exempt list never gets the stub, even as its very FIRST call — this is the injection-hook shape", async () => {
+  const fx = makeNotes();
+  growIndex(fx);
+  const c = start(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_SUGGESTIONS: "0" });
+  try {
+    await c.rpc("initialize", { clientInfo: { name: "session-start-hook", version: "1" } });
+    // No tools/list, no other call first — read_note is this session's very first message, the
+    // exact shape of a SessionStart hook injecting the index. Exempt by name (default list
+    // includes "hook"): full text anyway, never a stub.
+    const t = texts(await c.call("read_note", { identifier: "MEMORY" }));
+    assert.ok(t.some((x) => x.includes("Paragraph about")), "exempt client: full text even as the first call");
+    assert.ok(!t.some((x) => x.includes("already in your context")));
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("alreadyLoaded 0.4.3.1 rule 2 (alreadyLoadedRequireActivity, default on): an unnamed client's very first call is never stubbed either, but a later read in the SAME session is", async () => {
+  const fx = makeNotes();
+  growIndex(fx);
+  const c = start(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_SUGGESTIONS: "0" });
+  try {
+    await c.rpc("initialize", { clientInfo: { name: "claude-code", version: "2.1.283" } }); // not on the exempt list
+    const first = texts(await c.call("read_note", { identifier: "MEMORY" }));
+    assert.ok(first.some((x) => x.includes("Paragraph about")), "first call of the session, no prior activity: never stubbed");
+    assert.ok(!first.some((x) => x.includes("already in your context")));
+
+    // Same note, read again — this time there WAS a prior tool call (the read above): stubbed.
+    const second = texts(await c.call("read_note", { identifier: "MEMORY" }));
+    assert.strictEqual(second.length, 1);
+    assert.match(second[0], /already in your context/);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("alreadyLoaded 0.4.3.1 rule 2: a `tools/list` before the read counts as prior activity too", async () => {
+  const fx = makeNotes();
+  growIndex(fx);
+  const c = start(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_SUGGESTIONS: "0" });
+  try {
+    await c.rpc("initialize", {});
+    await c.rpc("tools/list", {});
+    const t = texts(await c.call("read_note", { identifier: "MEMORY" }));
+    assert.strictEqual(t.length, 1);
+    assert.match(t[0], /already in your context/);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("alreadyLoaded 0.4.3.1: MEMGLOW_PROXY_ALREADY_LOADED_REQUIRE_ACTIVITY=0 drops rule 2 — an unnamed client's first-ever call is stubbed again", async () => {
+  const fx = makeNotes();
+  growIndex(fx);
+  const c = start(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_SUGGESTIONS: "0", MEMGLOW_PROXY_ALREADY_LOADED_REQUIRE_ACTIVITY: "0" });
+  try {
+    await c.rpc("initialize", { clientInfo: { name: "claude-code", version: "1" } });
+    const t = texts(await c.call("read_note", { identifier: "MEMORY" }));
+    assert.strictEqual(t.length, 1);
+    assert.match(t[0], /already in your context/);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("alreadyLoaded 0.4.3.1: MEMGLOW_PROXY_ALREADY_LOADED_EXEMPT overrides the default exempt list (custom substring, case-insensitive; empty string disables it)", async () => {
+  const fx = makeNotes();
+  growIndex(fx);
+  // A custom exempt list: "my-injector" only — the DEFAULT name "hook" no longer exempts anyone.
+  const c1 = start(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_SUGGESTIONS: "0", MEMGLOW_PROXY_ALREADY_LOADED_EXEMPT: "My-Injector" });
+  try {
+    await c1.rpc("initialize", { clientInfo: { name: "session-start-hook", version: "1" } });
+    const t1 = texts(await c1.call("read_note", { identifier: "MEMORY" }));
+    assert.strictEqual(t1.length, 1, "rule 2 still blocks it (first call, no activity) even though rule 1 no longer names it");
+    assert.ok(!t1.some((x) => x.includes("already in your context")));
+  } finally { await c1.close(); }
+
+  const c2 = start(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_SUGGESTIONS: "0", MEMGLOW_PROXY_ALREADY_LOADED_EXEMPT: "My-Injector" });
+  try {
+    await c2.rpc("initialize", { clientInfo: { name: "my-injector-bot", version: "1" } }); // matches, case-insensitively
+    const t2 = texts(await c2.call("read_note", { identifier: "MEMORY" }));
+    assert.ok(t2.some((x) => x.includes("Paragraph about")), "custom exempt name matches: full text on the very first call");
+  } finally { await c2.close(); }
+
+  // Empty string: a deliberate empty exempt list — "hook" is no longer exempt from anything.
+  const c3 = start(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_SUGGESTIONS: "0", MEMGLOW_PROXY_ALREADY_LOADED_EXEMPT: "" });
+  try {
+    await c3.rpc("initialize", { clientInfo: { name: "session-start-hook", version: "1" } });
+    await c3.rpc("tools/list", {}); // give it rule-2 activity so only rule 1 is under test here
+    const t3 = texts(await c3.call("read_note", { identifier: "MEMORY" }));
+    assert.strictEqual(t3.length, 1);
+    assert.match(t3[0], /already in your context/, "empty exempt list: even a hook-named client is no longer exempt");
+  } finally { await c3.close(); }
+  fs.rmSync(fx.root, { recursive: true, force: true });
+});
+
+test("alreadyLoaded 0.4.3.1 config parsing: alreadyLoadedExemptClients (array, substring match) and alreadyLoadedRequireActivity round-trip through proxyConfig()", () => {
+  const def = L.proxyConfig({ MEMGLOW_HOME: os.tmpdir(), MEMGLOW_CONFIG: path.join(os.tmpdir(), "none.json") });
+  assert.deepStrictEqual(def.alreadyLoadedExemptClients, ["hook", "inject", "session-start", "sessionstart", "memglow-init"]);
+  assert.strictEqual(def.alreadyLoadedRequireActivity, true);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-cfg-"));
+  const file = path.join(dir, "memglow.config.json");
+  fs.writeFileSync(file, JSON.stringify({ proxy: { alreadyLoadedExemptClients: ["acme-bot"], alreadyLoadedRequireActivity: false } }));
+  const c = L.proxyConfig({ MEMGLOW_HOME: dir, MEMGLOW_CONFIG: file });
+  assert.deepStrictEqual(c.alreadyLoadedExemptClients, ["acme-bot"]);
+  assert.strictEqual(c.alreadyLoadedRequireActivity, false);
+
+  // Env overrides the file, and an explicit empty env string is a deliberate empty list (not "use the file's").
+  const e = L.proxyConfig({ MEMGLOW_HOME: dir, MEMGLOW_CONFIG: file, MEMGLOW_PROXY_ALREADY_LOADED_EXEMPT: "a, B ,c", MEMGLOW_PROXY_ALREADY_LOADED_REQUIRE_ACTIVITY: "1" });
+  assert.deepStrictEqual(e.alreadyLoadedExemptClients, ["a", "B", "c"]);
+  assert.strictEqual(e.alreadyLoadedRequireActivity, true);
+  const e2 = L.proxyConfig({ MEMGLOW_HOME: dir, MEMGLOW_CONFIG: file, MEMGLOW_PROXY_ALREADY_LOADED_EXEMPT: "" });
+  assert.deepStrictEqual(e2.alreadyLoadedExemptClients, []);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("clientInfoExempt: pure helper — substring match on name or title, case-insensitive, no false match on empty/missing clientInfo or empty list", () => {
+  assert.strictEqual(L.clientInfoExempt({ name: "session-start-hook" }, ["hook"]), true);
+  assert.strictEqual(L.clientInfoExempt({ title: "My Inject Tool" }, ["inject"]), true);
+  assert.strictEqual(L.clientInfoExempt({ name: "CLAUDE-CODE" }, ["hook", "inject"]), false);
+  assert.strictEqual(L.clientInfoExempt(null, ["hook"]), false);
+  assert.strictEqual(L.clientInfoExempt({ name: "hook-ish" }, []), false);
+  assert.strictEqual(L.clientInfoExempt({}, ["hook"]), false);
 });
 
 test("alreadyLoaded: a lever failure (fileHash throwing on the live check) never breaks the relay", () => {
