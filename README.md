@@ -806,6 +806,41 @@ No write tool, and no tool ever returns a full note body: only ids, titles, toke
 frontmatter descriptions and section headings — masked for secret-looking lines like everywhere
 else in memglow.
 
+<a id="memory-server"></a>
+## 🗃️ memglow memory server (preview, read-only)
+
+A third, separate piece, still a **preview** (internal stage 0.4.5.1): memglow as the memory
+server **itself**, tool-compatible with basic-memory — same tool names, same arguments,
+compatible text output (`# Search Results` blocks with `- permalink:` lines, `# Context:`,
+`## Recent Activity:` …), so existing clients, hooks and the [MCP proxy](#mcp-proxy) in front of
+it keep working unchanged. Notes are indexed in memory and refreshed on every file change
+(`fs.watch` plus a cheap rescan every 3 s), searches are lexical (BM25-style; accents folded,
+English + French stop-words, title boost, `"phrases"`, `AND`/`OR`/`NOT`/`-word`, `prefix*`,
+`tag:x`) and answer in milliseconds, many requests at once. Zero dependencies.
+
+```bash
+memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000   # Streamable HTTP on /mcp
+memglow memory-server --root ~/knowledge --stdio                    # or stdio
+# also: node memory-server/memglow-memory-server.js … / npx memglow-memory-server …
+```
+
+- **Read-only in this preview**: `search_notes`, `read_note`, `read_content`, `view_note`,
+  `build_context`, `recent_activity`, `list_directory`, `list_memory_projects`,
+  `list_workspaces`, `search` / `fetch`, `basic_memory_diagnostics` work; `write_note`,
+  `edit_note`, `move_note` and `delete_note` are listed but answer
+  `memglow memory server: read-only (phase A / shadow mode)`; `schema_*`,
+  `create_memory_project` and `delete_project` answer "not supported".
+- **One project** (`--project`, default `main`): permalinks are the frontmatter `permalink:` when
+  present, else `<project>/<path>`; `project` / `project_id` / `workspace` arguments are accepted
+  and ignored.
+- **Semantic search is not implemented**: `search_type` `vector` / `semantic` / `hybrid` run the
+  same lexical engine.
+- **HTTP**: legacy sessions (`initialize` → `Mcp-Session-Id`) and the MCP 2026-07-28
+  per-request mode (no session, `MCP-Protocol-Version` header and/or `params._meta`) both work;
+  JSON answers, or one SSE event for a client that only accepts `text/event-stream`.
+- `bench/compat.js` compares it with another server call by call (latency, identical reads,
+  search overlap, text shape); `bench/memory-server-speed.js` measures it on a notes folder.
+
 <a id="your-notes"></a>
 ## 📝 Your notes
 

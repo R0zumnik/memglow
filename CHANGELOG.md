@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.4.5.1 — internal (not published)
+
+"The memory server, read side." basic-memory takes ≈45 s per search on the owner's NAS and
+answers one request at a time; memglow already relays every call, so the upstream was the only
+weak link. Phase A of replacing it: a memory server written from scratch in memglow (MIT, zero
+dependencies), tool-compatible with basic-memory, with the engine and every READ tool — and no
+writes yet. Clients (Claude Code, hooks, the memglow proxy and its levers) keep their tool names,
+arguments and the text shapes they parse. package.json stays 0.4.3.
+
+### Added
+
+- **Store** (`lib/store/`): `frontmatter.js` (a YAML-subset reader for what notes really carry:
+  quoted/folded scalars, flow and block lists, nested maps, block scalars; never throws, keeps the
+  readable keys of a broken block), `note.js` (title, type, permalink — frontmatter first, else
+  `<project>/<path>` —, tags, sections by heading, `[[links]]`, observations
+  `- [category] text #tag (context)`, relations `- rel_type [[Target]]`, any other link =
+  `links_to`; code blocks ignored), `store.js` (in-memory indexes by permalink with or without
+  the project prefix, path, title and slug, plus the link graph; `fs.watch` recursive + an async
+  stat rescan every 3 s, re-reading only changed files; a request applies a pending watch event
+  first; non-UTF-8, too-large and unreadable files are skipped with a warning, BOM/CRLF handled),
+  `timeframe.js` ("7d", "2 weeks", "3 days ago", "last week", "yesterday", ISO and month-name
+  dates), `text.js` (accent folding, EN+FR stop-words reused from `lib/learned-aliases.js`
+  minus "été", a light plural stemmer, slugs, stable UUID-shaped ids).
+- **Search engine** (`lib/store/search.js`): BM25-style over weighted fields (title ≫
+  permalink/slug, tags > description > headings > other frontmatter > body), prefix matching
+  (3+ characters, discounted and never scored as rarer than the typed word; `term*` explicit),
+  coverage, exact-title and phrase bonuses; `"phrases"` (required), `AND`, `OR`,
+  `NOT`/`-word`, `tag:x`; search types text / title (exact > prefix > contains) / permalink
+  (exact, prefix, `*` glob; a `memory://` query switches to it) / vector / semantic / hybrid (the
+  same lexical engine — **semantic search is not implemented**); filters note_types, entity_types
+  (entity, observation, relation), categories, tags, status, metadata_filters (`$in`, `$gt`,
+  `$gte`, `$lt`, `$lte`, `$contains`…, dotted keys, `note_type` → `type`), after_date;
+  pagination; deterministic order (score, then permalink). Per-note index entries and snippet line
+  terms are cached on the note object, so a one-file change rebuilds one entry.
+- **Server** (`memory-server/`): `schemas.js` (the 21 basic-memory tool names, argument names,
+  types, defaults, enums and output schemas, memglow's own descriptions), `tools.js` (handlers:
+  `search_notes` text/json, `read_note` — the file as stored, json with/without frontmatter,
+  closest-notes fallback —, `read_content`, `view_note`, `build_context` — memory:// URL,
+  `folder/*`, depth, timeframe on related notes, max_related, json/text —, `recent_activity`,
+  `list_directory`, `list_memory_projects`, `list_workspaces`, `search`/`fetch`,
+  `basic_memory_diagnostics`; write tools answer `memglow memory server: read-only (phase A /
+  shadow mode)`, schema/project tools "not supported"), `rpc.js` (JSON-RPC: legacy
+  `initialize` 2024-11-05…2025-11-25 and the MCP 2026-07-28 per-request mode, `resultType`
+  on modern answers, lenient without `_meta`, batches), `http.js` (Streamable HTTP on `/mcp`:
+  sessions, 2026-07-28 headers, JSON or a single SSE event, 202 for notifications, 405 on GET,
+  `/healthz`), `memglow-memory-server.js` (CLI: `--root`, `--project`, `--listen`,
+  `--stdio`, `--read-only`, `--poll-ms`, `--no-watch`; also `memglow memory-server …` and the
+  `memglow-memory-server` bin).
+- **`bench/compat.js`**: A/B harness — per call, latency A/B, read text identical or not (first
+  differing line), search overlap@k and top hit, structural text-shape diff; legacy or 2026-07-28
+  mode; never sends a write tool. `bench/compat-calls.example.json` uses demo data only.
+  **`bench/memory-server-speed.js`**: startup, search/read median/p95/max over HTTP, 20 parallel
+  searches, memory — numbers only, never note text.
+- Tests: `memory-server-store`, `-search`, `-tools`, `-http`, `-proxy` (the memglow proxy
+  in front of this server: search, multiQuery, read_note, alreadyLoaded) and `bench-compat`
+  (+38 tests; 41 files / 547 tests, 0 fail).
+
+### Changed
+
+- **Proxy lever 9 (multiQuery) merge**: a page's own frame — the leading `# Search Results: …`
+  block and the trailing `---` footer — is no longer ranked as a hit. Identical footers were
+  "found by every phrasing" and ranked first; with small pages they pushed every real hit out of
+  the cap (seen with this server's output, and true of basic-memory's identical layout). The
+  first phrasing's frame now wraps the merged hits; text without a frame merges as before.
+
+### Compatibility (vs basic-memory 4.0.0b1, captured answers)
+
+- Identical: `read_note` text and json, `read_content` (byte for byte); same text shape for
+  `search_notes` (title and text), `recent_activity`, `list_directory`, `build_context`
+  text, `list_memory_projects`, the read_note miss page; same JSON keys for `search_notes`,
+  `read_note`, `build_context`.
+- Differs: scores and ranking (lexical, no embeddings); `- match:` is one line (basic-memory's
+  multi-line chunk could split a hit into several blank-line blocks); `external_id`/`entity_id`
+  are stable hashes, not basic-memory's database ids; `memory://x` resolves exactly (basic-memory
+  answered `memory://project-memglow` with another note); `search`/`fetch` answer any client
+  (basic-memory refuses non-OpenAI ones — the proxy's hideUnsupportedTools lever covers that);
+  `depth` is accepted but not used by `recent_activity`; directories with no note are not listed.
+
+### Measured
+
+On a read-only copy of the owner's memory (136 notes, 1.3 MB), Node 22, a 2-vCPU container,
+over real HTTP (MCP 2026-07-28 calls, `bench/memory-server-speed.js`, 3 runs): startup 0.5–0.9 s
+(scan 0.18–0.24 s warm; 7.5 s once on a cold file cache); 50 varied searches median 9–17 ms, p95
+38–55 ms, max ≤ 80 ms (in-process: 3.7 ms average); 50 reads median 4.2–4.9 ms, p95 6.7–10 ms;
+20 searches at once 170–300 ms wall; RSS ≈ 130 MB (heap ≈ 40 MB). basic-memory: ≈45 s per search.
+
 ## 0.4.4.2 — internal (not published)
 
 "Index trim." The memory index is loaded into **every** session, so each of its tokens is paid

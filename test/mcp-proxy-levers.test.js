@@ -936,6 +936,20 @@ test("mergeSearchResults: fail open (null) — every phrasing found nothing, or 
   assert.strictEqual(L.mergeSearchResults(idx, [unsafe, unsafe]), null, "unsafe format AND nothing resolves to a note id: fail open");
 });
 
+test("mergeSearchResults 0.4.5.1: a page's frame (\"# Search Results\" header, \"---\" footer) is not a hit — the first phrasing's frame wraps the merged hits", () => {
+  const idx = fakeIndex({ alice: { id: "alice", label: "Alice" }, bob: { id: "bob", label: "Bob" } });
+  const page = (q, id) => ({ content: [{ type: "text", text: `# Search Results: ${q}\n*project: main*\n\n### ${id}\n- permalink: main/memory/${id}\n- score: 1.0000\n\n---\n*1 result | page 1, page_size 1*` }] });
+  // Before 0.4.5.1 the identical footers (found by both phrasings) ranked first and, with one hit
+  // per page, the cap (3 blocks) kept footer + two headers and no hit at all.
+  const merged = L.mergeSearchResults(idx, [page("a", "alice"), page("b", "bob")]).content[0].text;
+  assert.strictEqual(merged, "# Search Results: a\n*project: main*\n\n### alice\n- permalink: main/memory/alice\n- score: 1.0000\n\n---\n*1 result | page 1, page_size 1*");
+  const two = (q, ids) => ({ content: [{ type: "text", text: `# Search Results: ${q}\n\n` + ids.map((i) => `### ${i}\n- permalink: ${i}`).join("\n\n") + "\n\n---\n*2 results*" }] });
+  const m2 = L.mergeSearchResults(idx, [two("a", ["alice", "x1"]), two("b", ["bob", "alice"])]).content[0].text;
+  assert.ok(m2.startsWith("# Search Results: a\n\n### alice"), "alice (both phrasings) first, after the header");
+  assert.ok(m2.endsWith("\n\n---\n*2 results*"));
+  assert.strictEqual((m2.match(/^### /gm) || []).length, 2, "capped to the hit count, frames not counted");
+});
+
 test("mergeSearchResults: tier A dedups identical un-identifiable text too (no note id needed to collapse a repeat)", () => {
   const idx = fakeIndex({});
   const r = { content: [{ type: "text", text: "some text with no id or permalink in it" }] };

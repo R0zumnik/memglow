@@ -1,0 +1,19 @@
+[
+  { "label": "search: docker networking", "tool": "search_notes", "arguments": { "query": "docker networking" } },
+  { "label": "search: northwind demo", "tool": "search_notes", "arguments": { "query": "northwind demo", "page_size": 5 } },
+  { "label": "search: phrase", "tool": "search_notes", "arguments": { "query": "\"booking app\"" } },
+  { "label": "search: title type", "tool": "search_notes", "arguments": { "query": "reference-docker", "search_type": "title", "page_size": 3 } },
+  { "label": "search: permalink glob", "tool": "search_notes", "arguments": { "query": "main/knowledge/*", "search_type": "permalink" } },
+  { "label": "search: json", "tool": "search_notes", "arguments": { "query": "backups", "output_format": "json" } },
+  { "label": "search: no hit", "tool": "search_notes", "arguments": { "query": "zzqqxx-no-such-thing" } },
+  { "label": "read: by title", "tool": "read_note", "arguments": { "identifier": "client-northwind" } },
+  { "label": "read: by permalink", "tool": "read_note", "arguments": { "identifier": "main/projects/project-home-lab" } },
+  { "label": "read: json", "tool": "read_note", "arguments": { "identifier": "project-smart-home", "output_format": "json" } },
+  { "label": "read: missing note", "tool": "read_note", "arguments": { "identifier": "no-such-note-xyz" } },
+  { "label": "read_content", "tool": "read_content", "arguments": { "path": "knowledge/knowledge-mqtt.md" } },
+  { "label": "build_context text", "tool": "build_context", "arguments": { "url": "memory://project-home-lab", "depth": 1, "timeframe": "3650d", "output_format": "text" } },
+  { "label": "build_context json", "tool": "build_context", "arguments": { "url": "memory://projects/*", "timeframe": "3650d" } },
+  { "label": "recent_activity", "tool": "recent_activity", "arguments": { "timeframe": "3650d" } },
+  { "label": "list_directory", "tool": "list_directory", "arguments": { "dir_name": "/", "depth": 1 } },
+  { "label": "list_memory_projects", "tool": "list_memory_projects", "arguments": {} }
+]
