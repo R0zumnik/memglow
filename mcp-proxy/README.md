@@ -118,6 +118,7 @@ about. Rules, for every lever:
 | 11 | `negativeCache` | off | A search in a session not followed by a read (of anything) within 2 minutes, or superseded first by another search or a write in the same session, is remembered, locally, as "futile" for the live memory's current FINGERPRINT (note count + latest mtime — `lib/negative-cache.js`). A LATER search with the same significant words, while the fingerprint is unchanged, gets one line PREPENDED: `memglow: this search found nothing you used last time (<date>); the memory has not changed since.` The results that follow are always relayed right after, unchanged — this never hides anything. Any write anywhere changes the fingerprint, invalidating every remembered entry at once. A single switch gates both recording and using it. Off by default — see 0.4.2.6 below: a clear win on its own dedicated fixture (one dropped retry call), but `bench/replay-heavy.jsonl` triggers the hint for real on a naturally recurring search with no call saved there to offset it, since that fixture was never built to model the dropped turn. |
 | 12 | `indexHint` | off | A search whose own results are ONLY the index note, or a read of the index itself while `alreadyLoaded` (lever 8) is off, gets a suffix: `memglow: the index already says:` followed by up to 3 lines of the index's OWN text (secret-masked, each capped to 160 characters) that mention one of the query's significant words — grepped, not summarised. The read case reuses lever 10's own "search right before a read" correlation to know what to grep for; no recent search at all → nothing added. Never replaces the note's own content. Off by default: a pure, unconditional add wherever it fires — same bucket as `searchDetails`/`suggestions`/`archiveHint`. |
 | 13 | `deltaRead` | off | Two mechanisms for the hottest notes, re-read in every new session — see 0.4.3 below: (1) CROSS-SESSION — the first read of a note in a session is always full (correctness); if it changed since the LAST time this same client read it, in an EARLIER session, one line is added: `memglow: changed since your last read on <date> — sections changed: <## titles>` (up to 5), remembered in a small per-client ledger, `delta-read.json` (mode 600, bounded). (2) WITHIN-SESSION — a note already delivered in full THIS session, re-read after it changed, gets ONLY the diff to the current text (`lib/delta-read.js`, reusing `lib/assistant/diff.js`'s line diff), with a header naming the escape hatch; too large a diff (> 60% of the note) falls back to the full text. Same escape hatch (`memglow_fresh`) and "repeat the call" rule as 4/5/8. |
+| 14 | `duplicateHint` | off | After a **`write_note`** (never `edit_note`/`move_note`) whose `title` already names an existing note — the title itself, its kebab slug, or its label (whatever `index.resolve` already matches) — a short line: `memglow: a note with this title already exists: [[<id>]] — this write_note may replace or duplicate it; prefer edit_note.` When the title does not already name a note but is close to one (shares ≥ 2 significant words with an existing note's own id+label+description, EN+FR, secret-masked, ≥ 3 characters, AND those words cover ≥ 60% of the title's own significant words — index notes and archive-folder notes never count), up to 2 candidates instead: `memglow: a note on this subject already exists — [[<id1>]] (<label1>); [[<id2>]] (<label2>). Prefer edit_note on it (append / replace_section) over a new note.` Matched BEFORE the write reaches the server, so the note being created is never mistaken for its own duplicate; same note never hinted twice per session. Advisory only — never blocks, never changes the arguments sent upstream, never touches the write's own confirmation text (one block appended). Off by default: a pure, unconditional add wherever it fires, same bucket as `searchDetails`/`suggestions`/`archiveHint`/`indexHint` — see 0.4.4.1 below. |
 | — | `indexWarning` | off | Before the content of the **index** note when it is over `indexWarningTokens` (top-level key, default 2,000): `⚠ memglow: the index note "…" is ≈N tokens (index threshold T) and it is loaded at every session. Consider offering the user to trim it…`. Once per session. Replaces lever 1 for the index note when on. |
 
 ### Stage 0.4.2.2 — "lean defaults"
@@ -475,6 +476,47 @@ point of that format is to avoid storing text), so `portalToCalls()` turns one i
 so nothing ever actually changes for either mechanism to notice. This is an honest limit of the
 MEASUREMENT format, not a claim about real usage (where notes really do change between reads).
 
+### Stage 0.4.4.1 — "duplicate-write hint"
+
+memglow's own product rule is that it never writes a note itself; every lever only ADDS advisory
+text to what the memory server already answered. Users' own memories were still getting duplicate
+notes, because the assistant would call `write_note` with a brand new title on a subject that
+already had a note. `duplicateHint` (lever 14, `lib/proxy-levers.js`) adds ONE short line to a
+`write_note` response when that can happen:
+
+- **Exact.** The title just used (or its kebab slug, or its label) already names an EXISTING note
+  — whatever `index.resolve` already matches, the same helper every other lever uses to turn a
+  reference into a note id: `memglow: a note with this title already exists: [[<id>]] — this
+  write_note may replace or duplicate it; prefer edit_note.`
+- **Similar**, only when there is no exact match: the title shares ≥ 2 significant words
+  (`significantWords`, EN+FR stop-words, secret-masked, ≥ 3 characters) with an existing note's
+  own id+label+description, AND those shared words cover ≥ 60 % of the title's own significant
+  words — deliberately conservative (a false hint costs more than a missed one); a title with
+  fewer than 2 significant words can never match anything. Index notes and archive-folder notes
+  never count. Ranked by shared-word count then note size, at most 2 shown: `memglow: a note on
+  this subject already exists — [[<id1>]] (<label1>); [[<id2>]] (<label2>). Prefer edit_note on it
+  (append / replace_section) over a new note.`
+
+The match is computed BEFORE the write reaches the server (`oneFromClient`, on the `tools/call`
+request itself) — the note this very call is about to create is never mistaken for its own
+duplicate. Never `edit_note`/`move_note`. Advisory only, like every other lever: never blocks,
+never changes the arguments sent upstream, never touches the write's own confirmation text (one
+block appended, after it). The same note is never hinted twice in one session.
+
+Measured with the same merge rule as levers 9-13 (`--each`, 0 violations AND effective tokens
+`<=` off's AND (raw tokens `<=` off's OR calls `<` off's)) on all five existing replay fixtures
+plus a new, dedicated
+[`bench/replay-duplicate.jsonl`](../bench/replay-duplicate.jsonl) (two `write_note` calls: one an
+exact title match, one a near-duplicate): none of the five existing fixtures carries a
+`write_note` with a `title` that resembles an existing note, so the lever is a true no-op there
+(identical calls/tokens to off, 0 violations) — exactly the "fixtures may have no
+write_note-with-title events" case this is allowed to be. On its OWN dedicated fixture, though, it
+is a pure, unconditional ADD (+35 raw and effective tokens, 0 violations, 0 calls saved) —
+advisory only, by design, it never saves a call, so the merge rule fails outright wherever it
+actually does something: the same bucket as `searchDetails`/`suggestions`/`archiveHint`/
+`indexHint`, and the same reasoning. **Off by default.**
+`MEMGLOW_PROXY_DUPLICATE_HINT=1` / `"proxy": { "duplicateHint": true }` to opt in.
+
 ### Examples
 
 (Levers 2 and 3 are off by default since stage 0.4.2.2 — these examples assume they were turned
@@ -546,6 +588,7 @@ sets `memoryDir`), or the file named by `MEMGLOW_CONFIG`:
     "indexHint": false,
     "deltaRead": false,
     "deltaReadMax": 5000,
+    "duplicateHint": false,
     "readTools": ["read_note", "view_note", "read_content", "fetch", "build_context"],
     "multiNoteTools": ["build_context"],
     "searchTools": ["search_notes", "search"],

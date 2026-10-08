@@ -61,7 +61,9 @@ node bench/replay.js --turn-tokens 8000                 # a different per-call o
   same-session re-read and a later unchanged first read, to pin "no header/diff when nothing
   changed". `bench/replay-delta-read-portal.json` is the SAME lever replayed through the portal
   shape instead — see that stage's section below for why it comes back a no-op there, by
-  construction, not because the lever did nothing.
+  construction, not because the lever did nothing. `bench/replay-duplicate.jsonl` (stage 0.4.4.1)
+  is for the `duplicateHint` lever: two `write_note` calls against `demo/memory`, one an exact
+  title match, one a near-duplicate — see that stage's section below.
 - `--with a,b,c` adds a configuration: the shipped **defaults** (sizeWarning + multiQuery +
   aliases + learnAliases — see 0.4.2.2b and 0.4.2.5 below) with levers `a`, `b`, `c` also forced
   on. Repeat the flag for more rows. A name prefixed with `-` forces that lever OFF instead (e.g.
@@ -71,7 +73,7 @@ node bench/replay.js --turn-tokens 8000                 # a different per-call o
   tokens** column — see that stage's section below.
 - `--each` adds one row per lever (sizeWarning, indexWarning, searchDetails, suggestions, dedupe,
   toc, archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery, aliases, learnAliases,
-  negativeCache, indexHint, deltaRead), each ALONE against the `off`
+  negativeCache, indexHint, deltaRead, duplicateHint), each ALONE against the `off`
   baseline (every other lever off) — unlike `--with`, which starts from the shipped defaults. This
   is the per-lever "does it add or save tokens, and how much" breakdown used to decide, lever by
   lever, whether to keep it as shipped, shorten its text, or turn it off by default (see
@@ -333,3 +335,36 @@ cross-session header and its persistence across a restart, the off-by-default no
 `isReachable` extension (a valid diff reconstructs → reachable; a diff reconstructing the WRONG
 text, or missing its `previousFullText` entirely, → a violation EVEN THOUGH the header also
 names `memglow_fresh` — the escape-hatch loophole must not paper over a broken diff).
+
+### Stage 0.4.4.1 — "duplicate-write hint"
+
+Lever 14 (`duplicateHint`, `lib/proxy-levers.js`), same merge rule again, `--each` on all five
+existing fixtures plus a new, dedicated
+[`bench/replay-duplicate.jsonl`](replay-duplicate.jsonl) — two `write_note` calls against
+`demo/memory`: one whose `title` is exactly an existing note's own id (`project-smart-home`), one
+a near-duplicate of it (`"Home lighting and heating automations"`, sharing "home", "heating" and
+"automations" with that note's own label/description):
+
+| fixture | `duplicateHint` alone (raw / effective, vs off) |
+|---|---|
+| replay-demo.jsonl | 0 / 0 (no-op: no `write_note` with a `title` resembling an existing note) |
+| replay-heavy.jsonl | 0 / 0 (no-op, same reason) |
+| replay-aliases.jsonl | 0 / 0 (no-op, same reason) |
+| replay-negative-cache.jsonl | 0 / 0 (no-op, same reason) |
+| replay-delta-read.jsonl | 0 / 0 (no-op, same reason) |
+| replay-duplicate.jsonl | **+35 / +35** (both calls hinted; 0 calls saved) |
+
+Unlike `deltaRead` at 0.4.3, this one costs something wherever it actually fires: it is advisory
+only, by design, so it never saves a call — same bucket as `searchDetails`/`suggestions`/
+`archiveHint`/`indexHint` at earlier stages. The merge rule (0 violations AND effective `<=` off
+AND (raw `<=` off OR calls `<` off)) fails outright on its own dedicated fixture (raw tokens go
+up, calls do not go down), even though it is a true no-op — not a "lucky" zero, an honest one —
+on every other shipped fixture, none of which has a `write_note`-with-`title` event to begin
+with. **Ships off by default.**
+
+Tests: `test/mcp-proxy-levers.test.js` (same file as levers 9/12, no separate module — the pure
+matcher `duplicateHintCandidates`, the glue `duplicateHintFor`, the one-line builder
+`duplicateHintBlock`, then end to end over stdio: exact title/kebab-slug match, EN and FR
+near-duplicates, an unrelated title and a generic one getting nothing, index/archive exclusion,
+`edit_note` never checked, off by default, same note never hinted twice in a session, and
+arguments reaching the server unchanged).

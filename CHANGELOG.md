@@ -1,5 +1,89 @@
 # Changelog
 
+## 0.4.4.1 — internal (not published)
+
+"Duplicate-write hint." memglow's own product rule is that it never writes a note itself — every
+lever only ADDS advisory text to what the memory server already answered. Users' own memories
+were still getting duplicate notes anyway, because the assistant would call `write_note` with a
+brand new title on a subject that already had a note. This micro-step adds a 14th lever,
+`duplicateHint` (OFF by default — see Measured below), that nudges the assistant toward
+`edit_note` instead, without ever blocking or rewriting anything itself.
+
+### Added
+
+- **MCP proxy: lever 14, `duplicateHint`** (`lib/proxy-levers.js`), OFF by default. After a
+  `write_note` call (never `edit_note`/`move_note`):
+  - **Exact** — the `title` just used (or its kebab slug, or its label) already names an
+    EXISTING note, via `index.resolve` (the same helper every other lever uses to turn a
+    reference into a note id): `memglow: a note with this title already exists: [[<id>]] — this
+    write_note may replace or duplicate it; prefer edit_note.`
+  - **Similar**, only when there is no exact match — the title shares `>= 2` significant words
+    (`significantWords`, EN+FR stop-words, secret-masked, `>= 3` characters, `lib/learned-
+    aliases.js`) with an existing note's own id+label+description, AND those shared words cover
+    `>= 60%` of the title's own significant words (so a title with fewer than 2 significant words
+    can never match anything — deliberately conservative: a false hint costs more than a missed
+    one). Index notes and archive-folder notes never count. Ranked by shared-word count then note
+    size, capped to 2 candidates: `memglow: a note on this subject already exists — [[<id1>]]
+    (<label1>); [[<id2>]] (<label2>). Prefer edit_note on it (append / replace_section) over a new
+    note.`
+  - Matched in `oneFromClient`, on the `tools/call` request itself, BEFORE the write reaches the
+    server — the note this very call is about to create is never mistaken for its own duplicate.
+    Advisory only, like every other lever here: never blocks, never changes the arguments sent
+    upstream, never touches the write's own confirmation text (one block appended, after it). The
+    same note is never hinted twice in one session (`s.duplicateHinted`, cleared at `initialize`
+    like every other per-session set).
+  - New pure helpers, exported from `lib/proxy-levers.js`: `duplicateHintCandidates(titleWords,
+    notes)` (the matcher itself), `duplicateHintBlock(index, exactId, similarIds)` (the one-line
+    builder), `duplicateHintFor(index, args)` (the glue: exact-vs-similar, index/archive
+    exclusion), and `noteWords(note)`. `lib/proxy-levers.js`'s `createNoteIndex` gained
+    `allNotes()` (every note's own metadata, unfiltered — the caller excludes index/archive
+    notes itself).
+- `MEMGLOW_PROXY_DUPLICATE_HINT` env / `"proxy": { "duplicateHint": true }` config to opt in.
+- `mcp-proxy/README.md`: lever 14 documented next to the other 13 (table row + a dedicated
+  "Stage 0.4.4.1" section), including the full config example.
+- `bench/replay.js`: `duplicateHint` added to the lever name list (`--with`/`--each`), `LEVER_ENV`
+  and `SHIPPED_DEFAULTS`.
+- New fixture [`bench/replay-duplicate.jsonl`](bench/replay-duplicate.jsonl): two `write_note`
+  calls against `demo/memory` — one an exact title match (`project-smart-home`, the note's own
+  id), one a near-duplicate (`"Home lighting and heating automations"`, sharing "home", "heating"
+  and "automations" with that note's own label/description).
+- `test/mcp-proxy-levers.test.js`: 12 new tests (same file as levers 9/12 — no separate module for
+  this lever) — the pure matcher, the glue, the block builder, then end to end over stdio: exact
+  title/kebab-slug match, EN and FR near-duplicates, an unrelated and a generic title getting
+  nothing, index/archive exclusion (both in the pure matcher and end to end), `edit_note` never
+  checked, off by default, same note never hinted twice in a session (a fresh session hints it
+  again), and arguments reaching the server byte-for-byte unchanged.
+
+### Measured (bench/replay.js, `--each` on all five existing fixtures + the new
+`bench/replay-duplicate.jsonl`)
+
+| fixture | `duplicateHint` alone (raw / effective, vs off) | violations |
+|---|---|---|
+| `replay-demo.jsonl` | 0 / 0 (no-op: no `write_note` with a `title` resembling an existing note) | 0 |
+| `replay-heavy.jsonl` | 0 / 0 (no-op, same reason) | 0 |
+| `replay-aliases.jsonl` | 0 / 0 (no-op, same reason) | 0 |
+| `replay-negative-cache.jsonl` | 0 / 0 (no-op, same reason) | 0 |
+| `replay-delta-read.jsonl` | 0 / 0 (no-op, same reason) | 0 |
+| `replay-duplicate.jsonl` | **+35 / +35** (both calls hinted; 0 calls saved) | 0 |
+
+Same merge rule as levers 9-13 (0 violations AND effective tokens `<=` off's AND (raw tokens `<=`
+off's OR calls `<` off's)): it holds — trivially — on every existing fixture, none of which has a
+`write_note`-with-`title` event to begin with (exactly the "fixtures may have no
+write_note-with-title events" case this stage is explicitly allowed to report as 0). But on its
+OWN dedicated fixture, built specifically to make it fire, it is a pure, unconditional ADD:
+advisory only, by design, it never saves a call, so raw tokens go up with nothing to offset them
+— the same bucket as `searchDetails`/`suggestions`/`archiveHint`/`indexHint` at earlier stages,
+and the same reasoning: the rule fails outright wherever the lever actually does something, so it
+**ships OFF by default**. `MEMGLOW_PROXY_DUPLICATE_HINT=1` / `"proxy": { "duplicateHint": true }`
+to opt in.
+
+### Full test suite
+
+`for f in test/*.test.js; do timeout 300 node --test --test-timeout=60000 "$f"; done` — 33 files,
+483 tests (baseline 471 + 12 new), 0 fail.
+
+package.json stays at 0.4.3 (this tag is a local, unpublished micro-step).
+
 ## 0.4.3.1 — internal (not published)
 
 "Never stub the injection hook." A production bug: lever 8 (`alreadyLoaded`) answers a read of

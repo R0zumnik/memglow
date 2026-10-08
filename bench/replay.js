@@ -22,7 +22,7 @@
  *                would otherwise interact — see bench/replay-aliases.jsonl).
  *                Lever names: sizeWarning, indexWarning, searchDetails, suggestions, dedupe, toc,
  *                archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery, aliases, learnAliases,
- *                negativeCache, indexHint, deltaRead.
+ *                negativeCache, indexHint, deltaRead, duplicateHint.
  * --always-loaded a,b   extra `alwaysLoaded` entries (note references) for lever 8, on top of the
  *                index note(s) it already covers by default.
  * --turn-tokens n   per-call overhead used for the "effective tokens" column (0.4.2.5), see
@@ -102,11 +102,12 @@ const LEVER_ENV = {
   negativeCache: "MEMGLOW_PROXY_NEGATIVE_CACHE",
   indexHint: "MEMGLOW_PROXY_INDEX_HINT",
   deltaRead: "MEMGLOW_PROXY_DELTA_READ",
+  duplicateHint: "MEMGLOW_PROXY_DUPLICATE_HINT",
 };
 const LEVER_NAMES = Object.keys(LEVER_ENV);
 // The shipped defaults (lib/proxy-levers.js DEFAULTS), named here explicitly so this file keeps
 // working unchanged even if that module's own defaults ever drift.
-const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false, multiQuery: true, aliases: true, learnAliases: true, negativeCache: false, indexHint: false, deltaRead: false };
+const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false, multiQuery: true, aliases: true, learnAliases: true, negativeCache: false, indexHint: false, deltaRead: false, duplicateHint: false };
 // multiQuery (lever 9, 0.4.2.2b): "no read in between, within 2 min" — see mergeSearchBursts below.
 const MULTI_QUERY_GAP_MS = 2 * 60 * 1000;
 

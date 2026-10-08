@@ -38,6 +38,25 @@ function snapshot(dir) {
   return out;
 }
 
+// Lever 14 (duplicateHint) — its own small fixture: a note with an id that differs from its label
+// (exact-match "kebab slug" vs "label" has to be tested against two different strings), a French
+// one (significantWords is EN+FR), an unrelated decoy, and a note inside the archive folder whose
+// own words would otherwise match — on purpose, to prove the exclusion actually does something.
+function makeDuplicateNotes() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-dup-"));
+  const notes = path.join(root, "notes");
+  const w = (rel, s) => { fs.mkdirSync(path.dirname(path.join(notes, rel)), { recursive: true }); fs.writeFileSync(path.join(notes, rel), s); };
+  w("projects/project-ha-climate.md", "---\ntitle: Heating and climate\ndescription: Thermostat schedules, zones and heating preferences for the house\ntheme: projects\nsubtheme: climate\n---\nHeating body SECRETBODY-climate.\n");
+  w("projects/project-chauffage.md", "---\ntitle: Chauffage et climatisation\ndescription: Réglages du chauffage et de la climatisation pour la maison\ntheme: projects\nsubtheme: climate\n---\nChauffage body SECRETBODY-chauffage.\n");
+  w("projects/grocery.md", "---\ntitle: Grocery list\ndescription: Weekly shopping\ntheme: projects\nsubtheme: home\n---\nGrocery body.\n");
+  w("archive/old-heating.md", "---\ntitle: Old heating notes\ndescription: Archived heating climate notes from last winter\ntheme: projects\nsubtheme: climate\n---\nArchived body.\n");
+  w("MEMORY.md", "---\ntitle: Index\ndescription: Heating and climate quick links, grocery shopping\n---\n# Index\n[[project-ha-climate]]\n");
+  const home = path.join(root, "home");
+  const data = path.join(root, "data");
+  fs.mkdirSync(home);
+  return { root, notes, home, data, log: path.join(root, "args.log") };
+}
+
 /** Starts the proxy (or the fake alone with direct: true) and returns a tiny JSON-RPC client. */
 function start(fx, env = {}, { direct = false } = {}) {
   const baseEnv = { ...process.env };
@@ -762,6 +781,10 @@ test("config: file `proxy` key, env overrides, clamping", () => {
     assert.strictEqual(L.anyLever({ ...e, sizeWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, multiQuery: false, aliases: false, learnAliases: false }), false);
     const def = L.proxyConfig({ MEMGLOW_HOME: path.join(fx.root, "nowhere") });
     assert.deepStrictEqual([def.sizeWarning, def.searchDetails, def.suggestions, def.dedupe, def.toc, def.alreadyLoaded], [true, false, false, false, false, false]);
+    assert.strictEqual(def.duplicateHint, false, "duplicateHint off by default (0.4.4.1: a pure advisory add, same bucket as indexHint/searchDetails)");
+    const dh = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_PROXY_DUPLICATE_HINT: "1" });
+    assert.strictEqual(dh.duplicateHint, true);
+    assert.strictEqual(L.anyLever({ duplicateHint: true }), true, "duplicateHint alone is enough to turn levers on");
     assert.strictEqual(def.multiQuery, true, "multiQuery on by default since 0.4.2.2b");
     assert.deepStrictEqual([def.aliases, def.learnAliases], [true, true], "aliases/learnAliases on by default since 0.4.2.5 (effective-tokens rule: fewer calls on the replay fixture)");
     assert.strictEqual(def.aliasesMax, 2000);
@@ -1441,4 +1464,174 @@ test("applyAliasesToSearch: pure helper — learns from all phrasings, injects o
   const out3 = L.applyAliasesToSearch({ aliases: false, learnAliases: false, searchDetailsMax: 20 }, index, aliases, s3, ["roster"], result);
   assert.strictEqual(out3, result);
   assert.strictEqual(s3.lastSearch, null);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Lever 14 (duplicateHint, 0.4.4.1) — pure pieces first (duplicateHintCandidates,
+// duplicateHintBlock, duplicateHintFor), then end to end through the stdio proxy.
+
+test("duplicateHintCandidates: pure matcher — shares >= 2 significant words AND >= 60% coverage; EN and FR; a generic/unrelated title never matches; ranked by shared count then size; capped at 2", () => {
+  const notes = [
+    { id: "project-ha-climate", label: "Heating and climate", description: "Thermostat schedules, zones and heating preferences for the house", tokens: 50 },
+    { id: "project-chauffage", label: "Chauffage et climatisation", description: "Réglages du chauffage et de la climatisation pour la maison", tokens: 40 },
+    { id: "grocery", label: "Grocery list", description: "Weekly shopping", tokens: 10 },
+  ];
+  const sw = LA.significantWords;
+  assert.deepStrictEqual(L.duplicateHintCandidates(sw("Heating and climate settings"), notes), ["project-ha-climate"], "EN near-duplicate: 2 of 3 words shared (66%)");
+  assert.deepStrictEqual(L.duplicateHintCandidates(sw("Réglages chauffage climatisation"), notes), ["project-chauffage"], "FR near-duplicate: all 3 words shared");
+  assert.deepStrictEqual(L.duplicateHintCandidates(sw("Trip itinerary draft"), notes), [], "no overlap with any note at all");
+  assert.deepStrictEqual(L.duplicateHintCandidates(sw("Notes"), notes), [], "a single significant word can never reach the >= 2 threshold");
+  assert.deepStrictEqual(L.duplicateHintCandidates(sw("Meeting notes 2026"), notes), [], "generic title, no real overlap with any note");
+  assert.deepStrictEqual(L.duplicateHintCandidates([], notes), [], "no significant words at all: never matches");
+
+  // Cap + ranking: three notes all share the same 2 words — ranked by note size (desc, tie-break
+  // only), capped to 2.
+  const three = [
+    { id: "a", label: "Heating climate zones", description: "", tokens: 10 },
+    { id: "b", label: "Heating climate setup", description: "", tokens: 999 },
+    { id: "c", label: "Heating climate notes", description: "", tokens: 50 },
+  ];
+  assert.deepStrictEqual(L.duplicateHintCandidates(sw("Heating climate project"), three), ["b", "c"], "same shared count (2): ranked by note size, capped to 2");
+});
+
+test("duplicateHintBlock: exact gets its own short sentence; similar names 1-2 candidates with their label; empty/null input is never a block", () => {
+  const index = { note(id) { return id === "project-ha-climate" ? { id, label: "Heating and climate" } : null; } };
+  const exact = L.duplicateHintBlock(index, "project-ha-climate", null);
+  assert.strictEqual(exact.type, "text");
+  assert.strictEqual(exact.text, "memglow: a note with this title already exists: [[project-ha-climate]] — this write_note may replace or duplicate it; prefer edit_note.");
+  const similar = L.duplicateHintBlock(index, null, ["project-ha-climate"]);
+  assert.strictEqual(similar.text, "memglow: a note on this subject already exists — [[project-ha-climate]] (Heating and climate). Prefer edit_note on it (append / replace_section) over a new note.");
+  // A candidate the index cannot describe (no note(), or it returns null) still gets an id — never crashes.
+  const unknown = L.duplicateHintBlock(index, null, ["ghost"]);
+  assert.strictEqual(unknown.text, "memglow: a note on this subject already exists — [[ghost]]. Prefer edit_note on it (append / replace_section) over a new note.");
+  assert.strictEqual(L.duplicateHintBlock(index, null, []), null);
+  assert.strictEqual(L.duplicateHintBlock(index, null, null), null);
+});
+
+test("duplicateHintFor: pure glue — exact wins over similar, a title-less call is null, index and archive notes are excluded from the similar rule even when they would otherwise qualify", () => {
+  const notes = [
+    { id: "project-ha-climate", label: "Heating and climate", description: "Thermostat schedules, zones and heating preferences for the house", theme: "projects", tokens: 50 },
+    { id: "old-heating", label: "Old heating notes", description: "Archived heating climate notes from last winter", theme: "projects", tokens: 30 },
+    { id: "MEMORY", label: "Index", description: "Heating and climate quick links, grocery shopping", theme: "index", tokens: 5 },
+  ];
+  const byId = new Map(notes.map((n) => [n.id, n]));
+  const index = {
+    resolve(raw) { return byId.has(raw) ? raw : null; },
+    allNotes() { return notes; },
+    isArchive(id) { return id === "old-heating"; },
+    note(id) { return byId.get(id) || null; },
+  };
+  assert.deepStrictEqual(L.duplicateHintFor(index, { title: "project-ha-climate" }), { exact: "project-ha-climate" });
+  assert.strictEqual(L.duplicateHintFor(index, {}), null, "no title at all: nothing to check");
+  assert.strictEqual(L.duplicateHintFor(index, { title: "   " }), null, "blank title: nothing to check");
+  assert.strictEqual(L.duplicateHintFor(index, { title: "Archived heating climate notes" }), null, "its only real match is the archive note itself — excluded, so nothing at all");
+  assert.deepStrictEqual(L.duplicateHintFor(index, { title: "Heating and climate overview" }), { similar: ["project-ha-climate"] }, "the index note would also qualify by words alone, but theme === index excludes it");
+  assert.strictEqual(L.duplicateHintFor(null, { title: "anything" }), null, "no index at all: never throws");
+});
+
+test("duplicateHint (opt-in, over stdio): exact title match (via the note's own label) gets the short line; upstream content untouched otherwise", async () => {
+  const fx = makeDuplicateNotes();
+  const c = start(fx, { MEMGLOW_PROXY_DUPLICATE_HINT: "1" });
+  try {
+    const r = texts(await c.call("write_note", { title: "Heating and climate", content: "x", directory: "projects" }));
+    assert.strictEqual(r.length, 2);
+    assert.match(r[0], /^# Created note/, "upstream's own confirmation, untouched");
+    assert.strictEqual(r[1], "memglow: a note with this title already exists: [[project-ha-climate]] — this write_note may replace or duplicate it; prefer edit_note.");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("duplicateHint (opt-in): a kebab slug matching the note's own id (not its label) is still an exact match", async () => {
+  const fx = makeDuplicateNotes();
+  const c = start(fx, { MEMGLOW_PROXY_DUPLICATE_HINT: "1" });
+  try {
+    const r = texts(await c.call("write_note", { title: "Project Ha Climate", content: "x", directory: "projects" }));
+    assert.strictEqual(r.length, 2);
+    assert.match(r[1], /^memglow: a note with this title already exists: \[\[project-ha-climate\]\]/);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("duplicateHint (opt-in): an EN near-duplicate title gets the 'subject already exists' line with the note's label", async () => {
+  const fx = makeDuplicateNotes();
+  const c = start(fx, { MEMGLOW_PROXY_DUPLICATE_HINT: "1" });
+  try {
+    const r = texts(await c.call("write_note", { title: "Heating and climate settings", content: "x", directory: "projects" }));
+    assert.strictEqual(r.length, 2);
+    assert.strictEqual(r[1], "memglow: a note on this subject already exists — [[project-ha-climate]] (Heating and climate). Prefer edit_note on it (append / replace_section) over a new note.");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("duplicateHint (opt-in): a FR near-duplicate title matches the FR note (significantWords is EN+FR)", async () => {
+  const fx = makeDuplicateNotes();
+  const c = start(fx, { MEMGLOW_PROXY_DUPLICATE_HINT: "1" });
+  try {
+    const r = texts(await c.call("write_note", { title: "Réglages chauffage climatisation", content: "x", directory: "projects" }));
+    assert.strictEqual(r.length, 2);
+    assert.match(r[1], /\[\[project-chauffage\]\] \(Chauffage et climatisation\)/);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("duplicateHint (opt-in): an unrelated title gets no hint at all", async () => {
+  const fx = makeDuplicateNotes();
+  const c = start(fx, { MEMGLOW_PROXY_DUPLICATE_HINT: "1" });
+  try {
+    const r = texts(await c.call("write_note", { title: "Trip itinerary draft", content: "x", directory: "projects" }));
+    assert.strictEqual(r.length, 1, "nothing added");
+    assert.match(r[0], /^# Created note/);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("duplicateHint (opt-in): index and archive notes are excluded from the similar rule end to end too, not only in the pure matcher", async () => {
+  const fx = makeDuplicateNotes();
+  const c = start(fx, { MEMGLOW_PROXY_DUPLICATE_HINT: "1" });
+  try {
+    // Shares >= 2 words with BOTH the archive note and the index note's own description, but
+    // neither counts — and its overlap with the live project note alone (heating/climate, 2 of
+    // 4 words = 50%) falls short of the 60% coverage bar, so nothing is added at all.
+    const r = texts(await c.call("write_note", { title: "Archived heating climate notes", content: "x", directory: "projects" }));
+    assert.strictEqual(r.length, 1, "nothing added");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("duplicateHint (opt-in): edit_note is never checked, even when its content looks like a duplicate title", async () => {
+  const fx = makeDuplicateNotes();
+  const c = start(fx, { MEMGLOW_PROXY_DUPLICATE_HINT: "1" });
+  try {
+    const r = texts(await c.call("edit_note", { identifier: "project-ha-climate", operation: "append", content: "\nHeating and climate settings\n" }));
+    assert.strictEqual(r.length, 1, "edit_note is a write, but never write_note: duplicateHint never looks at it");
+    assert.match(r[0], /^# Edited note/);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("duplicateHint: off by default — an exact duplicate title gets no hint at all", async () => {
+  const fx = makeDuplicateNotes();
+  const c = start(fx);
+  try {
+    const r = texts(await c.call("write_note", { title: "Heating and climate", content: "x", directory: "projects" }));
+    assert.strictEqual(r.length, 1);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("duplicateHint (opt-in): the same note is never hinted twice in one session; a fresh session hints it again; arguments reach the server unchanged", async () => {
+  const fx = makeDuplicateNotes();
+  const c = start(fx, { MEMGLOW_PROXY_DUPLICATE_HINT: "1" });
+  try {
+    const first = texts(await c.call("write_note", { title: "Heating and climate", content: "x", directory: "projects" }));
+    assert.strictEqual(first.length, 2, "first time: hinted");
+    const second = texts(await c.call("write_note", { title: "Heating and climate", content: "y", directory: "projects" }));
+    assert.strictEqual(second.length, 1, "same note, same session: not hinted again");
+
+    const logged = fs.readFileSync(fx.log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const writes = logged.filter((e) => e.name === "write_note");
+    assert.deepStrictEqual(writes.map((e) => e.args), [
+      { title: "Heating and climate", content: "x", directory: "projects" },
+      { title: "Heating and climate", content: "y", directory: "projects" },
+    ], "duplicateHint never changes the arguments sent upstream");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+  // A FRESH session (new client, same notes) starts with an empty `duplicateHinted` set.
+  const fx2 = makeDuplicateNotes();
+  const c2 = start(fx2, { MEMGLOW_PROXY_DUPLICATE_HINT: "1" });
+  try {
+    const r = texts(await c2.call("write_note", { title: "Heating and climate", content: "z", directory: "projects" }));
+    assert.strictEqual(r.length, 2, "a new session hints it again");
+  } finally { await c2.close(); fs.rmSync(fx2.root, { recursive: true, force: true }); }
 });
