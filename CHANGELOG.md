@@ -79,6 +79,115 @@ stays 0.4.3.
 - `checksum:` in edit answers is the real one (basic-memory sometimes prints `unknown`).
 - Frontmatter keys a write does not change are kept as they are (basic-memory re-dumps the whole
   block on some edits).
+## 0.4.4.4 — internal (not published)
+
+"Cache-stable always-loaded prefix." An LLM provider's prompt cache only pays off while the start
+of the prompt stays byte-identical between calls; memglow's own always-loaded prefix (the index
+note's text + its rendered memory-hygiene rules) silently broke that every time either one so much
+as reordered, because `lib/memory.js` scanned the notes folder in raw `readdirSync` order — never
+promised stable by any filesystem. This step makes that order deterministic and adds a small,
+honest measure of how often the prefix actually changes, with a tip only when it changes often.
+
+### Changed
+
+- **`lib/memory.js`**: `walk()` now sorts directory entries by name before recursing, so
+  `costNotes()`, `graph()` and every list derived from them are always in relative-path order,
+  whatever order the filesystem's own `readdirSync` happens to return. No test relied on the old
+  (incidental) order.
+
+### Added
+
+- **`lib/always-loaded.js`**: `prefixHash(indexText, rulesText)` (sha256, 16 hex characters) and
+  `createPrefixHistory({ dir, now })`, which records in `<dataDir>/prefix-history.json` only an
+  actual CHANGE of hash (never the bootstrap entry) and answers `{ changesLast7d, changesLast30d
+  }`. `prefixStatus({ dataDir, indexText, rulesText, now })` combines both and adds a `tip`, non
+  empty only once the prefix changed `PREFIX_TIP_THRESHOLD` (3) times or more in the last 7 days:
+  *"The always-loaded prefix changed N times this week; every change invalidates prompt caching
+  (cached input costs ≈0.1×). Batch index edits."* Also `shareStable(before, after)`: the share of
+  `before` that is still the literal, unbroken start of `after` (1 = identical, 0 = the very first
+  character already differs) — the practical measure of how cache-friendly an edit was, not a diff
+  size.
+- **`lib/memory-rules.js`**: no code change needed — `buildRulesText()` was already free of dates
+  and unordered object iteration; added a regression test that an identical config, even with its
+  own keys in a different order, renders byte-identical rules text every time.
+- **`server.js`**: `GET /api/cost`'s `alwaysLoaded` gains a `prefix: { hash, changesLast7d,
+  changesLast30d, tip }` (read fresh each call, like the existing `indexTrim` plan summary); a tip
+  line appears in the Memory cost panel's "Always loaded" block next to the index/file tips.
+- **`mcp-server/memglow-mcp.js`**: `memory_health`'s data gains the same `prefix` figure and, when
+  present, its tip in the summary — computed strictly READ-ONLY (it never calls `.record()`, so
+  this tool never writes `<dataDir>/prefix-history.json`; only the viewer process does).
+- **UI** (`public/cost.js`): `always.tipPrefix` tip line, translated, 8 languages.
+- **Measurement**: a test scans `demo/memory` twice, independently, and checks the rendered
+  always-loaded prefix is byte-identical both times (`shareStable` = 1) — the order fix above is
+  what makes that guaranteed rather than incidental.
+- `test/always-loaded.test.js` (7 tests: hash stability, history bootstrap-vs-change counting and
+  7/30-day windows, the tip threshold, `shareStable`, the demo-memory measurement, the `/api/cost`
+  and `memory_health` wiring including the read-only guarantee) and one more test each in
+  `test/memory.test.js` (sorted `costNotes()`/`graph()`, written in reverse order on purpose) and
+  `test/memory-rules.test.js` (byte-identical rules text, key order independent).
+
+## 0.4.4.3 — internal (not published)
+
+"Scheduled maintenance proposals." memglow already has three deterministic, no-AI detection tiers
+— dormant sections (`lib/archive.js`), over-threshold notes (Memory cost's own split hint) and an
+index-trim plan (`lib/index-trim.js`) — but each needed its own tab and its own click to even find
+out there was something to do. This step runs the same three detectors on a schedule, ranks what
+they find by estimated token gain, and surfaces one short list — still only a PROPOSAL: applying
+an item starts the very same `propose` → diff → confirm token → backup → atomic apply → undo
+pipeline (`lib/assistant/index.js`) as the Memory cost panel's own buttons. memglow never applies
+maintenance by itself.
+
+### Added
+
+- **`lib/maintenance.js`**: `computeMaintenance({ memory, config, dataDir, now, readOnly })` →
+  `{ generatedAt, items }`. `items`: one per dormant section (`kind: "archive"`, `target` = the
+  section's key), one per note above `largeNoteTokens` (`kind: "split"`, `target` = the note id,
+  `why` includes the `split_plan` packing as a hint), and at most one index-trim item (`kind:
+  "indexTrim"`, only when it would save at least `MIN_INDEX_TRIM_GAIN` (20) tokens/session) —
+  ranked by `gainTokens`, ties broken by id. Ids are a stable hash of `kind + target`
+  (`itemId()`), so a dismissed item stays dismissed across rescans even as the ranking shifts.
+  `readOnly: true` (mcp-server's own use) skips the archive tier's section log entirely, so the
+  call never touches `<dataDir>/section-ages.json` either — the default (the scheduler's own use)
+  advances it exactly like `server.js`'s existing archive detection already did.
+- **Scheduler** (`createScheduler`): runs `computeMaintenance` once immediately, then every
+  `config.maintenanceEveryHours` (default 24, env `MEMGLOW_MAINTENANCE_EVERY_HOURS`, 0 = no
+  repeat — the start-up scan still runs once), via an injectable `setIntervalFn`/`clearIntervalFn`
+  for tests. Never writes a note. `createMaintenanceStore({ dir })` persists the latest scan in
+  `<dataDir>/maintenance.json` and a dismissed-ids list in `<dataDir>/maintenance-dismissed.json`
+  (atomic writes, capped at 500 entries); `write()` filters out already-dismissed ids, `dismiss()`
+  removes an id from the cached result right away, before the next scheduled rescan even runs.
+  In `server.js`, construction itself touches neither the notes nor the memory model (no scan): a
+  real deployment (`main()`) starts the scheduler right after `listen()`; a caller that only uses
+  `createServer()` directly (every Node test) gets it lazily instead, the first time `GET
+  /api/maintenance` is actually requested — exactly like `cost()`/`alwaysLoaded()` already only
+  scan once something is actually asked for.
+- **HTTP**: `GET /api/maintenance` (available even with the assistant disabled: the list is
+  informational); `POST /api/maintenance/dismiss { id }` (same-origin CSRF header, rate limited,
+  strict id shape). Neither route ever writes a note.
+- **UI** (`public/cost.js`): a "Maintenance (N)" block in the Memory cost panel, fetched
+  alongside (never blocking) the main `/api/cost` load; each item shows its title, why and
+  estimated gain, with a "Do it" button that dispatches the matching existing event
+  (`memglow:archive`/`memglow:assistant`/`memglow:indexTrim` — the normal proposal flow, nothing
+  applied here) and a "Dismiss" button. 8 languages.
+- **MCP server** (`mcp-server/memglow-mcp.js`): read-only tool `maintenance_proposals` — the same
+  list, computed fresh with `readOnly: true` on every call (no cache file, no counter advanced).
+  Updated the stale "Seven read-only tools" header count (now eight).
+- **Config**: `maintenanceEveryHours` (default 24, 0–8784, env
+  `MEMGLOW_MAINTENANCE_EVERY_HOURS`).
+- `test/maintenance.test.js` (11 tests: archive/split/indexTrim detection and ranking, stable ids
+  across independent computations, `readOnly` never touching the data folder, a before/after
+  snapshot of the notes folder proving no note is ever written, store dismiss-and-reload
+  persistence, the scheduler's start/stop with an injectable timer including the 0-hours case and
+  a simulated tick, the HTTP endpoints' CSRF/validation/persistence, and the config setting) and
+  one more MCP tool in `test/mcp-server.test.js`.
+
+### Full test suite (0.4.4.3 + 0.4.4.4 together)
+
+`for f in test/*.test.js; do timeout 300 node --test --test-timeout=120000 "$f"; done` — 44
+files, 578 tests (baseline 558 + 20 new: 11 `test/maintenance.test.js`, 7
+`test/always-loaded.test.js`, 1 `test/memory.test.js`, 1 `test/memory-rules.test.js`), 0 fail.
+
+package.json stays at 0.4.3 (these two tags are local, unpublished micro-steps).
 
 ## 0.4.5.1b — internal (not published)
 

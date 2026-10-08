@@ -17,7 +17,7 @@
  * not memglow's data folder. If present, the counters give real 7-day read counts; without them,
  * the tools say so plainly instead of guessing.
  *
- * Seven read-only tools, no write tool:
+ * Eight read-only tools, no write tool:
  *   memory_health   folder-wide overview: notes too large, costliest to read, never read, index size,
  *                   hub-and-spoke drift (lib/hub-spoke.js: redundant index lines, sibling-listing
  *                   lines, missing uplinks/hub lines — counts only, never a note's text)
@@ -30,6 +30,9 @@
  *                   from the archive summary note: references only, never the archived text
  *   index_trim_plan which index lines (lib/index-trim.js) could be shortened deterministically and
  *                   how many tokens that would save per session — the plan only, nothing written
+ *   maintenance_proposals the same scheduled maintenance list the viewer's Memory cost panel shows
+ *                   (lib/maintenance.js): dormant sections, over-threshold notes, an index-trim
+ *                   opportunity, ranked by token gain — computed fresh, never a cache file
  * No tool ever returns a full note body: only ids, titles, token estimates, frontmatter
  * descriptions and section headings — and even those go through lib/memory.js's `maskSecrets`
  * before being sent anywhere.
@@ -45,9 +48,10 @@ const { rankRelated } = require("../lib/related");
 const organise = require("../lib/organise");
 const hubSpoke = require("../lib/hub-spoke");
 const { readZones } = require("../lib/zones");
-const { measureFiles, alwaysLoadedCost } = require("../lib/always-loaded");
+const { measureFiles, alwaysLoadedCost, prefixHash, createPrefixHistory, PREFIX_TIP_THRESHOLD } = require("../lib/always-loaded");
 const archive = require("../lib/archive");
 const indexTrim = require("../lib/index-trim");
+const maintenance = require("../lib/maintenance");
 
 const SERVER_NAME = "memglow-mcp";
 let SERVER_VERSION = "0.0.0";
@@ -160,6 +164,24 @@ function toolMemoryHealth(ctx) {
   });
   const alwaysLoaded = { perSession: al.perSession, sessionsPerDay: al.sessionsPerDay, sessionsSource: al.sessionsSource, perDay: al.perDay, files: al.files, tips: al.tips.map((t) => t.text) };
 
+  // Cache-stable prefix (lib/always-loaded.js, 0.4.4.4): READ-ONLY here — only the viewer process
+  // (server.js) ever records a new entry in <dataDir>/prefix-history.json; this tool only reads
+  // whatever it already logged, never writes memglow's data folder itself.
+  let prefix = null;
+  {
+    let rulesText = "";
+    try { rulesText = memoryRules.rulesTextFor(ctx.config, process.env); } catch { /* keep "" */ }
+    let indexText = "";
+    if (index) { try { indexText = fs.readFileSync(path.join(ctx.config.memoryDir, notes.find((n) => n.theme === "index").rel), "utf8"); } catch { /* keep "" */ } }
+    const hist = createPrefixHistory({ dir: ctx.config.dataDir, now: () => Date.now() });
+    const sum = hist.summary(Date.now());
+    const hash = prefixHash(indexText, rulesText);
+    const tip = sum.changesLast7d >= PREFIX_TIP_THRESHOLD
+      ? `The always-loaded prefix changed ${sum.changesLast7d} times this week; every change invalidates prompt caching (cached input costs ≈0.1×). Batch index edits.`
+      : "";
+    prefix = { hash, changesLast7d: sum.changesLast7d, changesLast30d: sum.changesLast30d, tip };
+  }
+
   // Hub-and-spoke structure (lib/hub-spoke.js): counts only, never a note's text — see
   // docs/hub-and-spoke.md and lib/memory-rules.js for the rule itself.
   let structure = null;
@@ -187,6 +209,7 @@ function toolMemoryHealth(ctx) {
     neverRead30d,
     countersAvailable: ctx.haveCounters,
     structure,
+    prefix,
   };
 
   const lines = [`${cost.totals.notes} note(s), ≈${cost.totals.tokens} tokens total.`];
@@ -203,6 +226,7 @@ function toolMemoryHealth(ctx) {
       ? `Hub and spoke: ${structure.hubs} hub(s), ${structure.indexRedundant} redundant index line(s), ${structure.siblingLines} sibling list(s) (${structure.pureSiblingLines} removable outright), ${structure.missingUplinks} missing uplink(s), ${structure.missingHubLines} missing hub line(s).`
       : `Hub and spoke: ${structure.hubs} hub(s), nothing to tidy.`);
   }
+  if (prefix.tip) lines.push(prefix.tip);
   return { summary: lines.join(" "), data };
 }
 
@@ -416,6 +440,28 @@ function toolIndexTrimPlan(ctx, args) {
   return { summary, data };
 }
 
+/**
+ * maintenance_proposals: the same scheduled maintenance list the Memory cost panel shows
+ * (lib/maintenance.js computeMaintenance), computed fresh and READ-ONLY — unlike the viewer's own
+ * scheduler, this call never advances the archive tier's section log, so it never writes
+ * memglow's data folder either. Items already dismissed from the page are still excluded.
+ */
+function toolMaintenanceProposals(ctx) {
+  if (emptyMemory(ctx)) return noNotesFound(ctx);
+  let result;
+  try { result = maintenance.computeMaintenance({ memory: ctx.memory, config: ctx.config, dataDir: ctx.config.dataDir, now: Date.now(), readOnly: true }); }
+  catch (e) { return { error: `maintenance_proposals failed: ${e.message}` }; }
+  const store = maintenance.createMaintenanceStore({ dir: ctx.config.dataDir });
+  const dismissed = store.dismissedIds();
+  const items = result.items.filter((i) => !dismissed.has(i.id)).map((i) => ({
+    id: i.id, kind: i.kind, title: safeText(i.title), why: safeText(i.why), gainTokens: i.gainTokens, target: i.target,
+  }));
+  const summary = items.length
+    ? `${items.length} maintenance proposal(s), biggest gain first: ${items.slice(0, 5).map((i) => `${i.kind} "${i.title}" (≈${i.gainTokens} tokens)`).join(", ")}. Read-only: applying one still goes through memglow's own assistant pipeline (propose, diff, confirm, backup) — this tool never writes anything.`
+    : "No maintenance proposal right now.";
+  return { summary, data: { available: true, generatedAt: result.generatedAt, items } };
+}
+
 // ---- tool registry (name, LLM-facing description, strict input schema) ----
 
 const TOOLS = [
@@ -493,7 +539,13 @@ TOOLS.push({
   },
 });
 
-const HANDLERS = { memory_health: toolMemoryHealth, split_plan: toolSplitPlan, related_notes: toolRelatedNotes, note_cost: toolNoteCost, organisation_suggestions: toolOrganisation, archive_lookup: toolArchiveLookup, index_trim_plan: toolIndexTrimPlan };
+TOOLS.push({
+  name: "maintenance_proposals",
+  description: "The same scheduled maintenance list the memglow viewer's Memory cost panel shows: dormant sections worth archiving, notes above the large-note threshold worth splitting, and an index-trim opportunity, ranked by estimated token gain. Read-only and computed fresh on every call (never reads or writes a cache file, never advances any counter) — applying one of these still goes through memglow's normal assistant pipeline (propose, diff, confirm token, backup, atomic apply, undo), never this tool.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+});
+
+const HANDLERS = { memory_health: toolMemoryHealth, split_plan: toolSplitPlan, related_notes: toolRelatedNotes, note_cost: toolNoteCost, organisation_suggestions: toolOrganisation, archive_lookup: toolArchiveLookup, index_trim_plan: toolIndexTrimPlan, maintenance_proposals: toolMaintenanceProposals };
 
 // ---- a tiny, hand-written JSON Schema validator (just what the schemas above need) ----
 

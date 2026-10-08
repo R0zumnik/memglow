@@ -40,6 +40,19 @@ test("defaultTemplate (0.4.2.2b): the first rule tells the assistant to use memg
   assert.match(firstRule, /2–3 different phrasings/, "the rule still names the 2-3 phrasings habit");
 });
 
+test("buildRulesText (0.4.4.4): identical bytes for an identical config — no dates, no unordered object iteration", () => {
+  const themes = [{ id: "people", label: "People" }, { id: "work", label: "Work" }];
+  const config = { themes, protectedThemes: ["people", "work"], largeNoteTokens: 4000, splitChunkTokens: 1500, dataDir: null };
+  const a = R.buildRulesText(config, { enabled: true, extra: ["one", "two"] });
+  const b = R.buildRulesText(config, { enabled: true, extra: ["one", "two"] });
+  assert.strictEqual(a, b, "same config, same bytes");
+  // A config object built with its keys in a DIFFERENT order must still render identically: nothing
+  // here may depend on Object.keys() enumeration order.
+  const reordered = { splitChunkTokens: 1500, dataDir: null, largeNoteTokens: 4000, protectedThemes: ["people", "work"], themes };
+  assert.strictEqual(R.buildRulesText(reordered, { extra: ["one", "two"], enabled: true }), a, "key order does not matter");
+  assert.ok(!/\d{4}-\d{2}-\d{2}/.test(a), "no date embedded in the rules text");
+});
+
 test("protectedLabelFor: config.protectedThemes with labels, saved zones.json wins, empty -> 'none configured'", () => {
   const themes = [{ id: "people", label: "People" }, { id: "work", label: "Work" }];
   assert.strictEqual(R.protectedLabelFor({ themes, protectedThemes: [], dataDir: null }), "none configured");

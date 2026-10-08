@@ -21,9 +21,11 @@ const { createAssistant } = require("./lib/assistant");
 const zonesLib = require("./lib/zones");
 const setupLib = require("./lib/setup");
 const organise = require("./lib/organise");
-const { measureFiles, alwaysLoadedCost } = require("./lib/always-loaded");
+const { measureFiles, alwaysLoadedCost, prefixStatus } = require("./lib/always-loaded");
 const indexTrimLib = require("./lib/index-trim");
 const archive = require("./lib/archive");
+const maintenanceLib = require("./lib/maintenance");
+const memoryRules = require("./lib/memory-rules");
 const hubSpoke = require("./lib/hub-spoke");
 const { createFindTime } = require("./lib/find-time");
 const { createEngineSpeed, cleanDuration } = require("./lib/engine-speed");
@@ -50,6 +52,8 @@ const ASSIST_BODY_MAX = 8192;
 const ASSIST_STREAM_MAX = 5;
 const ASSIST_POSTS_PER_MIN = 30;
 const SETUP_TESTS_PER_MIN = 10;
+const MAINT_POSTS_PER_MIN = 30;
+const MAINT_DISMISS_BODY_MAX = 256;
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -142,6 +146,34 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       archiveReport: () => cost().archive,
     });
   assistantNow();
+
+  // Scheduled maintenance proposals (lib/maintenance.js, 0.4.4.3): memglow never applies these by
+  // itself — the scheduler only detects and ranks opportunities already governed by their own
+  // deterministic tiers (archive/split/indexTrim); clicking one starts the matching existing
+  // proposal kind through the assistant above. Runs once right away, then every
+  // config.maintenanceEveryHours (0 = no repeat, the start-up scan still runs once).
+  // Construction itself touches neither the notes nor the memory model (no scan here): the
+  // scheduler's first run is triggered either by main() right after listen() (real deployments),
+  // or lazily by the first GET /api/maintenance (tests, and any other caller of createServer()
+  // directly) — exactly like cost()/alwaysLoaded() already only scan once actually requested.
+  const maintenanceStore = maintenanceLib.createMaintenanceStore({ dir: dataDir });
+  const maintenanceScheduler = maintenanceLib.createScheduler({
+    memory, config, dataDir, everyHours: config.maintenanceEveryHours, store: maintenanceStore,
+    log: (m) => console.log("[memglow] maintenance " + m),
+  });
+  let maintStarted = false;
+  function maintenanceEnsureStarted() {
+    if (maintStarted) return;
+    maintStarted = true;
+    maintenanceScheduler.start();
+  }
+  let maintWindow = 0, maintInWindow = 0;
+  function maintRateOk() {
+    const now = Date.now();
+    if (now - maintWindow >= 60000) { maintWindow = now; maintInWindow = 0; }
+    return ++maintInWindow <= MAINT_POSTS_PER_MIN;
+  }
+
   const statics = { ...STATIC, "/assistant.js": ["assistant.js", "text/javascript; charset=utf-8"] };
   const template = fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8");
   const assistantPanelHtml = fs.readFileSync(path.join(PUBLIC, "assistant.html"), "utf8");
@@ -303,7 +335,22 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       days: counters.days(), now: Date.now(), sessionsPerDay: config.sessionsPerDay || 5, indexWarningTokens: config.indexWarningTokens || 2000,
     });
     al.indexTrim = indexTrimPlanNow();
+    al.prefix = prefixStatusNow();
     return al;
+  }
+  /**
+   * Cache-stable prefix (lib/always-loaded.js, 0.4.4.4): a stable hash of the index note's text +
+   * memglow's rendered memory-rules text (lib/memory-rules.js — identical bytes for an identical
+   * config), and how often that hash actually changed recently. Recorded in
+   * <dataDir>/prefix-history.json; a tip appears only when it changed often (prompt-cache cost).
+   */
+  function prefixStatusNow() {
+    const idx = (memory.costNotes() || []).find((n) => n.theme === "index");
+    let indexText = "";
+    if (idx && idx.rel) { try { indexText = fs.readFileSync(path.join(config.memoryDir, idx.rel), "utf8"); } catch { /* keep "" */ } }
+    let rulesText = "";
+    try { rulesText = memoryRules.rulesTextFor(config, runEnv); } catch { /* keep "" */ }
+    return prefixStatus({ dataDir, indexText, rulesText, now: Date.now });
   }
   /**
    * "Trim the index" plan summary (lib/index-trim.js), read only: how many index lines could be
@@ -419,7 +466,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
     return [id, { destination: row.destination, key: row.key }];
   }));
 
-  return http.createServer((req, res) => {
+  const httpServer = http.createServer((req, res) => {
     const url = new URL(req.url, "http://localhost");
     const p = url.pathname;
     const assistant = assistantNow();
@@ -598,6 +645,22 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       });
     }
 
+    // Dismissing a scheduled maintenance proposal (lib/maintenance.js): same guard as the saved
+    // view — page access rule, same-origin request with memglow's header (CSRF), rate limited,
+    // tiny body. Never available (not even enabled when assistant is disabled: the proposal LIST
+    // is informational even without an AI; only applying one needs the assistant) — this route
+    // only edits memglow's own dismissed-items bookkeeping, never a note.
+    if (p === "/api/maintenance/dismiss" && req.method === "POST") {
+      if (!viewerAllowed(req)) { req.resume(); return unauthorized(); }
+      if (!sameOriginWrite(req)) { req.resume(); return json(res, 403, { error: "forbidden" }); }
+      if (!maintRateOk()) { req.resume(); headers(res, { "Retry-After": "10" }); return json(res, 429, { error: "too many requests" }); }
+      return readJson(req, res, MAINT_DISMISS_BODY_MAX, (body) => {
+        const id = body && typeof body.id === "string" ? body.id : "";
+        if (!/^(archive|split|indexTrim)-[0-9a-f]{16}$/.test(id)) return json(res, 400, { error: "bad id" });
+        return json(res, 200, maintenanceStore.dismiss(id));
+      });
+    }
+
     // Assistant actions (only when enabled): same access rule as the page, same-origin browser request
     // with memglow's header (CSRF), rate limited, small JSON body. Every one of them can start a
     // process, spend tokens or write notes.
@@ -680,6 +743,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
     }
     if (p === "/api/graph") return json(res, 200, memory.graph());
     if (p === "/api/cost") return json(res, 200, { ...cost(), alwaysLoaded: alwaysLoaded(), findTime: findTimeNow(), engineSpeed: engineSpeed.summary(), clientTokens: clientTokensNow() });
+    if (p === "/api/maintenance") { maintenanceEnsureStarted(); return json(res, 200, maintenanceStore.read()); }
     if (p === "/api/zones") {
       const z = zones.read();
       return json(res, 200, { ...z, themes: zonesLib.overview(config, memory.costNotes(), z.labels) });
@@ -705,6 +769,11 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
     }
     return notFound(res);
   });
+  // Real deployments (main(), below) start the scheduler right away ("runs ... at start"); a
+  // caller that only uses createServer() directly (every Node test) gets it lazily instead, the
+  // first time GET /api/maintenance is actually requested.
+  httpServer.memglowStartMaintenance = maintenanceEnsureStarted;
+  return httpServer;
 }
 
 /**
@@ -735,7 +804,9 @@ function main(env = process.env) {
     process.exit(1);
   }
   const memory = createMemory({ dir: config.memoryDir, config, pollMs: config.pollMs });
-  return createServer(config, memory).listen(config.port, config.host, () => {
+  const server = createServer(config, memory);
+  if (server.memglowStartMaintenance) server.memglowStartMaintenance();
+  return server.listen(config.port, config.host, () => {
     console.log(`memglow: ${config.memoryDir}`);
     console.log(`memglow: open http://${config.host === "0.0.0.0" ? "localhost" : config.host}:${config.port}`);
     if (!config.token) console.log("memglow: MEMGLOW_TOKEN not set — /api/activity is disabled (live assistant activity off)");

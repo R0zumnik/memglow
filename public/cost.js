@@ -108,6 +108,12 @@ var EN_COST = {
   "struct.missingUplinks": { one: "{n} note missing its link back to the hub", other: "{n} notes missing their link back to the hub" },
   "struct.missingHubLines": { one: "{n} hub missing a line for one of its notes", other: "{n} hubs missing a line for one of their notes" },
   "struct.doIt": "Tidy into hub and spoke",
+  "cost.maintenance": "Maintenance ({n})",
+  "maint.none": "No maintenance proposal right now.",
+  "maint.gain": "≈{tokens} tokens",
+  "maint.apply": "Do it",
+  "maint.dismiss": "Dismiss",
+  "always.tipPrefix": "The always-loaded prefix changed {n} times this week; every change invalidates prompt caching (cached input costs ≈0.1×). Batch index edits.",
   "common.reload": "Reload", "common.retry": "Retry",
   "error.connectionLost": "Connection lost. Check your network and retry.",
   "error.unauthorized": "Unauthorized. Reload the page to sign in again.",
@@ -395,7 +401,12 @@ function costAlwaysLoaded(a, T) {
     '<p class="mg-cost__empty">' + costEsc(T(a.sessionsSource === "index reads" ? "always.sessionsFromIndex" : "always.sessionsFromSetting")) + '</p>';
   html += rows.length ? '<ul class="mg-cost__list mg-cost__list--compact">' + rows.join("") + '</ul>' : '<p class="mg-cost__empty">' + costEsc(T("always.noIndex")) + '</p>';
   if (!(a.files || []).length) html += '<p class="mg-cost__empty">' + costFill(T, "always.addFiles", { setting: '<code>alwaysLoaded</code>' }) + '</p>';
-  if (a.tips && a.tips.length) html += '<ul class="mg-cost__tips">' + a.tips.map(function (t) { return '<li>' + costEsc(costTip(t, T)) + '</li>'; }).join("") + '</ul>';
+  var tipTexts = (a.tips || []).map(function (t) { return costTip(t, T); });
+  // Cache-stable prefix (lib/always-loaded.js, 0.4.4.4): a tip only when it changed often this
+  // week — the threshold itself lives server-side (`a.prefix.tip` non-empty is the signal), but the
+  // sentence is rendered in the page's own language from the raw figure.
+  if (a.prefix && a.prefix.tip) tipTexts.push(T("always.tipPrefix", { n: costNumber(a.prefix.changesLast7d) }));
+  if (tipTexts.length) html += '<ul class="mg-cost__tips">' + tipTexts.map(function (t) { return '<li>' + costEsc(t) + '</li>'; }).join("") + '</ul>';
   else html += '<p class="mg-cost__empty">' + costEsc(T("always.small")) + '</p>';
   if (costAssistant && a.indexTrim && a.indexTrim.lines > 0) {
     html += '<div class="mg-arch__btns"><button type="button" class="bn-btn mg-cost__copy" data-index-trim="1">'
@@ -657,6 +668,25 @@ function costStructure(s, T) {
   return list + btns;
 }
 
+/**
+ * Scheduled maintenance proposals (lib/maintenance.js, 0.4.4.3): a short ranked list, each with a
+ * button that starts the matching existing proposal kind (archive/split/indexTrim — the usual
+ * propose → diff → confirm → apply pipeline, never applied here) and a Dismiss button.
+ */
+function costMaintenance(m, T) {
+  T = T || defaultCostT;
+  if (!m || !m.items || !m.items.length) return '<p class="mg-cost__empty">' + costEsc(T("maint.none")) + '</p>';
+  return '<ul class="mg-cost__list mg-cost__list--compact mg-maint">' + m.items.map(function (it) {
+    return '<li class="mg-cost__item mg-maint__item">' +
+      '<p class="mg-maint__title">' + costEsc(it.title) + '</p>' +
+      '<p class="mg-cost__det">' + costEsc(it.why) + ' — ' + costEsc(T("maint.gain", { tokens: costNumber(it.gainTokens) })) + '</p>' +
+      '<div class="mg-arch__btns">' +
+      (costAssistant ? '<button type="button" class="bn-btn mg-cost__copy mg-cost__ai" data-maint-apply="' + costEsc(it.id) + '" data-maint-kind="' + costEsc(it.kind) + '" data-maint-target="' + costEsc(it.target) + '">' + costEsc(T("maint.apply")) + '</button>' : '') +
+      '<button type="button" class="bn-btn mg-cost__copy" data-maint-dismiss="' + costEsc(it.id) + '">' + costEsc(T("maint.dismiss")) + '</button>' +
+      '</div></li>';
+  }).join("") + '</ul>';
+}
+
 /** The whole panel body, or a short message when there is nothing to show. `T` defaults to the
     page's current language (or this file's English copy outside a browser — see defaultCostT). */
 function costRender(c, colors, T) {
@@ -679,11 +709,12 @@ function costRender(c, colors, T) {
   html += '</div>';
   if (c.archive) html += '<figure class="mg-cost__block mg-arch" id="mg-arch"><figcaption>' + costEsc(T("cost.archive", { n: costNumber(c.archive.afterDays) })) + '</figcaption>' + costArchive(c.archive, colors, T) + '</figure>';
   if (c.structure) html += '<figure class="mg-cost__block mg-struct" id="mg-struct"><figcaption>' + costEsc(T("cost.structure")) + '</figcaption>' + costStructure(c.structure, T) + '</figure>';
+  if (c.maintenance) html += '<figure class="mg-cost__block mg-maint" id="mg-maint"><figcaption>' + costEsc(T("cost.maintenance", { n: (c.maintenance.items || []).length })) + '</figcaption>' + costMaintenance(c.maintenance, T) + '</figure>';
   return html;
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costStructure: costStructure, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costPercent: costPercent, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, costDuration: costDuration, costFindTime: costFindTime, costEngineSpeed: costEngineSpeed, costClientTokens: costClientTokens, costClientLabel: costClientLabel, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT, mgBannerKind: mgBannerKind, mgErrorBanner: mgErrorBanner, mgClearBanner: mgClearBanner };
+  module.exports = { setAssistant: function (v, label) { costAssistant = !!v; costAssistantLabel = label || "Claude"; costProvider = label || ""; }, costOrganisation: costOrganisation, costAlwaysLoaded: costAlwaysLoaded, costArchive: costArchive, costArchivePrompt: costArchivePrompt, costArchiveGain: costArchiveGain, costStructure: costStructure, costMaintenance: costMaintenance, costEsc: costEsc, costNumber: costNumber, costTokens: costTokens, costDay: costDay, costPercent: costPercent, costSplitPrompt: costSplitPrompt, costRender: costRender, costPartName: costPartName, costGroupName: costGroupName, costDuration: costDuration, costFindTime: costFindTime, costEngineSpeed: costEngineSpeed, costClientTokens: costClientTokens, costClientLabel: costClientLabel, EN_COST: EN_COST, resolveTextCost: resolveTextCost, defaultCostT: defaultCostT, mgBannerKind: mgBannerKind, mgErrorBanner: mgErrorBanner, mgClearBanner: mgClearBanner };
 }
 
 (function () {
@@ -717,15 +748,36 @@ if (typeof module !== "undefined" && module.exports) {
     if (g) g.innerHTML = costArchiveGain(archChosen(), T);
   }
 
+  // Scheduled maintenance proposals (lib/maintenance.js): a small, best-effort SECOND fetch — never
+  // blocks or fails the main Memory cost load; its own GET /api/maintenance (never gated behind the
+  // assistant being enabled: the list is informational even without AI).
+  function fetchMaintenance() {
+    return fetch("/api/maintenance", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; });
+  }
+  function maintenanceDismiss(id) {
+    if (!id) return;
+    fetch("/api/maintenance/dismiss", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-Memglow": "1" },
+      body: JSON.stringify({ id: id }),
+    }).then(function () { load(); }).catch(function () { /* best effort: the next refresh will retry */ });
+  }
   function load() {
     if (loading) { again = true; return; } // asked during a load: load again right after
     again = false;
     loading = true;
-    fetch(url, { credentials: "same-origin" }).then(function (r) {
-      if (!r.ok) { var e = new Error(String(r.status)); e.mgStatus = r.status; throw e; }
-      mgClearBanner(banner);
-      return r.json();
-    }).then(function (c) {
+    Promise.all([
+      fetch(url, { credentials: "same-origin" }).then(function (r) {
+        if (!r.ok) { var e = new Error(String(r.status)); e.mgStatus = r.status; throw e; }
+        mgClearBanner(banner);
+        return r.json();
+      }),
+      fetchMaintenance(),
+    ]).then(function (res) {
+      var c = res[0];
+      if (res[1]) c.maintenance = res[1];
       last = c;
       // Keep open "Sections" boxes open across refreshes.
       var open = {};
@@ -867,6 +919,21 @@ if (typeof module !== "undefined" && module.exports) {
     var itrim = t.closest && t.closest("[data-index-trim]");
     if (itrim) {
       try { document.dispatchEvent(new CustomEvent("memglow:indexTrim")); } catch (e6) { /* old browser */ }
+      return;
+    }
+    var maintDismiss = t.closest && t.closest("[data-maint-dismiss]");
+    if (maintDismiss) {
+      maintenanceDismiss(maintDismiss.getAttribute("data-maint-dismiss"));
+      return;
+    }
+    var maintApply = t.closest && t.closest("[data-maint-apply]");
+    if (maintApply) {
+      var mKind = maintApply.getAttribute("data-maint-kind"), mTarget = maintApply.getAttribute("data-maint-target");
+      try {
+        if (mKind === "archive") document.dispatchEvent(new CustomEvent("memglow:archive", { detail: { sections: [mTarget] } }));
+        else if (mKind === "indexTrim") document.dispatchEvent(new CustomEvent("memglow:indexTrim"));
+        else document.dispatchEvent(new CustomEvent("memglow:assistant", { detail: mTarget }));
+      } catch (e7) { /* old browser */ }
       return;
     }
     var btn = t.closest && t.closest("[data-copy]");
