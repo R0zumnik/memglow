@@ -225,8 +225,28 @@ function setupRules(env = process.env, rules = undefined) {
 const MULTI_QUERY_TIMEOUT_MS = 20000;
 
 /**
+ * `params` for one multiQuery sub-call: the client's OWN request params, only `arguments` swapped
+ * for this phrasing's — so `params._meta` (the per-request envelope MCP 2026-07-28 requires:
+ * `io.modelcontextprotocol/protocolVersion` + `io.modelcontextprotocol/clientCapabilities`) and
+ * anything else the client put there travel with every sub-call, exactly as with its single call.
+ * Without it a 2026-07-28 server rejects each sub-call (memglow 0.4.3.1 bug, 2026-10-08). The
+ * client's `progressToken` is dropped: these extra calls are the proxy's own, and their progress
+ * notifications must not reach the client under its token (stdio relays every notification).
+ */
+function subCallParams(reqParams, args) {
+  const out = { ...(reqParams || {}), arguments: args };
+  const meta = reqParams && reqParams._meta;
+  if (meta && typeof meta === "object" && !Array.isArray(meta) && "progressToken" in meta) {
+    const m = { ...meta };
+    delete m.progressToken;
+    out._meta = m;
+  }
+  return out;
+}
+
+/**
  * Sends the EXTRA upstream calls a multiQuery search makes on its own, outside the normal
- * request/response relay: `send(tool, args)` writes a `tools/call` with a synthetic id (never
+ * request/response relay: `send(params)` (from subCallParams) writes a `tools/call` with a synthetic id (never
  * colliding with a client id, which is always a number or a plain client-chosen string) and
  * resolves with `{result}|{error}` when the matching line arrives; `intercept(m)` is how the
  * caller recognises that line (so it can suppress it instead of relaying it to the client) —
@@ -244,7 +264,7 @@ function createSubCallSender(write) {
       resolve(m.error ? { error: m.error } : { result: m.result });
       return true;
     },
-    send(tool, args) {
+    send(params) {
       return new Promise((resolve) => {
         const id = "memglow-mq:" + process.pid + ":" + (++n);
         let done = false;
@@ -252,7 +272,7 @@ function createSubCallSender(write) {
         const timer = setTimeout(() => { pending.delete(id); finish({ error: { code: -32000, message: "memglow-mcp-proxy: multiQuery upstream timeout" } }); }, MULTI_QUERY_TIMEOUT_MS);
         if (timer.unref) timer.unref();
         pending.set(id, finish);
-        try { write(Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: tool, arguments: args } }) + "\n", "utf8")); }
+        try { write(Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params }) + "\n", "utf8")); }
         catch (e) { pending.delete(id); finish({ error: { code: -32000, message: "memglow-mcp-proxy: " + e.message } }); }
       });
     },
@@ -276,7 +296,7 @@ function runStdio(o) {
     const up = lineRelay((b) => child.stdin.write(b), (m) => {
       try { w.fromClient(m); } catch { /* keep relaying */ }
       if (lv && lv.multiQuery.applies(m)) {
-        lv.multiQuery.run(m, (args) => sub.send(m.params.name, args)).then((r) => {
+        lv.multiQuery.run(m, (args) => sub.send(subCallParams(m.params, args))).then((r) => {
           try { w.fromServer(r.message); } catch { /* ignore: the call is still answered below */ }
           process.stdout.write(JSON.stringify(r.message) + "\n");
         }).catch(() => {
@@ -339,26 +359,44 @@ function hopless(h) {
   return out;
 }
 
+/** The JSON-RPC response carrying this `id` out of a whole `text/event-stream` body, or null. */
+function sseResponseFor(text, id) {
+  for (const block of text.split(/\r?\n\r?\n/)) {
+    const data = block.split(/\r?\n/).filter((l) => l.startsWith("data:")).map((l) => l.slice(5).replace(/^ /, "")).join("\n");
+    if (!data) continue; // keep-alive comments (": ping") and the like
+    let m;
+    try { m = JSON.parse(data); } catch { continue; }
+    if (m && typeof m === "object" && m.id === id && ("result" in m || "error" in m)) return m;
+  }
+  return null;
+}
+
 /**
  * One upstream `tools/call`, over HTTP, outside the normal request/response relay: used for the
- * EXTRA calls a multiQuery search makes on its own. JSON answers only (a sub-call that gets an
- * SSE answer back fails — the caller fails that phrasing open, same as a network error); the
- * one call the CLIENT actually asked for still goes through the normal streaming path below,
- * SSE included.
+ * EXTRA calls a multiQuery search makes on its own. `params` comes from subCallParams() (the
+ * client's envelope, `_meta` included) and the client's headers come along too (Mcp-Session-Id
+ * for a session-based server; MCP-Protocol-Version / Mcp-Method / Mcp-Name for a 2026-07-28 one —
+ * all still true for a sub-call: same method, same tool). The answer may be JSON or SSE (the
+ * server picks; basic-memory answers SSE, keep-alive pings included): the response matching `id`
+ * is read from either. Anything else (network error, unreadable body) fails that phrasing open;
+ * the one call the CLIENT actually asked for still goes through the normal streaming path below.
  */
-function postJsonRpc(lib, target, baseHeaders, id, tool, args) {
+function postJsonRpc(lib, target, baseHeaders, id, params) {
   return new Promise((resolve) => {
-    const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: tool, arguments: args } }), "utf8");
+    const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params }), "utf8");
     const headers = { ...baseHeaders, "content-type": "application/json", "content-length": String(body.length) };
     delete headers["content-encoding"];
+    delete headers["accept-encoding"]; // parsed here, never relayed as is: ask for it uncompressed
     const pr = lib.request(target, { method: "POST", headers }, (ur) => {
       const parts = [];
       ur.on("data", (c) => parts.push(c));
       ur.on("end", () => {
-        try {
-          const j = JSON.parse(Buffer.concat(parts).toString("utf8"));
-          resolve(j && j.error ? { error: j.error } : { result: j && j.result });
-        } catch { resolve({ error: { code: -32000, message: "memglow-mcp-proxy: multiQuery: unreadable upstream response" } }); }
+        const text = Buffer.concat(parts).toString("utf8");
+        let j = null;
+        if (String(ur.headers["content-type"] || "").includes("text/event-stream")) j = sseResponseFor(text, id);
+        else { try { j = JSON.parse(text); } catch { j = null; } }
+        if (j && typeof j === "object") resolve(j.error ? { error: j.error } : { result: j.result });
+        else resolve({ error: { code: -32000, message: "memglow-mcp-proxy: multiQuery: unreadable upstream response" } });
       });
     });
     pr.on("error", (e) => resolve({ error: { code: -32000, message: "memglow-mcp-proxy: multiQuery: " + e.message } }));
@@ -394,7 +432,7 @@ function createHttpProxy(o) {
       // for a JSON-RPC batch (an array): each element would need its own independent answer.
       if (parsed !== undefined && !Array.isArray(parsed) && lv && lv.multiQuery.applies(parsed)) {
         try { w.fromClient(parsed); } catch { /* keep relaying */ }
-        const sendUpstream = (args) => postJsonRpc(lib, target, baseHeaders, "memglow-mq:" + process.pid + ":" + (++mqN), parsed.params.name, args);
+        const sendUpstream = (args) => postJsonRpc(lib, target, baseHeaders, "memglow-mq:" + process.pid + ":" + (++mqN), subCallParams(parsed.params, args));
         lv.multiQuery.run(parsed, sendUpstream, sk).then((r) => {
           try { w.fromServer(r.message); } catch { /* ignore: the call is still answered below */ }
           const out = Buffer.from(JSON.stringify(r.message), "utf8");
@@ -488,4 +526,4 @@ if (require.main === module) {
   } else runStdio(o);
 }
 
-module.exports = { createWatcher, createHttpProxy, lineTap, sseTap, lineRelay, sseRelay, setupLevers, setupRules, parseArgs, SUPPRESS, createSubCallSender };
+module.exports = { createWatcher, createHttpProxy, lineTap, sseTap, lineRelay, sseRelay, setupLevers, setupRules, parseArgs, SUPPRESS, createSubCallSender, subCallParams, sseResponseFor };

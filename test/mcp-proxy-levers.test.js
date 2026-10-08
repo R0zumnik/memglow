@@ -1165,6 +1165,80 @@ test("multiQuery over HTTP: one merged response, upstream received one POST per 
   }
 });
 
+// Regression (2026-10-08): against a MCP 2026-07-28 server (basic-memory on MCP SDK 2.0), every
+// multiQuery sub-call failed with "params._meta must be an object carrying the required ..." —
+// the sub-calls were rebuilt as `{ name, arguments }` and lost the client's per-request envelope.
+// The fake upstream below applies the same rules as the real server's modern path: `_meta`
+// envelope required, MCP-Protocol-Version / Mcp-Method / Mcp-Name headers must match the body,
+// answers as an SSE stream with keep-alive pings.
+test("multiQuery over HTTP, MCP 2026-07-28 server: each sub-call carries the client's _meta envelope and headers; SSE answers merged; memglow_queries never sent upstream", async () => {
+  const fx = makeNotes();
+  const cfg = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_MEMORY_DIR: fx.notes, MEMGLOW_DATA_DIR: fx.data, MEMGLOW_LARGE_NOTE_TOKENS: "1000", MEMGLOW_PROXY_MULTI_QUERY: "1" });
+  const engine = L.createLevers({ config: cfg, index: L.createNoteIndex(cfg), savings: L.createSavings({ ...cfg, savingsFile: false, log: false }) });
+  const PV = "io.modelcontextprotocol/protocolVersion", CC = "io.modelcontextprotocol/clientCapabilities";
+  const received = [];
+  const upstream = http.createServer((req, res) => {
+    let b = ""; req.on("data", (c) => (b += c));
+    req.on("end", () => {
+      const m = JSON.parse(b);
+      received.push(m);
+      const meta = m.params && m.params._meta;
+      const reject = (message) => {
+        const body = JSON.stringify({ jsonrpc: "2.0", id: m.id, error: { code: -32602, message } });
+        res.writeHead(400, { "content-type": "application/json" }); res.end(body);
+      };
+      if (!meta || typeof meta !== "object" || !(PV in meta) || !(CC in meta)) return reject(`params._meta must be an object carrying the required '${PV}' and '${CC}' envelope keys`);
+      if (req.headers["mcp-protocol-version"] !== meta[PV] || req.headers["mcp-method"] !== m.method || req.headers["mcp-name"] !== m.params.name) return reject("header mismatch");
+      // Two hits per phrasing (merge cap = 2): alice is found by both, bob ONLY by the second
+      // phrasing and outranks carol (rank 1 vs 2) — bob in the reply proves the sub-call worked.
+      const row = (n) => `### ${n}\npermalink: people/${n}\nsnippet: s`;
+      const q = String(m.params.arguments.query || "").toLowerCase();
+      const hits = q.includes("alice") ? [row("alice"), row("carol")].join("\n\n") : q.includes("bob") ? [row("bob"), row("alice")].join("\n\n") : "No results";
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(": ping\n\n");
+      res.end(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: hits }] } })}\n\n`);
+    });
+  });
+  await new Promise((ok) => upstream.listen(0, "127.0.0.1", ok));
+  const proxy = createHttpProxy({ upstream: `http://127.0.0.1:${upstream.address().port}/mcp`, name: "basic-memory", onReport: () => {}, levers: engine });
+  await new Promise((ok) => proxy.listen(0, "127.0.0.1", ok));
+  const base = `http://127.0.0.1:${proxy.address().port}/mcp`;
+  const meta = { [PV]: "2026-07-28", [CC]: { sampling: {} }, "io.modelcontextprotocol/clientInfo": { name: "claude-code", version: "1" }, progressToken: 7 };
+  try {
+    const res = await fetch(base, { method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": "search_notes" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "search_notes", arguments: { query: "memglow alice", memglow_queries: ["bob"], page_size: 5 }, _meta: meta } }) });
+    const j = JSON.parse(await res.text());
+    assert.strictEqual(j.id, 1);
+    assert.ok(!j.error, "no error: " + JSON.stringify(j.error));
+    assert.match(j.result.content[0].text, /alice/);
+    assert.match(j.result.content[0].text, /bob/, "the second phrasing's hit is merged in");
+    assert.deepStrictEqual(received.map((m) => m.params.arguments.query), ["memglow alice", "bob"], "one upstream call per phrasing");
+    for (const m of received) {
+      assert.ok(!("memglow_queries" in m.params.arguments), "memglow_queries never reaches the upstream server");
+      assert.strictEqual(m.params.arguments.page_size, 5, "the other arguments are kept");
+      assert.deepStrictEqual(m.params._meta, { [PV]: "2026-07-28", [CC]: { sampling: {} }, "io.modelcontextprotocol/clientInfo": { name: "claude-code", version: "1" } }, "envelope copied, the client's progressToken dropped");
+    }
+  } finally {
+    upstream.closeAllConnections(); upstream.close();
+    proxy.closeAllConnections(); proxy.close();
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test("multiQuery over stdio: each sub-call written upstream carries the client's _meta envelope", async () => {
+  const { createSubCallSender, subCallParams } = require("../mcp-proxy/memglow-mcp-proxy");
+  const written = [];
+  const sub = createSubCallSender((b) => written.push(JSON.parse(b.toString("utf8"))));
+  const reqParams = { name: "search_notes", arguments: { query: "a", memglow_queries: ["b"] }, _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} } };
+  const p = sub.send(subCallParams(reqParams, { query: "b" }));
+  assert.strictEqual(written.length, 1);
+  assert.deepStrictEqual(written[0].params, { name: "search_notes", arguments: { query: "b" }, _meta: reqParams._meta });
+  assert.ok(sub.intercept({ jsonrpc: "2.0", id: written[0].id, result: { content: [] } }));
+  assert.deepStrictEqual(await p, { result: { content: [] } });
+  assert.deepStrictEqual(subCallParams({ name: "x", arguments: {} }, { q: 1 }), { name: "x", arguments: { q: 1 } }, "no _meta in, none invented");
+});
+
 // ---------------------------------------------------------------------------------------------
 // Lever 10 (aliases, 0.4.2.3 + 0.4.2.4) — end to end. Pure pieces (significantWords, learnEntries,
 // matchAlias, forgetMissing, createAliasStore) are unit-tested on their own in
