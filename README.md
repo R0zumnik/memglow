@@ -119,7 +119,13 @@ own memory, from the activity your hooks report:
   shows the path you wrote and ≈ tokens. *≈ X tokens per session × N sessions per day ≈ Y tokens
   per day* — sessions per day are estimated from the reads of the index note over the last 7
   days (an assistant reads it once per session), otherwise `sessionsPerDay` (default 5). Above
-  `indexWarningTokens` (default 2,000) you get a tip: *trim the index / CLAUDE.md*.
+  `indexWarningTokens` (default 2,000) you get a tip: *trim the index / CLAUDE.md*. When an index
+  line's hook is longer than `indexTrimMaxChars` (default 90 characters), a **Trim the index
+  (N lines, ≈X tokens/session)** button appears (with the [assistant](#assistant)): fully
+  deterministic, no AI — each hook is cut at its last clause or word boundary, and nothing is
+  ever lost: the dropped words must already be in the linked note's `description` or body, or
+  the plan also writes them there as a new `description:` line; a line whose note is missing or
+  whose existing `description` does not cover it is left exactly as it is.
 - **Time to find a note · 7 days** — from the activity memglow already receives: for each
   search, the first read by the same assistant (same source, machine and channel) within
   **2 minutes**. Median time to the note, median steps (each extra search before the read is one
@@ -794,6 +800,7 @@ answer "no notes found".
 | `note_cost` | `note` | Estimated tokens, the large-note threshold, status, and reads over the last 7 days (when available) for one note. |
 | `organisation_suggestions` | `limit` | Notes about one subject scattered across sub-themes of a group (same rules as Memory cost → Organisation), with the reasons and a ready-to-paste instruction for the assistant's own memory tool that names your protected groups. |
 | `archive_lookup` | `query`, `limit` | For when a search of the live memory found nothing: the [archived sections](#archive) whose topic or original note matches, read from the archive summary — title, original note, archive note, `[[link]]`, date, ≈tokens. Never the archived text. |
+| `index_trim_plan` | `maxChars` | Which index lines could be shortened deterministically (same rule as Memory cost → Always loaded → **Trim the index**) and the tokens that would save per session, plus a "skipped" list with why a line was left as is. The plan only — it writes nothing; the assistant's own `indexTrim` proposal is what actually applies it. |
 
 No write tool, and no tool ever returns a full note body: only ids, titles, token estimates,
 frontmatter descriptions and section headings — masked for secret-looking lines like everywhere
@@ -848,6 +855,7 @@ With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 | `alwaysLoaded` | `[]` | instruction files loaded at every session (`"~/.claude/CLAUDE.md"`, `"./CLAUDE.md"`, `"AGENTS.md"`…); size only, never read; relative paths from where memglow starts |
 | `sessionsPerDay` | `5` | Always loaded: sessions per day when no read of the index note was counted |
 | `indexWarningTokens` | `2000` | Always loaded: "trim" tip above this; also the threshold of the proxy's `indexWarning` |
+| `MEMGLOW_INDEX_TRIM_MAX_CHARS` / `indexTrimMaxChars` | `90` | **Trim the index**: an index line's hook longer than this many characters is a candidate for deterministic shortening (30-1000) |
 | `MEMGLOW_ARCHIVE_AFTER_DAYS` / `archiveAfterDays` (or `archive.afterDays`) | `105` | [archive tier](#archive): a section is dormant after this many days without a read, a search hit or an edit (7-3650) |
 | `archive.folder`, `archive.summaryNote` | `archive`, `archive-summary` | where archive notes and the archive summary go (inside the notes folder) |
 | `archive.maxSuggestions`, `archive.minSectionTokens` | `20`, `100` | at most this many dormant sections listed (biggest first); smaller sections are never suggested |

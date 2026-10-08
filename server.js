@@ -22,6 +22,7 @@ const zonesLib = require("./lib/zones");
 const setupLib = require("./lib/setup");
 const organise = require("./lib/organise");
 const { measureFiles, alwaysLoadedCost } = require("./lib/always-loaded");
+const indexTrimLib = require("./lib/index-trim");
 const archive = require("./lib/archive");
 const hubSpoke = require("./lib/hub-spoke");
 const { createFindTime } = require("./lib/find-time");
@@ -296,11 +297,37 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
    * `alwaysLoaded` (size only, never their content), × sessions per day. Not cached: a few stats.
    */
   function alwaysLoaded() {
-    return alwaysLoadedCost({
+    const al = alwaysLoadedCost({
       index: (memory.costNotes() || []).filter((n) => n.theme === "index").map((n) => ({ id: n.id, label: n.label, tokens: Math.ceil((n.bytes || 0) / 4) })),
       files: measureFiles(config.alwaysLoaded || [], { cwd: config.cwd || process.cwd() }),
       days: counters.days(), now: Date.now(), sessionsPerDay: config.sessionsPerDay || 5, indexWarningTokens: config.indexWarningTokens || 2000,
     });
+    al.indexTrim = indexTrimPlanNow();
+    return al;
+  }
+  /**
+   * "Trim the index" plan summary (lib/index-trim.js), read only: how many index lines could be
+   * shortened right now, and the tokens that would save per session. Shown next to the "trim the
+   * index" tip in Memory cost; the actual proposal (diff, confirm, apply) is a separate call
+   * (assistant.proposeIndexTrim). Reads only the index note and the (few) notes its candidate
+   * lines name — never the whole memory. `null` when there is no index note, or it cannot be read.
+   */
+  function indexTrimPlanNow() {
+    const idx = (memory.costNotes() || []).find((n) => n.theme === "index");
+    if (!idx || !idx.rel) return null;
+    let indexText;
+    try { indexText = fs.readFileSync(path.join(config.memoryDir, idx.rel), "utf8"); } catch { return null; }
+    const archiveFolder = (config.archive && config.archive.folder) || "archive";
+    const notes = [];
+    for (const id of indexTrimLib.candidateTargets(indexText)) {
+      const r = memory.fileOf(id);
+      if (!r || r === idx.rel || r.startsWith(archiveFolder + "/")) continue;
+      let text;
+      try { text = fs.readFileSync(path.join(config.memoryDir, r), "utf8"); } catch { continue; }
+      notes.push({ id, rel: r, text });
+    }
+    const plan = indexTrimLib.planIndexTrim({ indexText, notes, maxChars: config.indexTrimMaxChars || indexTrimLib.DEFAULT_MAX_CHARS });
+    return { lines: plan.lines.length, tokensSaved: Math.max(0, plan.tokensBefore - plan.tokensAfter) };
   }
   /**
    * Per-client baseline tokens relayed by the MCP proxy (lib/proxy-levers.js createSavings,
@@ -604,6 +631,10 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
             }
             if (body.kind === "tidy") {
               r = assistant.proposeTidy({ ai: body.ai === true, provider: typeof body.provider === "string" ? body.provider.slice(0, 40) : "" });
+              break;
+            }
+            if (body.kind === "indexTrim") {
+              r = assistant.proposeIndexTrim({ maxChars: Number.isFinite(body.maxChars) ? body.maxChars : undefined });
               break;
             }
             r = assistant.propose(String(body.note || ""), { extra: typeof body.extra === "string" ? body.extra : "", provider: typeof body.provider === "string" ? body.provider.slice(0, 40) : "" }); break;

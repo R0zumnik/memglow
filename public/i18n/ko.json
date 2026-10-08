@@ -432,5 +432,8 @@
   "aiset.err.assistant-busy": "어시스턴트가 작업 중입니다: 끝난 뒤 다시 시도하세요",
   "aiset.err.other": "memglow가 이 값을 거부했습니다({field})",
   "settings.aiSettings": "AI 설정",
-  "ai.consent": "{dest}(으)로 보내는 것에 동의합니다."
+  "ai.consent": "{dest}(으)로 보내는 것에 동의합니다.",
+  "always.trimButton": "인덱스 줄이기 ({lines}줄, ≈{tokens} 토큰/세션)",
+  "ai.indexTrimTitle": "{label} 줄이기",
+  "ai.checkedIndexTrim": "memglow가 검증했습니다: 줄어든 인덱스 줄만 변경되었고, `description:` 줄은 노트에 description이 없을 때만 추가되었습니다 — 노트 본문의 다른 부분은 그대로이며, 생성되거나 삭제된 노트가 없고, 보호된 그룹을 준수합니다. 정확한 변경 내용:"
 }

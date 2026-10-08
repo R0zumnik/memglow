@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.4.4.2 — internal (not published)
+
+"Index trim." The memory index is loaded into **every** session, so each of its tokens is paid
+every time — and real indexes drift toward one long hook sentence per note. This micro-step adds
+a fully deterministic (no AI) way to shorten an over-length index line, with memglow's one
+non-negotiable rule still holding: nothing is ever just dropped. A line is only shortened when the
+text it loses is provably still reachable — already in the linked note's `description` or body,
+or, when the note has none, moved there as a new `description:` line in the very same proposal.
+
+### Added
+
+- **`lib/index-trim.js`** (pure, no fs): `planIndexTrim({ indexText, notes, maxChars, tokenize })`.
+  Candidate lines are exactly `- [[target]] <sep> hook` (one `[[link]]`, `<sep>` one of
+  `—`/`–`/`-`); a heading, prose, an unresolved link, or a hook that already names a second note
+  is left untouched. A hook over `maxChars` (default 90) is cut at the last clause boundary
+  (`" — "`, `": "`, `"; "`, `" ("`, `", "`) that keeps 20-`maxChars` characters, else the last word
+  boundary — no ellipsis, no paraphrase. Loss check (reusing `significantWords` from
+  `lib/learned-aliases.js`, ≥80% overlap): the dropped words already in the note's `description`
+  or body → kept as is; no `description` at all → the proposal ALSO writes one, the full ORIGINAL
+  hook, YAML-safe quoted, the rest of the frontmatter and the whole body byte-identical; a
+  *different*, insufficient `description` → the line is skipped, reported with why. Also exports
+  `candidateTargets()` (which notes a caller ever needs to read — never the whole memory),
+  `shortenHook`, `detailKept`, `setDescription`.
+- **Assistant kind `indexTrim`** (`lib/assistant/index.js` `proposeIndexTrim({ maxChars })`):
+  deterministic, no provider, finished in the same call (same template as `proposeTidy`'s/
+  `proposeArchive`'s no-AI path) — one job, the index note plus any note that also gets a
+  `description:` line, through the usual diff / confirm token / backup / atomic apply / Undo.
+  Protected groups and the archive folder are never touched.
+- **HTTP**: `POST /api/assistant/propose { kind: "indexTrim", maxChars? }`. `GET /api/cost`'s
+  `alwaysLoaded` gains an `indexTrim: { lines, tokensSaved }` plan summary next to the existing
+  index tip (read only — a separate call actually proposes it).
+- **UI** (`public/cost.js`, `public/assistant.js`): a **"Trim the index (N lines, ≈X
+  tokens/session)"** button next to the always-loaded figures (shown only with the assistant on
+  and something to trim); the assistant panel gets its own title/checked-message copy for the
+  `indexTrim` job kind. 8 languages.
+- **MCP server** (`mcp-server/memglow-mcp.js`): read-only tool `index_trim_plan` (`maxChars`) —
+  the same plan, writes nothing. Fixed the stale "Five read-only tools" header count (it was
+  already six before this change; now seven).
+- **Config**: `indexTrimMaxChars` (default 90, 30-1000), env `MEMGLOW_INDEX_TRIM_MAX_CHARS`.
+- `test/index-trim.test.js` (20 tests: clause cut, word cut, short/heading/prose/multi-link
+  lines untouched, unresolved link skipped, description/body already holds the detail → kept, no
+  description → moved with the frontmatter otherwise byte-identical, a different insufficient
+  description → skipped, French accented text, Windows (CRLF) line endings, idempotence, a custom
+  `tokenize`), `test/assistant-index-trim.test.js` (4 tests: propose → diff → confirm → apply →
+  index and note changed on disk, backup made, Undo restores bytes exactly; a hash change between
+  propose and apply is refused; nothing-to-trim is an honest "invalid"; the `/api/cost` summary),
+  and 2 more in `test/mcp-server.test.js` for `index_trim_plan`.
+
+### Measured (`demo/memory`'s index, `MEMORY.md`, 31 index lines)
+
+| `maxChars` | lines shortened | skipped | moved (new `description:`) | tokens before → after |
+|---|---|---|---|---|
+| 90 (default) | 0 | 0 | 0 | 801 → 801 (every hook is already ≤ 90 characters) |
+| 70 | 12 | 0 | 0 | 801 → 716 (**-85** tokens/session) |
+| 60 | 22 | 1 (`detail not in note`) | 0 | 801 → 666 (**-135** tokens/session) |
+
+The demo memory's hooks were written short to begin with (max 88 characters), so the default
+threshold finds nothing to do on it — an honest result, not a bug: `indexTrimMaxChars` exists
+precisely so an owner whose real index drifted longer (the motivating example: a ~150-character
+hook like `"memglow: open-source product from the Memory tab, github.com/R0zumnik/memglow —
+releases, publishing, diffusion, backlog"`, which this planner cuts to 88 characters at its own
+`" — "` clause boundary) can lower it. Every demo note already carries a `description:` matching
+its index hook, so every shortened line in this run is "kept as is" — none exercises the "moved"
+(new `description:`) path on this fixture; that path is covered in
+`test/index-trim.test.js`/`test/assistant-index-trim.test.js` with a note that has none. The
+owner's own real memory was never read for this measurement.
+
+### Full test suite
+
+`for f in test/*.test.js; do timeout 300 node --test --test-timeout=60000 "$f"; done` — 35 files,
+509 tests (baseline 483 + 26 new), 0 fail.
+
+package.json stays at 0.4.3 (this tag is a local, unpublished micro-step).
+
 ## 0.4.4.1 — internal (not published)
 
 "Duplicate-write hint." memglow's own product rule is that it never writes a note itself — every

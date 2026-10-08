@@ -17,7 +17,7 @@
  * not memglow's data folder. If present, the counters give real 7-day read counts; without them,
  * the tools say so plainly instead of guessing.
  *
- * Five read-only tools, no write tool:
+ * Seven read-only tools, no write tool:
  *   memory_health   folder-wide overview: notes too large, costliest to read, never read, index size,
  *                   hub-and-spoke drift (lib/hub-spoke.js: redundant index lines, sibling-listing
  *                   lines, missing uplinks/hub lines — counts only, never a note's text)
@@ -28,6 +28,8 @@
  *                   (lib/organise.js), with a ready-to-use regroup instruction
  *   archive_lookup  sections moved to the archive (lib/archive.js) whose topic matches a query,
  *                   from the archive summary note: references only, never the archived text
+ *   index_trim_plan which index lines (lib/index-trim.js) could be shortened deterministically and
+ *                   how many tokens that would save per session — the plan only, nothing written
  * No tool ever returns a full note body: only ids, titles, token estimates, frontmatter
  * descriptions and section headings — and even those go through lib/memory.js's `maskSecrets`
  * before being sent anywhere.
@@ -45,6 +47,7 @@ const hubSpoke = require("../lib/hub-spoke");
 const { readZones } = require("../lib/zones");
 const { measureFiles, alwaysLoadedCost } = require("../lib/always-loaded");
 const archive = require("../lib/archive");
+const indexTrim = require("../lib/index-trim");
 
 const SERVER_NAME = "memglow-mcp";
 let SERVER_VERSION = "0.0.0";
@@ -79,6 +82,7 @@ function safeConfig(env = process.env, cwd = process.cwd()) {
       alwaysLoaded: [],
       sessionsPerDay: 5,
       indexWarningTokens: 2000,
+      indexTrimMaxChars: indexTrim.DEFAULT_MAX_CHARS,
       archive: archive.settings({}, env),
     };
   }
@@ -375,6 +379,43 @@ function toolArchiveLookup(ctx, args) {
   return { summary, data: { available: true, summaryNote: s.id, summaryTokens: s.tokens, total: s.entries.length, query, matches } };
 }
 
+/** The notes an index_trim_plan call needs (lib/index-trim.js candidateTargets): never the whole
+ * memory, and never a note already in the archive folder (memglow's own, never a trim target). */
+function readIndexTrimNotes(ctx, indexText, indexRel) {
+  const folder = (ctx.config.archive || archive.settings({})).folder;
+  const notes = [];
+  for (const id of indexTrim.candidateTargets(indexText)) {
+    const rel = ctx.memory.fileOf(id);
+    if (!rel || rel === indexRel || rel.startsWith(folder + "/")) continue;
+    let text;
+    try { text = fs.readFileSync(path.join(ctx.config.memoryDir, rel), "utf8"); } catch { continue; }
+    notes.push({ id, rel, text });
+  }
+  return notes;
+}
+
+function toolIndexTrimPlan(ctx, args) {
+  if (emptyMemory(ctx)) return noNotesFound(ctx);
+  const notes = ctx.memory.costNotes();
+  const idx = notes.find((n) => n.theme === "index");
+  if (!idx) return { summary: "No index note found.", data: { available: false, lines: [], skipped: [] } };
+  let indexText;
+  try { indexText = fs.readFileSync(path.join(ctx.config.memoryDir, idx.rel), "utf8"); }
+  catch { return { summary: `The index note "${idx.label}" could not be read.`, data: { available: false, lines: [], skipped: [] } }; }
+  const maxChars = clampInt(args.maxChars, ctx.config.indexTrimMaxChars || indexTrim.DEFAULT_MAX_CHARS, 30, 1000);
+  const plan = indexTrim.planIndexTrim({ indexText, notes: readIndexTrimNotes(ctx, indexText, idx.rel), maxChars });
+  const lines = plan.lines.map((l) => ({ id: l.id, before: safeText(l.before), after: safeText(l.after), keptInNote: l.keptInNote, tokensSaved: l.tokensSaved }));
+  const data = {
+    available: true, index: { id: idx.id, label: idx.label }, maxChars,
+    tokensBefore: plan.tokensBefore, tokensAfter: plan.tokensAfter, tokensSaved: plan.tokensBefore - plan.tokensAfter,
+    movedDescriptions: plan.movedDescriptions.length, lines, skipped: plan.skipped,
+  };
+  const summary = lines.length
+    ? `${lines.length} index line(s) could be shortened, ≈${data.tokensSaved} token(s) saved per session (loaded at every session)${plan.movedDescriptions.length ? `; ${plan.movedDescriptions.length} note(s) would also get a \`description:\` line` : ""}.`
+    : `Nothing to trim right now: every index line is already ≤${maxChars} characters, or its dropped detail is not yet in the linked note.`;
+  return { summary, data };
+}
+
 // ---- tool registry (name, LLM-facing description, strict input schema) ----
 
 const TOOLS = [
@@ -442,7 +483,17 @@ TOOLS.push({
   },
 });
 
-const HANDLERS = { memory_health: toolMemoryHealth, split_plan: toolSplitPlan, related_notes: toolRelatedNotes, note_cost: toolNoteCost, organisation_suggestions: toolOrganisation, archive_lookup: toolArchiveLookup };
+TOOLS.push({
+  name: "index_trim_plan",
+  description: "Which lines of the memory index (loaded at every session) could be shortened deterministically — no AI, no rewriting — and how many tokens that would save per session. A line qualifies only when its dropped detail is already in the linked note's description or body, or can be moved there (a new `description:` line); everything else is listed in \"skipped\" with why. Read-only: returns the plan, writes nothing. The assistant's own \"Trim the index\" proposal (not available through this tool) is what actually applies it, after the usual diff and confirmation.",
+  inputSchema: {
+    type: "object",
+    properties: { maxChars: { type: "integer", minimum: 30, maximum: 1000, description: "A hook longer than this many characters is a candidate (default the server's indexTrimMaxChars setting, usually 90)." } },
+    additionalProperties: false,
+  },
+});
+
+const HANDLERS = { memory_health: toolMemoryHealth, split_plan: toolSplitPlan, related_notes: toolRelatedNotes, note_cost: toolNoteCost, organisation_suggestions: toolOrganisation, archive_lookup: toolArchiveLookup, index_trim_plan: toolIndexTrimPlan };
 
 // ---- a tiny, hand-written JSON Schema validator (just what the schemas above need) ----
 

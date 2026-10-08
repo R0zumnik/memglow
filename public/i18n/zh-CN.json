@@ -432,5 +432,8 @@
   "aiset.err.assistant-busy": "助手正在工作:完成后再试",
   "aiset.err.other": "memglow 拒绝了这些值({field})",
   "settings.aiSettings": "AI 设置",
-  "ai.consent": "我同意将其发送到 {dest}。"
+  "ai.consent": "我同意将其发送到 {dest}。",
+  "always.trimButton": "精简索引({lines} 行，≈{tokens} token/会话)",
+  "ai.indexTrimTitle": "精简「{label}」",
+  "ai.checkedIndexTrim": "memglow 已完成校验：只改动了缩短后的索引行，并且只有在笔记原本没有 description 时才会新增一行 `description:` — 笔记正文的其他内容不变，没有创建或删除任何笔记，遵守受保护的分组。具体改动如下："
 }

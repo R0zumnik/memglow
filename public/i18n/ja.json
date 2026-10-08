@@ -432,5 +432,8 @@
   "aiset.err.assistant-busy": "アシスタントが作業中です: 終わってから再試行してください",
   "aiset.err.other": "memglow はこれらの値を拒否しました({field})",
   "settings.aiSettings": "AI 設定",
-  "ai.consent": "{dest} に送信することに同意します。"
+  "ai.consent": "{dest} に送信することに同意します。",
+  "always.trimButton": "インデックスを短縮 ({lines} 行, ≈{tokens} トークン/セッション)",
+  "ai.indexTrimTitle": "{label} を短縮",
+  "ai.checkedIndexTrim": "memglow が検証しました: 短縮されたインデックス行だけが変更され、`description:` 行はノートに description がない場合のみ追加されました — ノート本文の他の部分は変わらず、ノートの作成や削除もなく、保護されたグループを遵守。正確な変更内容:"
 }

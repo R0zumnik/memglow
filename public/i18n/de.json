@@ -432,5 +432,8 @@
   "aiset.err.assistant-busy": "der Assistent arbeitet gerade: Versuchen Sie es erneut, wenn er fertig ist",
   "aiset.err.other": "memglow hat diese Werte abgelehnt ({field})",
   "settings.aiSettings": "KI-Einstellungen",
-  "ai.consent": "Ich bin einverstanden, dies an {dest} zu senden."
+  "ai.consent": "Ich bin einverstanden, dies an {dest} zu senden.",
+  "always.trimButton": "Index kürzen ({lines} Zeile(n), ≈{tokens} Tokens/Sitzung)",
+  "ai.indexTrimTitle": "{label} kürzen",
+  "ai.checkedIndexTrim": "memglow hat es geprüft: Nur die gekürzten Indexzeilen wurden geändert, und eine `description:`-Zeile wurde nur dann zu einer Notiz hinzugefügt, wenn sie noch keine hatte — sonst nichts im Text einer Notiz, keine Notiz erstellt oder gelöscht, geschützte Gruppen eingehalten. Genaue Änderungen:"
 }

@@ -54,6 +54,8 @@ var EN_AI = {
   "ai.checkedRegroup": "memglow checked it: same group, note texts unchanged (only the sub-theme line), no note replaced or deleted, protected groups respected. Exact changes:",
   "ai.checkedArchive": "memglow checked it: every moved section is in its archive note word for word, the original notes can be rebuilt exactly, each archive note is in the same theme, nothing is overwritten or deleted, every link points to an existing note, protected groups respected. Exact changes:",
   "ai.checkedTidy": "memglow checked it: only the targeted lines changed, nothing else in a note's body, no note created or deleted, protected groups respected. Exact changes:",
+  "ai.indexTrimTitle": "Trim {label}",
+  "ai.checkedIndexTrim": "memglow checked it: only the shortened index lines changed, and a `description:` line was added to a note only when it had none — nothing else in a note's body, no note created or deleted, protected groups respected. Exact changes:",
   "ai.apply": "Apply this plan",
   "ai.applyHint": "Apply backs up the notes first (git snapshot if your memory is a git repository, otherwise a copy in memglow's data folder); if the backup fails, nothing is written.",
   "ai.applying": "Backing up and writing…",
@@ -199,7 +201,8 @@ function aiRenderJob(j, providerLabel, T) {
   var regroup = j.kind === "regroup";
   var arch = j.kind === "archive";
   var tidy = j.kind === "tidy";
-  var titleParts = aiSplitAround(T, arch ? "ai.archiveTitle" : regroup ? "ai.regroupTitle" : tidy ? "ai.tidyTitle" : "ai.splitTitle", "label");
+  var itrim = j.kind === "indexTrim";
+  var titleParts = aiSplitAround(T, arch ? "ai.archiveTitle" : regroup ? "ai.regroupTitle" : tidy ? "ai.tidyTitle" : itrim ? "ai.indexTrimTitle" : "ai.splitTitle", "label");
   var title = '<p class="mg-ai__title">' + aiEsc(titleParts[0]) + '<strong>' + aiEsc(j.note && j.note.label) + '</strong>' + aiEsc(titleParts[1]) + '</p>';
   if (j.state === "running") {
     return title + '<p class="mg-ai__msg">' + T(arch ? "ai.askingArchive" : "ai.asking", { who: who, chars: '<span class="mg-ai__chars" id="mg-ai-chars">' + aiNum(j.chars) + '</span>' }) + '</p>' +
@@ -214,9 +217,9 @@ function aiRenderJob(j, providerLabel, T) {
       '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="retry">' + aiEsc(T("ai.retry")) + '</button><button type="button" class="bn-btn" data-ai="cancel">' + aiEsc(T("ai.discard")) + '</button></div>';
   }
   if (j.state === "proposed") {
-    return title + (j.notes ? '<p class="mg-ai__notes">' + T("ai.aiNotes", { who: who, notes: aiEsc(j.notes) }) + '</p>' : '') + (arch ? aiArchiveGain(j.archive, T) + aiKeep(j.keep, T) : aiGain(j.gain, T)) +
+    return title + (j.notes ? '<p class="mg-ai__notes">' + T("ai.aiNotes", { who: who, notes: aiEsc(j.notes) }) + '</p>' : '') + (arch ? aiArchiveGain(j.archive, T) + aiKeep(j.keep, T) : itrim ? "" : aiGain(j.gain, T)) +
       aiList(j.warnings, "mg-ai__warnings") +
-      '<p class="mg-ai__msg">' + aiEsc(T(arch ? "ai.checkedArchive" : regroup ? "ai.checkedRegroup" : tidy ? "ai.checkedTidy" : "ai.checked")) + '</p>' +
+      '<p class="mg-ai__msg">' + aiEsc(T(arch ? "ai.checkedArchive" : regroup ? "ai.checkedRegroup" : tidy ? "ai.checkedTidy" : itrim ? "ai.checkedIndexTrim" : "ai.checked")) + '</p>' +
       (j.files || []).map(function (f) { return aiDiff(f, T); }).join("") +
       '<div class="mg-ai__btns"><button type="button" class="bn-btn mg-ai__apply" data-ai="apply">' + aiEsc(T("ai.apply")) + '</button><button type="button" class="bn-btn" data-ai="cancel">' + aiEsc(T("ai.discard")) + '</button></div>' +
       '<p class="mg-ai__hint">' + aiEsc(T("ai.applyHint")) + '</p>';
@@ -225,7 +228,7 @@ function aiRenderJob(j, providerLabel, T) {
   if (j.state === "applied") {
     var backup = j.backup ? (j.backup.kind === "git" ? T("ai.backupGit", { ref: j.backup.ref }) : T("ai.backupCopy", { dir: j.backup.dir })) : "—";
     var filesWord = T("ai.fileCount", { n: (j.files || []).length });
-    return title + '<p class="mg-ai__msg mg-ai__msg--ok">' + aiEsc(T("ai.applied", { files: filesWord, backup: backup })) + '</p>' + (arch ? aiArchiveGain(j.archive, T) : aiGain(j.gain, T)) +
+    return title + '<p class="mg-ai__msg mg-ai__msg--ok">' + aiEsc(T("ai.applied", { files: filesWord, backup: backup })) + '</p>' + (arch ? aiArchiveGain(j.archive, T) : itrim ? "" : aiGain(j.gain, T)) +
       '<div class="mg-ai__btns"><button type="button" class="bn-btn" data-ai="undo">' + aiEsc(T("ai.undo")) + '</button></div>';
   }
   if (j.state === "undone") {
@@ -434,6 +437,15 @@ if (typeof module !== "undefined" && module.exports) {
     tidy({ ai: (e.detail || {}).ai === true });
   });
 
+  // Trim the index (Memory cost -> Always loaded block, lib/index-trim.js): fully deterministic,
+  // no AI, no provider — same one-call propose/finish as `tidy` without AI.
+  function indexTrim() {
+    asking = null;
+    if (root.scrollIntoView) root.scrollIntoView({ behavior: "smooth", block: "start" });
+    return post("propose", { kind: "indexTrim" }).then(function (o) { if (st) { st.job = o.job; render(); } else load(); }).catch(fail);
+  }
+  document.addEventListener("memglow:indexTrim", function () { indexTrim(); });
+
   document.addEventListener("memglow:assistant", function (e) {
     var d = e.detail;
     // A note to split (its id), or { kind: "regroup", id, label } for an organisation suggestion.
@@ -455,6 +467,7 @@ if (typeof module !== "undefined" && module.exports) {
       if (lastArchive) archive(lastArchive); else load();
       return;
     }
+    if (what === "retry" && st && st.job && st.job.kind === "indexTrim") { indexTrim(); return; }
     if (what === "propose" || what === "retry") {
       var note = what === "propose" ? b.getAttribute("data-note") : (st && st.job && st.job.target) || (st && st.job && st.job.note && st.job.note.id) || lastNote;
       var kind = what === "propose" ? (b.getAttribute("data-kind") || "split") : (st && st.job && st.job.kind) || lastKind;

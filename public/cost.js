@@ -85,6 +85,7 @@ var EN_COST = {
   "always.tipIndex": "Trim the index: ≈ {tokens} tokens are loaded at every session (tip threshold {threshold}). Keep one short line per note and move details into the notes.",
   "always.tipFile": "Trim {name}: ≈ {tokens} tokens at every session. Move rarely needed instructions into notes the assistant reads on demand.",
   "always.small": "Small enough: nothing to trim.",
+  "always.trimButton": "Trim the index ({lines} line(s), ≈{tokens} tokens/session)",
   "arch.notEnough": "Not enough data yet{since} — a section is suggested only after {days} days of counted activity{from}.",
   "arch.since": " since {date}", "arch.from": " (from {date})",
   "arch.none": "No dormant section: every note was read, found or edited in the last {days} days.",
@@ -396,6 +397,10 @@ function costAlwaysLoaded(a, T) {
   if (!(a.files || []).length) html += '<p class="mg-cost__empty">' + costFill(T, "always.addFiles", { setting: '<code>alwaysLoaded</code>' }) + '</p>';
   if (a.tips && a.tips.length) html += '<ul class="mg-cost__tips">' + a.tips.map(function (t) { return '<li>' + costEsc(costTip(t, T)) + '</li>'; }).join("") + '</ul>';
   else html += '<p class="mg-cost__empty">' + costEsc(T("always.small")) + '</p>';
+  if (costAssistant && a.indexTrim && a.indexTrim.lines > 0) {
+    html += '<div class="mg-arch__btns"><button type="button" class="bn-btn mg-cost__copy" data-index-trim="1">'
+      + costEsc(T("always.trimButton", { lines: costNumber(a.indexTrim.lines), tokens: costNumber(a.indexTrim.tokensSaved) })) + '</button></div>';
+  }
   return html;
 }
 
@@ -857,6 +862,11 @@ if (typeof module !== "undefined" && module.exports) {
     var tidy = t.closest && t.closest("[data-tidy],[data-tidy-ai]");
     if (tidy) {
       try { document.dispatchEvent(new CustomEvent("memglow:tidy", { detail: { ai: tidy.hasAttribute("data-tidy-ai") } })); } catch (e4) { /* old browser */ }
+      return;
+    }
+    var itrim = t.closest && t.closest("[data-index-trim]");
+    if (itrim) {
+      try { document.dispatchEvent(new CustomEvent("memglow:indexTrim")); } catch (e6) { /* old browser */ }
       return;
     }
     var btn = t.closest && t.closest("[data-copy]");

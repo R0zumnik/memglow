@@ -432,5 +432,8 @@
   "aiset.err.assistant-busy": "l’assistant est en train de travailler : réessayez quand il aura fini",
   "aiset.err.other": "memglow a refusé ces valeurs ({field})",
   "settings.aiSettings": "Réglages de l’IA",
-  "ai.consent": "J’accepte d’envoyer ceci à {dest}."
+  "ai.consent": "J’accepte d’envoyer ceci à {dest}.",
+  "always.trimButton": "Alléger l’index ({lines} ligne(s), ≈{tokens} tokens/session)",
+  "ai.indexTrimTitle": "Alléger {label}",
+  "ai.checkedIndexTrim": "memglow l’a vérifié : seules les lignes raccourcies de l’index ont changé, et une ligne `description:` n’a été ajoutée à une note que si elle n’en avait aucune — rien d’autre dans le corps d’une note, aucune note créée ni supprimée, groupes protégés respectés. Changements exacts :"
 }

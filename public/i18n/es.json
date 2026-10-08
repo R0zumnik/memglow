@@ -432,5 +432,8 @@
   "aiset.err.assistant-busy": "el asistente está trabajando: inténtelo de nuevo cuando termine",
   "aiset.err.other": "memglow rechazó estos valores ({field})",
   "settings.aiSettings": "Ajustes de IA",
-  "ai.consent": "Acepto enviar esto a {dest}."
+  "ai.consent": "Acepto enviar esto a {dest}.",
+  "always.trimButton": "Reducir el índice ({lines} línea(s), ≈{tokens} tokens/sesión)",
+  "ai.indexTrimTitle": "Reducir {label}",
+  "ai.checkedIndexTrim": "memglow lo comprobó: solo cambiaron las líneas acortadas del índice, y se añadió una línea `description:` a una nota solo si no tenía ninguna — nada más en el cuerpo de una nota, ninguna nota creada ni eliminada, grupos protegidos respetados. Cambios exactos:"
 }

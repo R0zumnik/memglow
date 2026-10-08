@@ -72,8 +72,8 @@ test("inputSchema validator: object/string/integer, required, additionalProperti
   assert.match(validate(schema, "nope"), /expected an object/);
 });
 
-test("tool registry: six read-only tools, strict schemas, no write tool", () => {
-  assert.deepStrictEqual(TOOLS.map((t) => t.name).sort(), ["archive_lookup", "memory_health", "note_cost", "organisation_suggestions", "related_notes", "split_plan"]);
+test("tool registry: seven read-only tools, strict schemas, no write tool", () => {
+  assert.deepStrictEqual(TOOLS.map((t) => t.name).sort(), ["archive_lookup", "index_trim_plan", "memory_health", "note_cost", "organisation_suggestions", "related_notes", "split_plan"]);
   for (const t of TOOLS) {
     assert.strictEqual(t.inputSchema.type, "object");
     assert.strictEqual(t.inputSchema.additionalProperties, false, t.name);
@@ -131,7 +131,7 @@ test("tools/call: unknown tool and invalid arguments are tool errors (isError), 
 test("empty / missing notes folder: every tool answers cleanly, none crash", () => {
   const empty = tmpDir("memglow-mcp-empty-");
   const h = harness(empty);
-  for (const [name, args] of [["memory_health", {}], ["split_plan", { note: "x" }], ["related_notes", { topic: "x" }], ["note_cost", { note: "x" }]]) {
+  for (const [name, args] of [["memory_health", {}], ["split_plan", { note: "x" }], ["related_notes", { topic: "x" }], ["note_cost", { note: "x" }], ["index_trim_plan", {}]]) {
     const r = call(h, 1, name, args);
     assert.strictEqual(r.result.isError, false, name);
     assert.match(r.result.content[0].text, /No notes found/, name);
@@ -280,11 +280,47 @@ test("never writes to the notes folder", () => {
   call(h, 2, "split_plan", { note: "big" });
   call(h, 3, "related_notes", { note: "alpha" });
   call(h, 4, "note_cost", { note: "alpha" });
+  call(h, 5, "index_trim_plan", {});
   const after = fs.readdirSync(dir).sort().map((f) => {
     const full = path.join(dir, f);
     return [f, fs.statSync(full).mtimeMs, fs.readFileSync(full, "utf8")];
   });
   assert.deepStrictEqual(after, before);
+});
+
+test("index_trim_plan: shortens an over-length hook, flags a note with no description, writes nothing", () => {
+  const dir = tmpDir("memglow-mcp-idx-");
+  fs.writeFileSync(path.join(dir, "index.md"), [
+    "# Memory index",
+    "- [[project-long]] — Project long: build the pipeline, ship the dashboard, and write the docs",
+    "- [[project-nodesc]] — Needs a home lab server with backups and a media center setup done right",
+  ].join("\n") + "\n");
+  note(dir, "project-long", { title: "project-long", description: "Project long: build the pipeline, ship the dashboard, and write the docs" }, "Nothing more to add here.");
+  note(dir, "project-nodesc", { title: "project-nodesc" }, "Just a stub note, nothing else written here yet.");
+  const before = fs.readFileSync(path.join(dir, "index.md"), "utf8");
+  const h = harness(dir);
+  const r = call(h, 1, "index_trim_plan", { maxChars: 40 });
+  assert.strictEqual(r.result.isError, false, r.result.content[0].text);
+  const d = JSON.parse(r.result.content[0].text.match(/```json\n([\s\S]*)\n```/)[1]);
+  assert.strictEqual(d.available, true);
+  assert.strictEqual(d.maxChars, 40);
+  assert.strictEqual(d.lines.length, 2);
+  assert.deepStrictEqual(d.skipped, []);
+  assert.strictEqual(d.movedDescriptions, 1, "only project-nodesc has no description to keep the detail in");
+  assert.ok(d.tokensSaved > 0);
+  for (const l of d.lines) assert.ok(l.after.length < l.before.length, l.id);
+  // Read-only: the index note itself is untouched (the actual proposal/apply is a separate, non-MCP call).
+  assert.strictEqual(fs.readFileSync(path.join(dir, "index.md"), "utf8"), before);
+});
+
+test("index_trim_plan: no index note → an honest answer, not an error", () => {
+  const dir = tmpDir("memglow-mcp-noidx-");
+  note(dir, "alpha", { title: "Alpha" }, "Just a note.");
+  const h = harness(dir);
+  const r = call(h, 1, "index_trim_plan", {});
+  assert.strictEqual(r.result.isError, false);
+  const d = JSON.parse(r.result.content[0].text.match(/```json\n([\s\S]*)\n```/)[1]);
+  assert.strictEqual(d.available, false);
 });
 
 // ---- real process, real stdio: initialize, tools/list, tools/call on the shipped demo memory ----
@@ -318,7 +354,7 @@ test("real process: initialize + tools/list + tools/call over actual stdio, demo
     child.stdin.write(wire);
     const [initRes, listRes, healthRes, splitRes] = await readLines(child, 4);
     assert.strictEqual(initRes.result.serverInfo.name, "memglow-mcp");
-    assert.strictEqual(listRes.result.tools.length, 6);
+    assert.strictEqual(listRes.result.tools.length, 7);
     assert.match(healthRes.result.content[0].text, /Incident log/);
     const splitData = JSON.parse(splitRes.result.content[0].text.match(/```json\n([\s\S]*)\n```/)[1]);
     assert.strictEqual(splitData.split.length, 4, "the demo's Incident log splits into 4 parts");
@@ -336,6 +372,6 @@ test("real process: starts on its own with an empty / absent notes folder (no cr
     child.stdin.write(wire);
     const [initRes, listRes] = await readLines(child, 2);
     assert.ok(initRes.result.protocolVersion);
-    assert.strictEqual(listRes.result.tools.length, 6);
+    assert.strictEqual(listRes.result.tools.length, 7);
   } finally { child.kill(); }
 });
