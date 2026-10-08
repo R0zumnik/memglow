@@ -38,7 +38,7 @@ const TOOLS = [
     {}, null, RO("Memory Server Diagnostics"), null),
 
   tool("delete_note", "Delete Note",
-    "Delete a note (or a whole directory). Not available yet: the memglow memory server is read-only in this preview.",
+    "Delete a note by title, permalink or memory:// URL (or every note of a directory with is_directory=true). Nothing is destroyed: files move to the project's .trash/<timestamp>/ folder, which is never indexed. Answers true / false for one note. Write tools answer an error when the server runs read-only.",
     {
       identifier: { type: "string", description: "Title or permalink of the note to delete, or a directory path when is_directory is true." },
       is_directory: { type: "boolean", default: false, description: "Delete a whole directory instead of one note." },
@@ -119,7 +119,7 @@ const TOOLS = [
     }, ["identifier"], RO("View Note"), wrapSchema([{ type: "string" }])),
 
   tool("write_note", "Write Note",
-    "Create or replace a note. Not available yet: the memglow memory server is read-only in this preview.",
+    "Create a Markdown note: file <directory>/<title>.md, frontmatter title / type (note_type) / permalink, then the metadata keys and tags. The content may hold observations (`- [category] text #tag`) and relations (`- relation_type [[Other Note]]`). An existing note is not replaced unless overwrite=true (then its body is replaced and its other frontmatter keys and permalink are kept). For incremental changes use edit_note.",
     {
       title: { type: "string", description: "Note title." },
       content: { type: "string", description: "Markdown body (observations and relations allowed)." },
@@ -148,7 +148,7 @@ const TOOLS = [
     }, null, RO("List Directory")),
 
   tool("edit_note", "Edit Note",
-    "Edit an existing note (append, prepend, find/replace, section operations). Not available yet: the memglow memory server is read-only in this preview.",
+    "Edit a note: append, prepend (after the frontmatter), find_replace (exactly expected_replacements occurrences, default 1), replace_section (by heading; replace_subsections=false keeps its sub-headings), insert_before_section / insert_after_section. append/prepend create the note when it does not exist. metadata merges frontmatter keys (title, type, permalink excepted) with any operation; the rest of the file is kept byte-for-byte.",
     {
       identifier: { type: "string", description: "Exact title, permalink or memory:// URL of the note." },
       operation: { type: "string", enum: ["append", "prepend", "find_replace", "replace_section", "insert_before_section", "insert_after_section"], description: "The edit to make." },
@@ -165,7 +165,7 @@ const TOOLS = [
     }, ["identifier", "operation", "content"], RW("Edit Note", true)),
 
   tool("move_note", "Move Note",
-    "Move or rename a note (or a directory). Not available yet: the memglow memory server is read-only in this preview.",
+    "Move or rename a note (destination_path with its .md, or destination_folder to keep the file name), or a whole directory (is_directory=true). Never replaces an existing file; the note keeps its permalink.",
     {
       identifier: { type: "string", description: "Exact title, permalink or memory:// URL (or a directory path)." },
       destination_path: { type: "string", default: "", description: "New path relative to the project root." },

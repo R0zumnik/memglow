@@ -5,7 +5,8 @@
  * result blocks with `- permalink:` lines, `# Context:` blocks, `## Recent Activity:` …), written
  * from scratch for memglow; JSON outputs keep the same field names.
  *
- * Phase A (stage 0.4.5.1): every write tool answers a clear read-only error.
+ * Write tools (phase B, stage 0.4.5.2) live in write-tools.js; with `readOnly` (the default) they
+ * answer the read-only error. Read tools are synchronous; a write tool call returns a Promise.
  */
 const fs = require("fs");
 const path = require("path");
@@ -14,11 +15,14 @@ const { createSearch } = require("../lib/store/search");
 const { parseTimeframe } = require("../lib/store/timeframe");
 const { stableId, stableInt, globToRegExp, slugify, words } = require("../lib/store/text");
 const { TOOLS, WRITE_TOOLS, UNSUPPORTED_TOOLS } = require("./schemas");
+const { createWriteTools, ArgError } = require("./write-tools");
+const { WriteError } = require("./writer");
 
-const SERVER_VERSION = "0.4.5.1";
+const SERVER_VERSION = "0.4.5.2";
 const MAX_QUERY_CHARS = 2000;
 const MAX_QUERY_TERMS = 64;
 const READ_ONLY_MESSAGE = "memglow memory server: read-only (phase A / shadow mode)";
+const WRITES_UNAVAILABLE = "memglow memory server: writes are not configured on this instance";
 const UNSUPPORTED_MESSAGE = "not supported by memglow memory server";
 
 // ---- result helpers (FastMCP-compatible shapes: the text, plus structuredContent {result}) ----
@@ -50,8 +54,9 @@ const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
 const trimBody = (n) => n.body.trim();
 const dirOf = (rel) => { const d = path.posix.dirname(rel); return d === "." ? "" : d; };
 
-function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now() }) {
+function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {} }) {
   const engine = createSearch(store);
+  const writes = !readOnly && writer ? createWriteTools({ store, writer, project, ...writeOptions }) : null;
   const projectId = stableId("memglow-project:" + project);
 
   // ---- search_notes ----
@@ -529,8 +534,9 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     const s = store.stats();
     const lines = [
       "# memglow memory server — diagnostics", "",
-      `- version: ${SERVER_VERSION} (phase A preview)`,
+      `- version: ${SERVER_VERSION} (preview)`,
       `- mode: ${readOnly ? "read-only (phase A / shadow mode)" : "read-write"}`,
+      ...(writer && !readOnly ? (() => { const w = writer.stats(); return [`- writes: ${w.writes} since start (${w.failed} failed, ${w.queued} queued)${w.lastWriteAt ? `, last at ${new Date(w.lastWriteAt).toISOString()}` : ""}; deleted notes go to .trash/; on-write hook: ${w.onWrite ? "on" : "off"}`]; })() : []),
       `- project: ${project}`,
       `- root: ${store.root}`,
       `- notes indexed: ${s.notes}`,
@@ -565,7 +571,12 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     const a = args && typeof args === "object" && !Array.isArray(args) ? args : {};
     if (WRITE_TOOLS.has(name)) {
       if (readOnly) return errorResult(READ_ONLY_MESSAGE);
-      return errorResult("memglow memory server: writes are not implemented yet (phase B)");
+      if (!writes) return errorResult(WRITES_UNAVAILABLE);
+      const fail = (e) => {
+        if (e instanceof ArgError || e instanceof ToolError || e instanceof WriteError) return errorResult(`Error calling tool '${name}': ${e.message}`);
+        return errorResult(`Error calling tool '${name}': internal error (${e && e.message})`);
+      };
+      try { return writes[name](a).catch(fail); } catch (e) { return Promise.resolve(fail(e)); }
     }
     if (UNSUPPORTED_TOOLS.has(name)) return errorResult(`${name}: ${UNSUPPORTED_MESSAGE}`);
     const h = typeof name === "string" ? HANDLERS.get(name) : undefined;
@@ -580,4 +591,4 @@ function createTools({ store, project = store.project, readOnly = true, startedA
   return { call, tools: TOOLS, engine, warm: () => engine.warm() };
 }
 
-module.exports = { createTools, SERVER_VERSION, READ_ONLY_MESSAGE, UNSUPPORTED_MESSAGE, MAX_QUERY_CHARS, MAX_QUERY_TERMS };
+module.exports = { createTools, SERVER_VERSION, READ_ONLY_MESSAGE, WRITES_UNAVAILABLE, UNSUPPORTED_MESSAGE, MAX_QUERY_CHARS, MAX_QUERY_TERMS };

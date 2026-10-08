@@ -6,7 +6,7 @@
  *   memglow                       start the viewer (same as `memglow serve`)
  *   memglow init [options]        set memglow up for your notes and your AI tools
  *   memglow uninstall [options]   remove what `init` added
- *   memglow memory-server [opts]  the memglow memory server (preview, read-only) — see
+ *   memglow memory-server [opts]  the memglow memory server (preview; writes with --read-write) — see
  *                                 memory-server/memglow-memory-server.js
  *
  * Works straight from GitHub while the npm package is not published:
@@ -22,7 +22,7 @@ usage:
   memglow [serve]                start the viewer (http://127.0.0.1:4747 by default)
   memglow init [options]         configure memglow and the hooks of your AI tools
   memglow uninstall [options]    remove the hooks and MCP wrappings added by init
-  memglow memory-server [opts]   MCP memory server over your notes (preview, read-only):
+  memglow memory-server [opts]   MCP memory server over your notes (preview; read-only unless --read-write):
                                  --root DIR --listen HOST:PORT | --stdio  (see --help)
 
 init options:

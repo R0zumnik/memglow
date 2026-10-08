@@ -11,8 +11,8 @@
  *    `event: message`. Notifications (and client responses) → 202. Batches are answered as arrays.
  *  - GET /mcp → 405 (no server-initiated stream), DELETE /mcp → ends a session, GET /healthz → a
  *    small JSON status.
- *  - Every request is handled on its own: the tools are synchronous and fast, nothing queues
- *    behind a slow operation. A request that cannot be parsed (bad request-target, bad JSON, too
+ *  - Every request is handled on its own: read tools are synchronous and fast; a write tool's
+ *    answer is awaited (writes queue among themselves, never in front of reads). A request that cannot be parsed (bad request-target, bad JSON, too
  *    large, unsupported MCP-Protocol-Version) gets a 4xx; nothing a client sends can throw out of
  *    the handler.
  *  - Security (MCP spec, DNS rebinding): a request carrying an `Origin` header is refused (403)
@@ -169,9 +169,18 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
       let out;
       try { out = rpc.handleAny(payload, ctx); }
       catch (e) { out = { jsonrpc: "2.0", id: null, error: { code: -32603, message: "Internal error: " + (e && e.message) } }; }
-      const headers = newSession ? { "mcp-session-id": newSession } : {};
-      if (out == null || (Array.isArray(out) && !out.length)) return send(res, 202, null, headers);
-      return send(res, 200, out, headers, sse);
+      const finish = (o) => {
+        const headers = newSession ? { "mcp-session-id": newSession } : {};
+        if (res.writableEnded || res.destroyed) return;
+        if (o == null || (Array.isArray(o) && !o.length)) return send(res, 202, null, headers);
+        return send(res, 200, o, headers, sse);
+      };
+      if (out && typeof out.then === "function") {
+        out.then(finish, (e) => finish({ jsonrpc: "2.0", id: null, error: { code: -32603, message: "Internal error: " + (e && e.message) } }))
+          .catch((e) => log("memglow memory server: request failed: " + (e && e.message)));
+        return;
+      }
+      return finish(out);
     }
   }
   server.keepAliveTimeout = 65000;

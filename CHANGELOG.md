@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.4.5.2 — internal (not published)
+
+"The memory server, write side." Phase B of replacing basic-memory: the four write tools, with
+basic-memory's arguments, defaults and answer shapes, and the file layout its notes already have.
+Writes are OFF unless `--read-write` is given (a shadow deployment stays read-only). package.json
+stays 0.4.3.
+
+### Added
+
+- **`write_note`**: `<directory>/<title>.md` (title → file name and path → permalink by
+  basic-memory's rules: accents transliterated, camelCase split, apostrophes dropped, CJK kept);
+  frontmatter `title`, `type`, `permalink`, metadata keys, `tags` written by a YAML writer that
+  reproduces basic-memory's layout (checked byte-for-byte against 222 real notes: quoting, folding
+  after column 80, unindented block lists); content frontmatter merged (its `type`/`permalink`
+  honoured, a plain date kept unquoted); an existing note is refused unless `overwrite=true`
+  (`--overwrite-default`); a permalink already declared elsewhere gets `-1`, `-2`…; aliases
+  `folder`/`dir`/`path`; text and JSON answers.
+- **`edit_note`**: append, prepend (after the frontmatter), find_replace (exact count, the
+  frontmatter must stay readable), replace_section (with or without sub-sections),
+  insert_before_section, insert_after_section (headings matched exactly, code blocks ignored;
+  missing or duplicated heading → error); `metadata` merges keys (title/type/permalink ignored,
+  null refused) rewriting only the keys whose value changes; append/prepend on a missing note
+  create it; CRLF and BOM kept; argument aliases (`new_content`, `find`, `heading`…).
+- **`move_note`**: note (path or folder) or directory; never over an existing file; permalink kept
+  (`--update-permalinks-on-move` to follow the path).
+- **`delete_note`**: moves to `.trash/<timestamp>/…` (never indexed, never served); one note
+  answers `true`/`false`; directories too.
+- **Writer** (`memory-server/writer.js`): one write queue, confinement to the root's real path,
+  atomic writes (temp dot-file, fsync, rename, folder fsync; `--no-fsync`), retry when the file
+  changed on disk mid-edit, no-clobber creation, mode kept or `--file-mode`, owner taken from
+  the parent folder when running as root, size limit, `--on-write CMD` snapshot hook (debounced
+  ≥ 10 s, `MEMGLOW_CHANGED_FILES`), the store updated in place after each write.
+- Transports: write answers are awaited (HTTP, batches, stdio — which now exits only after
+  pending writes are answered); SIGINT/SIGTERM wait for queued writes (10 s at most).
+- Tests: `memory-server-write.test.js`, `memory-server-write-safety.test.js` (50 parallel
+  edits, crash mid-write, on-disk change mid-edit, symlink escape, modes, hook, transports),
+  `memory-server-write-golden.test.js` (11 synthetic note shapes vs basic-memory's layout),
+  `memory-server-write-proxy.test.js` (proxy levers in front: duplicateHint, sizeWarning,
+  alreadyLoaded after a write).
+
+### Differences from basic-memory (deliberate)
+
+- `replace_section` on a heading that does not exist is an error (no section is appended).
+- A file name that would start with "." (e.g. a title "../x") is refused instead of creating a
+  hidden file; transliteration covers Latin, Greek, Cyrillic and common symbols only.
+- `checksum:` in edit answers is the real one (basic-memory sometimes prints `unknown`).
+- Frontmatter keys a write does not change are kept as they are (basic-memory re-dumps the whole
+  block on some edits).
+
 ## 0.4.5.1b — internal (not published)
 
 "Review fixes." A cold review of 0.4.5.1 reproduced fourteen problems; each is fixed with its own

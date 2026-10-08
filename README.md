@@ -807,9 +807,9 @@ frontmatter descriptions and section headings — masked for secret-looking line
 else in memglow.
 
 <a id="memory-server"></a>
-## 🗃️ memglow memory server (preview, read-only)
+## 🗃️ memglow memory server (preview)
 
-A third, separate piece, still a **preview** (internal stage 0.4.5.1): memglow as the memory
+A third, separate piece, still a **preview** (internal stage 0.4.5.2): memglow as the memory
 server **itself**, tool-compatible with basic-memory — same tool names, same arguments,
 compatible text output (`# Search Results` blocks with `- permalink:` lines, `# Context:`,
 `## Recent Activity:` …), so existing clients, hooks and the [MCP proxy](#mcp-proxy) in front of
@@ -819,17 +819,52 @@ English + French stop-words, title boost, `"phrases"`, `AND`/`OR`/`NOT`/`-word`,
 `tag:x`) and answer in milliseconds, many requests at once. Zero dependencies.
 
 ```bash
-memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000   # Streamable HTTP on /mcp
+memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000   # Streamable HTTP on /mcp, read-only
 memglow memory-server --root ~/knowledge --stdio                    # or stdio
+memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000 --read-write \
+  --on-write 'node ~/bin/snapshot-notes.js'                         # writes on, git snapshot after them
 # also: node memory-server/memglow-memory-server.js … / npx memglow-memory-server …
 ```
 
-- **Read-only in this preview**: `search_notes`, `read_note`, `read_content`, `view_note`,
+- **Read tools**: `search_notes`, `read_note`, `read_content`, `view_note`,
   `build_context`, `recent_activity`, `list_directory`, `list_memory_projects`,
-  `list_workspaces`, `search` / `fetch`, `basic_memory_diagnostics` work; `write_note`,
-  `edit_note`, `move_note` and `delete_note` are listed but answer
-  `memglow memory server: read-only (phase A / shadow mode)`; `schema_*`,
+  `list_workspaces`, `search` / `fetch`, `basic_memory_diagnostics`. `schema_*`,
   `create_memory_project` and `delete_project` answer "not supported".
+- **Write tools — only with `--read-write`** (or `MEMGLOW_MEMORY_READ_WRITE=1`; `--read-only`
+  always wins). Without it they answer `memglow memory server: read-only (phase A / shadow mode)`.
+  - `write_note` creates `<directory>/<title>.md` with the frontmatter laid out as
+    basic-memory lays it out (`title`, `type`, `permalink`, the `metadata` keys, `tags`;
+    same quoting and line folding), merges a frontmatter the content itself starts with, and
+    refuses an existing note unless `overwrite=true` (`--overwrite-default` flips that default).
+    Replacing keeps the note's other frontmatter keys and its permalink.
+  - `edit_note`: `append`, `prepend` (after the frontmatter), `find_replace` (exactly
+    `expected_replacements` occurrences, default 1, else nothing changes), `replace_section`
+    (`replace_subsections`, default true), `insert_before_section`, `insert_after_section` (a
+    missing or duplicated heading is an error); `metadata` merges frontmatter keys with any
+    operation. Everything not changed stays byte-for-byte (CRLF and BOM included).
+    `append`/`prepend` on a missing note create it.
+  - `move_note` (a note or, with `is_directory`, a folder) never replaces an existing file; the
+    permalink is kept (`--update-permalinks-on-move` makes it follow the new path).
+  - `delete_note` **never deletes**: files move to `<root>/.trash/<timestamp>/<same path>`, a
+    dot-folder nothing indexes, searches or serves. Restore = move the file back; empty the trash
+    by hand.
+  - Answers keep basic-memory's shape (`# Created note` / `# Updated note` / `# Edited note (op)`
+    with `project:`, `file_path:`, `permalink:`, `checksum:` lines; `true`/`false` for one
+    delete), so the proxy's levers keep working.
+- **Write safety**: one global write queue (writes run one at a time, in order — no lost update;
+  reads never wait); every path must stay inside the root's real path (no `..`, no dot-folders,
+  no symlink leading out); atomic replace (temporary dot-file in the same folder, fsync, rename,
+  folder fsync — a crash leaves the old file; `--no-fsync` for very slow disks); a file changed
+  on disk during an edit is re-read and the edit redone; a new note never replaces a file that
+  appeared meanwhile; the index is updated by the write itself (the next read sees it, the watcher
+  re-reads nothing). Files keep their mode (`--file-mode 0664` to force one); running as root,
+  new files and folders take the owner of the folder they are created in (a container running as
+  root keeps the share's owner, e.g. 1045:100 on a Synology).
+- **`--on-write CMD`**: a shell command run in the notes folder after writes, debounced (10 s of
+  quiet by default, `--on-write-delay-ms`, never less; at most 60 s after the first pending
+  write), never blocking a write, never two at once; `MEMGLOW_CHANGED_FILES` lists the changed
+  paths (one per line). Meant for a snapshot, e.g. a script that `git add -A && git commit`s the
+  notes folder.
 - **One project** (`--project`, default `main`): permalinks are the frontmatter `permalink:` when
   present, else `<project>/<path>`; `project` / `project_id` / `workspace` arguments are accepted
   and ignored.

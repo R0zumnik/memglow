@@ -18,10 +18,12 @@ const SUPPORTED_VERSIONS = LEGACY_VERSIONS.concat(MODERN_VERSIONS);
 const LATEST_LEGACY = "2025-11-25";
 const META_VERSION = "io.modelcontextprotocol/protocolVersion";
 
-const INSTRUCTIONS = "memglow memory server: the user's long-term Markdown memory (one project, \"main\"). "
+const INSTRUCTIONS_BASE = "memglow memory server: the user's long-term Markdown memory (one project, \"main\"). "
   + "Find notes with search_notes (words, \"phrases\", AND/OR/NOT, tag:x; search_type title or permalink for exact lookups), "
-  + "read one with read_note (permalink, title or memory:// URL), follow links with build_context, see what changed with recent_activity, browse with list_directory. "
-  + "This preview is read-only: write_note, edit_note, move_note and delete_note answer an error.";
+  + "read one with read_note (permalink, title or memory:// URL), follow links with build_context, see what changed with recent_activity, browse with list_directory. ";
+const INSTRUCTIONS = INSTRUCTIONS_BASE + "This preview is read-only: write_note, edit_note, move_note and delete_note answer an error.";
+const INSTRUCTIONS_RW = INSTRUCTIONS_BASE + "Write with write_note (new note; overwrite=true to replace one), change a note with edit_note (append, prepend, find_replace, replace_section, insert_before_section, insert_after_section; metadata merges frontmatter keys), "
+  + "move_note to move or rename, delete_note to delete (deleted notes go to a trash folder).";
 
 /** The protocol version a request runs under: header, then params._meta, then the session's. */
 function versionOf(msg, ctx = {}) {
@@ -79,6 +81,10 @@ function createRpc({ tools, name = "memglow-memory", version = SERVER_VERSION, i
           if (!params || typeof params !== "object" || typeof params.name !== "string") return err(id, -32602, "Invalid params: \"name\" is required");
           const result = tools.call(params.name, params.arguments);
           if (!result) return err(id, -32602, `Unknown tool: ${params.name}`);
+          if (typeof result.then === "function") {
+            // A write: answered once it is done (the HTTP and stdio transports await it).
+            return result.then((r) => ok(id, r, modern), (e) => err(id, -32603, `Internal error: ${e && e.message}`));
+          }
           return ok(id, result, modern);
         }
         case "resources/list": return ok(id, { resources: [] }, modern);
@@ -93,11 +99,16 @@ function createRpc({ tools, name = "memglow-memory", version = SERVER_VERSION, i
     }
   }
 
-  /** A batch (array) → array of responses (possibly empty); a single message → response | null. */
+  /**
+   * A batch (array) → array of responses (possibly empty); a single message → response | null.
+   * When a write tool is involved the answer is a Promise of the same (reads stay synchronous).
+   */
   function handleAny(payload, ctx = {}) {
     if (Array.isArray(payload)) {
       if (!payload.length) return err(null, -32600, "Invalid Request: empty batch");
-      return payload.map((m) => handle(m, ctx)).filter(Boolean);
+      const outs = payload.map((m) => handle(m, ctx));
+      if (outs.some((o) => o && typeof o.then === "function")) return Promise.all(outs).then((a) => a.filter(Boolean));
+      return outs.filter(Boolean);
     }
     return handle(payload, ctx);
   }
@@ -105,4 +116,4 @@ function createRpc({ tools, name = "memglow-memory", version = SERVER_VERSION, i
   return { handle, handleAny, serverInfo };
 }
 
-module.exports = { createRpc, versionOf, SUPPORTED_VERSIONS, LEGACY_VERSIONS, MODERN_VERSIONS, INSTRUCTIONS };
+module.exports = { createRpc, versionOf, SUPPORTED_VERSIONS, LEGACY_VERSIONS, MODERN_VERSIONS, INSTRUCTIONS, INSTRUCTIONS_RW };
