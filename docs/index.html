@@ -24,7 +24,7 @@
   "description": "Live 3D view of the Markdown memory of AI assistants (basic-memory, Obsidian vaults, any notes folder). Notes light up as Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Copilot or Cline read, search and write them. Memory cost shows which notes cost the most tokens to read and which ones to split.",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows (Node.js 18+ or Docker)",
-  "softwareVersion": "0.3.1",
+  "softwareVersion": "0.4.5",
   "license": "https://opensource.org/licenses/MIT",
   "isAccessibleForFree": true,
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
@@ -220,6 +220,11 @@ footer a { color: var(--ink-dim); }
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#4FD1C5" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M4 12h16M4 17h7"/><circle cx="18" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg></div>
           <h3>Tune it live</h3>
           <p>Background, glow, bubble size (by links or token cost), names, spread, gravity, spacing, signal speed, links at rest, auto-rotate. Find a note and fly to it. Everything stays in your browser.</p>
+        </div>
+        <div class="tile">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#4FD1C5" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01"/></svg></div>
+          <h3>memglow memory server <span style="font-size:12px;color:var(--ink-faint);font-weight:400">(preview)</span></h3>
+          <p>A fast, file-based MCP memory server, tool-compatible with basic-memory — same tool names and arguments, your Markdown stays the source of truth. Run it read-only alongside basic-memory first, compare the two with <code>bench/compat.js</code>, then switch when ready. <a href="https://github.com/R0zumnik/memglow#memory-server">Details</a>.</p>
         </div>
       </div>
     </section>

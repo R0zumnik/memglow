@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.4.5 — 2026-10-09
+
+**Release candidate, not published yet** — the owner decides when to publish. Everything below
+summarises, for users, the internal steps 0.4.2 → 0.4.5.2c made since the last published
+version, 0.4.1. Each item links to its detailed section further down this file by version
+number.
+
+### Memory server
+
+- A new, separate **memglow memory server**: memglow itself as an MCP memory server, tool- and
+  text-compatible with basic-memory (same tool names and arguments, same note folder, your
+  Markdown stays the source of truth) — read tools first (0.4.5.1), then the four write tools
+  (`write_note`, `edit_note`, `move_note`, `delete_note`), off unless `--read-write` is given
+  (0.4.5.2). Hardening and review-fix passes followed on both the read side (0.4.5.1b) and the
+  write side (0.4.5.2b, 0.4.5.2c) — see Fixes below.
+
+### MCP proxy
+
+- Six new optional levers that make an assistant find notes faster or read less, all off by
+  default except where noted: lever 8 `alreadyLoaded` (0.4.2.1, hardened in 0.4.3.1), lever 10
+  `aliases` + `learnAliases` learned from past searches (0.4.2.3/0.4.2.4, **on by default** since
+  0.4.2.5), lever 11 `negativeCache` and lever 12 `indexHint` (0.4.2.6), lever 13 `deltaRead`
+  cross-session delta reads (0.4.3), and lever 14 `duplicateHint` on a near-duplicate `write_note`
+  (0.4.4.1). Lever 9 `multiQuery` (several search phrasings in one upstream round trip) shipped
+  **on by default** (0.4.2.2b). `searchDetails` and `suggestions` (levers 2-3) were turned off by
+  default after real-usage measurement showed no net benefit (0.4.2.2).
+- Per-client token accounting, shown as "By AI tool" in the Memory cost panel (0.4.2).
+
+### Memory maintenance
+
+- **Index trim**: a deterministic proposal to shorten over-length index lines (0.4.4.2).
+- **Scheduled maintenance proposals**: a ranked list — dormant sections, over-threshold notes, an
+  index-trim opportunity — rescanned on a timer, surfaced in the viewer and as an MCP tool
+  (0.4.4.3).
+- **Cache-stable always-loaded prefix**: the index + memory-hygiene text an assistant loads at
+  every session start is now assembled in a deterministic order, with a measure of how often it
+  actually changes (prompt caching only pays off when it stays byte-identical) (0.4.4.3, 0.4.4.4).
+
+### Measurement
+
+- Multi-question bench sessions, a tokenizer accuracy check, and "effective tokens" (counting a
+  dropped retry call, not just raw tokens) in the free replay harness `bench/replay.js` (0.4.2,
+  0.4.2.5).
+- `bench/compat.js`, an A/B harness comparing the memglow memory server with basic-memory call by
+  call (latency, identical reads, search overlap, text shape), and `bench/memory-server-speed.js`
+  (0.4.5.1).
+
+### Fixes
+
+- A cold review of the memory server's read side (0.4.5.1b) and two review passes of its write
+  side (0.4.5.2b, 0.4.5.2c) fixed data-loss, race, path-escape and frontmatter-corruption risks
+  found by adversarial review and a dry run against a real knowledge base — each with its own
+  regression test.
+- A production bug in the `alreadyLoaded` lever that could stub a `SessionStart` injection hook's
+  own read of the index (0.4.3.1).
+- MCP proxy `multiQuery` merge: a page's own frame was sometimes counted as a hit (0.4.5.1); a
+  `sizeWarning` after a write could report a stale (pre-write) size (0.4.5.1b).
+
 ## 0.4.5.2c — internal (not published)
 
 "Cold-review fixes, write side." Each with a regression test in

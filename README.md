@@ -34,6 +34,7 @@
   <a href="#activity-api">API</a> ·
   <a href="#mcp-proxy">MCP proxy</a> ·
   <a href="#mcp-server">MCP server</a> ·
+  <a href="#memory-server">Memory server</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#security">Security</a> ·
   <a href="#faq">FAQ</a> ·
@@ -766,6 +767,7 @@ real usage log (stage 0.4.2.2b — [bench/README.md](bench/README.md)).
 | 11 | `negativeCache` / `MEMGLOW_PROXY_NEGATIVE_CACHE` | off | A search not followed by any read within 2 minutes in the same session (or superseded by another search/write first) is remembered, locally, as "futile" for the memory's current state. A LATER search with the same significant words, while nothing has changed since, gets one line prepended: `memglow: this search found nothing you used last time (<date>); the memory has not changed since.` The results themselves are always still relayed right after — never hidden. Off by default: a clear win on its own dedicated fixture (a dropped retry call), but a real, unmodelled cost on `bench/replay-heavy.jsonl` (a naturally recurring search gets the hint with no call saved there) — see 0.4.2.6 below. |
 | 12 | `indexHint` / `MEMGLOW_PROXY_INDEX_HINT` | off | A search whose own results are ONLY the index note, or a read of the index itself while `alreadyLoaded` is off, gets a short suffix: `memglow: the index already says:` followed by up to 3 lines of the index's own text (secret-masked) that mention one of the query's significant words. Off by default: it only ever adds a line, same bucket as `searchDetails`/`suggestions`/`archiveHint`. |
 | 13 | `deltaRead` / `MEMGLOW_PROXY_DELTA_READ` | off | The hottest notes get re-read in every new session — `dedupe` cannot help there (a new session's context is empty). Two mechanisms: cross-session, the first read of a note in a session is always full, plus one header when it changed since this SAME client's own last read, in an earlier session (`memglow: changed since your last read on <date> — sections changed: …`), remembered in a small per-client ledger (`delta-read.json`); within-session, a note re-read after it changed THIS session gets ONLY the diff since its first read, falling back to the full text past a 60% size ratio. Off for now: a clean sweep on hand-built replay files, but not yet checked against a real usage log the way `multiQuery`/`aliases` were — see 0.4.3 in `bench/README.md`/`mcp-proxy/README.md`. |
+| 14 | `duplicateHint` / `MEMGLOW_PROXY_DUPLICATE_HINT` | off | After a `write_note` (never `edit_note`/`move_note`) whose title already names an existing note: `memglow: a note with this title already exists: [[<id>]] — this write_note may replace or duplicate it; prefer edit_note.` A title close to (but not matching) an existing note's id/label/description gets up to 2 candidates instead, with the same "prefer edit_note" suggestion. Checked before the write reaches the server, so the note being created is never mistaken for its own duplicate; same note never hinted twice per session. Advisory only — never blocks the write, never changes its arguments. Off by default: a pure, unconditional add, same bucket as `searchDetails`/`suggestions`/`archiveHint`/`indexHint` — see 0.4.4.1 below. |
 | — | `indexWarning` / `MEMGLOW_PROXY_INDEX_WARNING` | off | The **index** note read while above `indexWarningTokens` (default 2,000): `⚠ memglow: the index note … is loaded at every session` — suggests trimming it. Once per session. |
 
 Levers 4, 5 and 8 change what the assistant receives: **measure answer quality before enabling
@@ -822,13 +824,17 @@ else in memglow.
 ## 🗃️ memglow memory server (preview)
 
 A third, separate piece, still a **preview** (internal stage 0.4.5.2): memglow as the memory
-server **itself**, tool-compatible with basic-memory — same tool names, same arguments,
-compatible text output (`# Search Results` blocks with `- permalink:` lines, `# Context:`,
-`## Recent Activity:` …), so existing clients, hooks and the [MCP proxy](#mcp-proxy) in front of
-it keep working unchanged. Notes are indexed in memory and refreshed on every file change
-(`fs.watch` plus a cheap rescan every 3 s), searches are lexical (BM25-style; accents folded,
-English + French stop-words, title boost, `"phrases"`, `AND`/`OR`/`NOT`/`-word`, `prefix*`,
-`tag:x`) and answer in milliseconds, many requests at once. Zero dependencies.
+server **itself** — a fast, file-based MCP memory server, tool-compatible with basic-memory's
+own tools: same tool names, same arguments, compatible text output (`# Search Results` blocks
+with `- permalink:` lines, `# Context:`, `## Recent Activity:` …), so existing clients, hooks
+and the [MCP proxy](#mcp-proxy) in front of it keep working unchanged. Your Markdown files stay
+the source of truth throughout — this server reads and writes the same notes folder basic-memory
+does, in the same layout, nothing in a database. Notes are indexed in memory and refreshed on
+every file change (`fs.watch` plus a cheap rescan every 3 s), searches are lexical (BM25-style;
+accents folded, English + French stop-words, title boost, `"phrases"`, `AND`/`OR`/`NOT`/`-word`,
+`prefix*`, `tag:x`) and answer in milliseconds, many requests at once. Zero dependencies.
+
+**Quick start — try it as a shadow first, enable writes only once you trust it:**
 
 ```bash
 memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000   # Streamable HTTP on /mcp, read-only
@@ -837,6 +843,34 @@ memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000 --read-write \
   --on-write 'node ~/bin/snapshot-notes.js'                         # writes on, git snapshot after them
 # also: node memory-server/memglow-memory-server.js … / npx memglow-memory-server …
 ```
+
+1. Point it at a **read-only copy** of your notes folder (or the real one — it never writes
+   without `--read-write`) and run it alongside basic-memory, unused by any client yet: a
+   **shadow deployment**. `--read-only` makes the read-only default explicit and always wins
+   over `--read-write` if both are given.
+2. **Compare it with basic-memory call by call** using `bench/compat.js` (latency, identical
+   reads, search overlap, text shape — see below) before trusting it with real traffic.
+3. **Switch the upstream**: point your hooks / the [MCP proxy](#mcp-proxy) at this server instead
+   of basic-memory (`memglow-mcp-proxy --upstream http://127.0.0.1:8000/mcp`, or the stdio form
+   in front of `memglow memory-server --stdio`) — reads only, still no `--read-write`.
+4. Once you are comfortable, add `--read-write` to enable the write tools, and only then **stop
+   basic-memory**.
+
+**Safety flags**: `--read-only` / `--read-write` (writes are off unless `--read-write` or
+`MEMGLOW_MEMORY_READ_WRITE=1` is given; `--read-only` always wins over either), `--token` /
+`MEMGLOW_MEMORY_TOKEN` (requires `Authorization: Bearer …` on every request but `GET /healthz`),
+`--allow-origin` (a browser-style `Origin` header is refused unless listed — MCP/CLI clients send
+none and are accepted either way), `--on-write CMD` (a debounced hook run after writes, e.g. a
+git snapshot), `--file-mode` (force the mode of files it writes, instead of keeping the existing
+one), `--no-fsync` (skip the fsync in the atomic write, for very slow disks), `--kebab-filenames`
+(write new notes as `kebab-case.md` instead of basic-memory's as-is title — useful since
+memglow's own note index only resolves slugged file names).
+
+**Measured — on the author's memory** (not a controlled benchmark; see `bench/compat.js` and
+`bench/memory-server-speed.js` to measure your own): search median ≈22 ms vs ≈45 s for
+basic-memory on the same notes folder; relevance (MRR) 0.283 vs 0.130 over 31 real
+search→read pairs; reads byte-identical between the two servers. No claim beyond what was
+measured this way — your own notes, query mix and hardware will differ.
 
 - **Read tools**: `search_notes`, `read_note`, `read_content`, `view_note`,
   `build_context`, `recent_activity`, `list_directory`, `list_memory_projects`,
@@ -971,7 +1005,7 @@ docker run -d --name memglow -p 127.0.0.1:4747:4747 \
   -v /path/to/notes:/memory:ro \
   -v memglow-data:/data \
   -e MEMGLOW_TOKEN=$(cat ~/.memglow/token) \
-  ghcr.io/r0zumnik/memglow:0.4.1
+  ghcr.io/r0zumnik/memglow:0.4.5
 ```
 
 `/data` keeps the Memory cost counts (note ids and numbers only) and the saved view (settings,
@@ -980,7 +1014,7 @@ layout, camera) across restarts.
 Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
 then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
 
-Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.4.1`.
+Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.4.5`.
 
 The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
 container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.

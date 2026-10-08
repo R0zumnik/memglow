@@ -48,6 +48,10 @@ Then point the client at `http://127.0.0.1:8765/mcp`. Method, path query, header
 back as they arrive. If the upstream is unreachable the client receives a `502` with a JSON-RPC
 error.
 
+The upstream can be basic-memory, any other MCP memory server, or memglow's own
+[memory server](../README.md#memory-server) (`memglow memory-server --listen 127.0.0.1:8000`,
+preview, basic-memory-compatible) — same `--upstream http://127.0.0.1:8000/mcp` either way.
+
 ## Options
 
 | Option | Meaning |
@@ -608,7 +612,7 @@ Environment variables win over the file:
 
 | Variable | Meaning |
 |---|---|
-| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_INDEX_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT`, `MEMGLOW_PROXY_HIDE_UNSUPPORTED`, `MEMGLOW_PROXY_ALREADY_LOADED`, `MEMGLOW_PROXY_MULTI_QUERY`, `MEMGLOW_PROXY_ALIASES`, `MEMGLOW_PROXY_LEARN_ALIASES`, `MEMGLOW_PROXY_NEGATIVE_CACHE`, `MEMGLOW_PROXY_INDEX_HINT`, `MEMGLOW_PROXY_DELTA_READ` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
+| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_INDEX_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT`, `MEMGLOW_PROXY_HIDE_UNSUPPORTED`, `MEMGLOW_PROXY_ALREADY_LOADED`, `MEMGLOW_PROXY_MULTI_QUERY`, `MEMGLOW_PROXY_ALIASES`, `MEMGLOW_PROXY_LEARN_ALIASES`, `MEMGLOW_PROXY_NEGATIVE_CACHE`, `MEMGLOW_PROXY_INDEX_HINT`, `MEMGLOW_PROXY_DELTA_READ`, `MEMGLOW_PROXY_DUPLICATE_HINT` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
 | `MEMGLOW_PROXY_READ_TOOLS`, `MEMGLOW_PROXY_MULTI_NOTE_TOOLS`, `MEMGLOW_PROXY_SEARCH_TOOLS`, `MEMGLOW_PROXY_WRITE_TOOLS` | comma-separated tool names (defaults above: basic-memory's) |
 | `MEMGLOW_LARGE_NOTE_TOKENS` | the threshold (default 5000) |
 | `MEMGLOW_MEMORY_DIR` (or `MEMORY_DIR`) | the notes folder, if not in the config file |
