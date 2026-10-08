@@ -950,6 +950,50 @@ test("mergeSearchResults 0.4.5.1: a page's frame (\"# Search Results\" header, \
   assert.strictEqual((m2.match(/^### /gm) || []).length, 2, "capped to the hit count, frames not counted");
 });
 
+test("mergeSearchResults 0.4.5.1b: a basic-memory hit whose `- match:` spans blank lines stays ONE hit (heading to next heading)", () => {
+  const idx = fakeIndex({ alice: { id: "alice", label: "Alice" }, bob: { id: "bob", label: "Bob" }, carol: { id: "carol", label: "Carol" } });
+  // Synthetic text shaped like basic-memory 4.x output: the match excerpt carries blank lines,
+  // a bare permalink line and a "---" rule of its own.
+  const aliceHit = "### alice\n- permalink: main/memory/alice\n- score: 0.9\n- match: alice\n\nmain/memory/alice\n\nUp: [[hub]]\n---\n- **Point**: alice continues here";
+  const r0 = { content: [{ type: "text", text: `# Search Results: q1\n*project: main*\n\n${aliceHit}\n\n### bob\n- permalink: main/memory/bob\n- score: 0.8\n- match: bob line\n\n---\n*2 results | page 1, page_size 2*` }] };
+  const r1 = { content: [{ type: "text", text: "# Search Results: q2\n*project: main*\n\n### carol\n- permalink: main/memory/carol\n- score: 0.7\n- match: carol\n\nmain/memory/carol\n\n### alice\n- permalink: main/memory/alice\n- score: 0.6\n- match: other\n\n---\n*2 results | page 1, page_size 2*" }] };
+  assert.deepStrictEqual(L.hitChunksOf(r0.content[0].text), ["# Search Results: q1\n*project: main*", aliceHit, "### bob\n- permalink: main/memory/bob\n- score: 0.8\n- match: bob line", "---\n*2 results | page 1, page_size 2*"]);
+  const merged = L.mergeSearchResults(idx, [r0, r1]).content[0].text;
+  assert.ok(merged.includes(aliceHit), "alice's hit kept whole, continuation included");
+  assert.strictEqual(merged.split("main/memory/alice\n\nUp: [[hub]]").length, 2, "its continuation appears once, attached to its own heading");
+  assert.ok(merged.startsWith("# Search Results: q1\n*project: main*\n\n### alice"), "alice (both phrasings) first");
+  assert.ok(merged.endsWith("\n\n---\n*2 results | page 1, page_size 2*"));
+  assert.strictEqual((merged.match(/^### /gm) || []).length, 2, "cap = 2 hits");
+  // Text without "### " blocks is split exactly as before.
+  assert.deepStrictEqual(L.hitChunksOf("a\n\nb"), ["a", "b"]);
+});
+
+test("sizeWarning 0.4.5.1b: computed from the file as it is after the write — never a stale size", () => {
+  const fx = makeNotes();
+  try {
+    const cfg = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_CONFIG: path.join(fx.home, "none.json"), MEMGLOW_MEMORY_DIR: fx.notes, MEMGLOW_DATA_DIR: fx.data, MEMGLOW_LARGE_NOTE_TOKENS: "1000", MEMGLOW_POLL_MS: "60000", MEMGLOW_PROXY_MULTI_QUERY: "0" });
+    const engine = L.createLevers({ config: cfg, index: L.createNoteIndex(cfg), savings: { add() {}, addClient() {} } });
+    const file = path.join(fx.notes, "projects/big.md");
+    const old = Date.now() / 1000 - 3600;
+    fs.utimesSync(file, old, old); // the index knows big.md as large, from before this session
+    const write = (id, sid, before) => {
+      engine.clientMessage({ id, method: "tools/call", params: { name: "write_note", arguments: { title: "Big plan", directory: "projects", content: "x" } } }, sid);
+      if (before) before();
+      const r = engine.serverMessage({ id, result: { content: [{ type: "text", text: "# Updated note\npermalink: projects/big" }] } }, sid);
+      return r.changed ? r.msg.result.content.map((c) => c.text) : ["# Updated note\npermalink: projects/big"];
+    };
+    // 1. The upstream has not rewritten the file yet (mtime from an hour ago): no stale warning.
+    assert.deepStrictEqual(write(1, "s1"), ["# Updated note\npermalink: projects/big"]);
+    // 2. Rewritten SMALL (a hub split down): no warning, although the index had it large.
+    assert.deepStrictEqual(write(2, "s2", () => fs.writeFileSync(file, "---\ntitle: Big plan\n---\nnow tiny\n")), ["# Updated note\npermalink: projects/big"]);
+    // 3. Rewritten large: the warning gives the NEW size, read off the file.
+    const body = "y".repeat(20000);
+    const w = write(3, "s3", () => fs.writeFileSync(file, "---\ntitle: Big plan\n---\n" + body));
+    const tokens = Math.ceil(fs.statSync(file).size / 4);
+    assert.match(w[0], new RegExp(`^⚠ memglow: this note is now ≈${tokens} tokens \\(threshold 1000\\)`));
+  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
 test("mergeSearchResults: tier A dedups identical un-identifiable text too (no note id needed to collapse a repeat)", () => {
   const idx = fakeIndex({});
   const r = { content: [{ type: "text", text: "some text with no id or permalink in it" }] };

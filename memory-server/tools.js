@@ -12,10 +12,12 @@ const path = require("path");
 const os = require("os");
 const { createSearch } = require("../lib/store/search");
 const { parseTimeframe } = require("../lib/store/timeframe");
-const { stableId, stableInt, globToRegExp, slugify } = require("../lib/store/text");
+const { stableId, stableInt, globToRegExp, slugify, words } = require("../lib/store/text");
 const { TOOLS, WRITE_TOOLS, UNSUPPORTED_TOOLS } = require("./schemas");
 
 const SERVER_VERSION = "0.4.5.1";
+const MAX_QUERY_CHARS = 2000;
+const MAX_QUERY_TERMS = 64;
 const READ_ONLY_MESSAGE = "memglow memory server: read-only (phase A / shadow mode)";
 const UNSUPPORTED_MESSAGE = "not supported by memglow memory server";
 
@@ -88,7 +90,16 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     return o;
   }
 
+  /** Refuses oversized queries (they would only burn CPU): MAX_QUERY_CHARS / MAX_QUERY_TERMS. */
+  function checkQuery(q) {
+    if (typeof q !== "string") return;
+    if (q.length > MAX_QUERY_CHARS) throw new ToolError(`query too long: ${q.length} characters (maximum ${MAX_QUERY_CHARS})`);
+    const n = words(q).length;
+    if (n > MAX_QUERY_TERMS) throw new ToolError(`query has too many words: ${n} (maximum ${MAX_QUERY_TERMS})`);
+  }
+
   function runSearch(args) {
+    checkQuery(args.query);
     const page = int(args.page, 1, { min: 1, name: "page" });
     const pageSize = int(args.page_size, 10, { min: 1, max: 1000, name: "page_size" });
     const type = args.search_type == null || args.search_type === "" ? "text" : str(args.search_type).toLowerCase();
@@ -132,7 +143,8 @@ function createTools({ store, project = store.project, readOnly = true, startedA
   // ---- read_note / view_note / read_content / fetch ----
 
   function relatedFor(identifier, page, pageSize) {
-    const q = str(identifier).replace(/^memory:\/\//i, "").replace(/[\/_-]+/g, " ");
+    // Capped like a search query (an oversized identifier just gets fewer suggestions).
+    const q = words(str(identifier).replace(/^memory:\/\//i, "").slice(0, MAX_QUERY_CHARS)).slice(0, MAX_QUERY_TERMS).join(" ");
     try { return engine.search({ query: q, page, page_size: pageSize }).results; } catch { return []; }
   }
 
@@ -197,15 +209,13 @@ function createTools({ store, project = store.project, readOnly = true, startedA
   function read_content(args) {
     const p = str(args.path).trim();
     if (!p) throw new ToolError("path is required");
-    // A note (permalink, title…) first, then a plain file under the root.
+    // A note (permalink, title…) first, then a plain file under the root. Either way the real
+    // path must stay inside the root (symlinks included), no dot-file/dot-folder, regular files only.
     const n = store.resolve(p);
-    let abs, rel;
-    if (n) { rel = n.rel; abs = path.join(store.root, n.rel); }
-    else {
-      const sp = store.safePath(p);
-      if (!sp) return errorResult(`Path '${p}' is not allowed: paths must stay inside the project`);
-      abs = sp.abs; rel = sp.rel;
-    }
+    const sp = store.safePath(n ? n.rel : p);
+    if (!sp) return errorResult(`Path '${p}' is not allowed: only regular files inside the project (no dot-files, no links leaving it)`);
+    if (sp.missing) return errorResult(`File not found: '${p}'`);
+    const abs = sp.abs, rel = sp.rel;
     let st;
     try { st = fs.statSync(abs); } catch { return errorResult(`File not found: '${p}'`); }
     if (!st.isFile()) return errorResult(`Not a file: '${p}'`);
@@ -231,7 +241,7 @@ function createTools({ store, project = store.project, readOnly = true, startedA
   function search(args) {
     const query = str(args.query);
     let r;
-    try { r = engine.search({ query, page: 1, page_size: 10 }); }
+    try { checkQuery(query); r = engine.search({ query, page: 1, page_size: 10 }); }
     catch (e) { return chatgptResult({ results: [], error: "Search failed", error_details: String(e.message).slice(0, 500) }); }
     return chatgptResult({ results: r.results.map((h) => ({ id: h.note.permalink, title: h.note.title || "Untitled", url: h.note.permalink })), total_count: r.results.length, query });
   }
@@ -285,7 +295,7 @@ function createTools({ store, project = store.project, readOnly = true, startedA
   function build_context(args) {
     const url = str(args.url != null ? args.url : args.uri != null ? args.uri : args.memory_url);
     if (!url.trim()) throw new ToolError("url is required");
-    const depth = int(args.depth, 1, { min: 0, max: 10, name: "depth" }) || 1;
+    const depth = int(args.depth, 1, { min: 0, max: 10, name: "depth" }); // 0 = the note(s) alone, no related items
     const page = int(args.page, 1, { min: 1, name: "page" });
     const pageSize = int(args.page_size, 10, { min: 1, max: 50, name: "page_size" });
     const maxRelated = int(args.max_related, 10, { min: 0, max: 100, name: "max_related" });
@@ -533,6 +543,11 @@ function createTools({ store, project = store.project, readOnly = true, startedA
       `- runtime: Node.js ${process.version} on ${os.platform()} ${os.arch()}`,
       "- search: lexical (BM25-style, accent folding, EN+FR stop-words); vector / semantic / hybrid use the same engine",
     ];
+    const col = store.collisions();
+    if (col.length) {
+      lines.push("", "## Permalink collisions (several files declare the same permalink; the first one wins)");
+      for (const c of col.slice(0, 50)) lines.push(`- ${c.permalink}: ${c.files.join(", ")} → serves ${c.winner}`);
+    }
     if (s.warnings.length) {
       lines.push("", "## Files skipped or partly read");
       for (const w of s.warnings.slice(0, 50)) lines.push(`- ${w.file}: ${w.message}`);
@@ -540,10 +555,10 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     return textResult(lines.join("\n"));
   }
 
-  const HANDLERS = {
+  const HANDLERS = new Map(Object.entries({
     search_notes, read_note, view_note, read_content, build_context, recent_activity, list_directory,
     list_memory_projects, list_workspaces, basic_memory_diagnostics, search, fetch: fetchTool,
-  };
+  })); // a Map: "toString", "constructor", "__proto__"… are unknown tools, not Object.prototype members
 
   /** Runs a tool call: `call(name, args)` → MCP result (never throws). */
   function call(name, args) {
@@ -553,7 +568,7 @@ function createTools({ store, project = store.project, readOnly = true, startedA
       return errorResult("memglow memory server: writes are not implemented yet (phase B)");
     }
     if (UNSUPPORTED_TOOLS.has(name)) return errorResult(`${name}: ${UNSUPPORTED_MESSAGE}`);
-    const h = HANDLERS[name];
+    const h = typeof name === "string" ? HANDLERS.get(name) : undefined;
     if (!h) return null;
     try { return h(a); }
     catch (e) {
@@ -565,4 +580,4 @@ function createTools({ store, project = store.project, readOnly = true, startedA
   return { call, tools: TOOLS, engine, warm: () => engine.warm() };
 }
 
-module.exports = { createTools, SERVER_VERSION, READ_ONLY_MESSAGE, UNSUPPORTED_MESSAGE };
+module.exports = { createTools, SERVER_VERSION, READ_ONLY_MESSAGE, UNSUPPORTED_MESSAGE, MAX_QUERY_CHARS, MAX_QUERY_TERMS };

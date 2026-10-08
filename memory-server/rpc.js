@@ -53,6 +53,11 @@ function createRpc({ tools, name = "memglow-memory", version = SERVER_VERSION, i
     if (isNotification) return null; // notifications/initialized, notifications/cancelled…
     const v = versionOf(msg, ctx);
     const modern = isModern(v);
+    // A request that names a protocol version this server does not speak gets a clear error
+    // (initialize negotiates through its own params instead). No version at all is fine.
+    if (method !== "initialize" && typeof v === "string" && v && !SUPPORTED_VERSIONS.includes(v)) {
+      return err(id, -32602, `Unsupported protocol version: ${v}`, { supported: SUPPORTED_VERSIONS, requested: v });
+    }
     try {
       switch (method) {
         case "initialize": {

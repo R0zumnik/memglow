@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.4.5.1b — internal (not published)
+
+"Review fixes." A cold review of 0.4.5.1 reproduced fourteen problems; each is fixed with its own
+regression test (`test/memory-server-fixes.test.js`, two more in `test/mcp-proxy-levers.test.js`).
+
+### Fixed
+
+- **HTTP hardening**: a malformed request-target (`GET http://[`) threw out of the handler and
+  killed the process — now 400; every request path is wrapped (500 at worst), and the CLI logs
+  any escaped exception instead of dying.
+- **Root confinement**: symlinked `*.md` pointing outside the root are no longer indexed (warning in
+  diagnostics); `read_content` requires the real path inside the root's real path, refuses
+  dot-files/dot-folders (`.git/config`) and anything but a regular file (`/proc/self/environ`).
+- **Origin / token**: requests carrying an `Origin` not listed with `--allow-origin` get 403
+  (no Origin = allowed, as MCP clients send); optional `--token` / `MEMGLOW_MEMORY_TOKEN` bearer
+  token (401 without it; `/healthz` exempt).
+- **stdio**: end of input no longer exits before stdout drains (a 7 MB answer was cut at 64 KB).
+- **Permalinks**: a declared frontmatter permalink always wins over another note's path-derived
+  one; two notes declaring the same permalink resolve deterministically (first in permalink, path
+  order) and are listed under "Permalink collisions" in `basic_memory_diagnostics`; an explicit
+  `folder/note.md` identifier is a path first. `external_id`/`entity_id` are unique per file.
+- **Globs** are matched by a linear wildcard matcher (no regex backtracking: a pathological pattern
+  took 49 s).
+- **Limits**: queries over 2,000 characters or 64 words get a clear error; a body over 10 MB is
+  refused at once (declared length, or as soon as it grows past it) instead of being read whole.
+- **Protocol**: an unsupported `MCP-Protocol-Version` header → HTTP 400 (JSON-RPC -32602 with the
+  supported list); an unsupported `_meta` version → the same JSON-RPC error.
+- **Tool lookup** no longer reaches `Object.prototype` (`toString`, `constructor`, `__proto__`).
+- **Timeframes**: "30s" accepted; a bare number means days ("7" = 7d; it was read as the year 2001).
+- **build_context** honours `depth: 0` (the note alone).
+- **Proxy, lever 9 merge**: a hit is everything from its `### ` heading to the next one (or the
+  footer) — basic-memory's `- match:` excerpt can contain blank lines, which split one hit into
+  several blocks that were then deduped away or shuffled.
+- **Proxy, sizeWarning after a write**: the size is read from the file as it is after the write;
+  a file not modified since the call was sent gets no warning (it used to report the old size —
+  ≈10.8k tokens for a hub just cut down to ≈1.4k).
+
 ## 0.4.5.1 — internal (not published)
 
 "The memory server, read side." basic-memory takes ≈45 s per search on the owner's NAS and

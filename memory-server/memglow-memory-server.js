@@ -35,11 +35,17 @@ options:
   --read-only     write tools answer an error (always the case in this preview)
   --poll-ms N     periodic rescan, in ms (default 3000; 0 = file watching only)
   --no-watch      do not use fs.watch (periodic rescan only)
+  --allow-origin O  accept browser requests from this Origin (repeatable or comma-separated;
+                  default: none — any request carrying an Origin header is refused, requests
+                  without one, as MCP clients send them, are accepted). Env MEMGLOW_MEMORY_ALLOW_ORIGIN
+  --token T       require "Authorization: Bearer T" on every HTTP request (GET /healthz excepted).
+                  Env MEMGLOW_MEMORY_TOKEN (preferred: keeps it out of the process list)
   --quiet         no log on stderr
 `;
 
 function parseArgs(argv, env = process.env) {
-  const o = { root: env.MEMGLOW_MEMORY_ROOT || "", project: env.MEMGLOW_MEMORY_PROJECT || "main", listen: "", stdio: false, readOnly: true, pollMs: 3000, watch: true, quiet: false };
+  const o = { root: env.MEMGLOW_MEMORY_ROOT || "", project: env.MEMGLOW_MEMORY_PROJECT || "main", listen: "", stdio: false, readOnly: true, pollMs: 3000, watch: true, quiet: false,
+    allowOrigins: String(env.MEMGLOW_MEMORY_ALLOW_ORIGIN || "").split(",").map((x) => x.trim()).filter(Boolean), token: env.MEMGLOW_MEMORY_TOKEN || "" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--root") o.root = argv[++i] || "";
@@ -52,6 +58,8 @@ function parseArgs(argv, env = process.env) {
     else if (a === "--read-only") o.readOnly = true;
     else if (a === "--poll-ms") o.pollMs = Math.max(0, Number(argv[++i]) || 0);
     else if (a === "--no-watch") o.watch = false;
+    else if (a === "--allow-origin") o.allowOrigins.push(...String(argv[++i] || "").split(",").map((x) => x.trim()).filter(Boolean));
+    else if (a === "--token") o.token = argv[++i] || "";
     else if (a === "--quiet" || a === "-q") o.quiet = true;
     else if (a === "-h" || a === "--help") o.help = true;
     else o.unknown = (o.unknown || []).concat(a);
@@ -91,7 +99,9 @@ function runStdio(rpc, input = process.stdin, output = process.stdout) {
     }
     if (buf.length > 20 * 1024 * 1024) buf = "";
   });
-  input.on("end", () => process.exit(0));
+  // Exit only once every answer already written has been flushed: a write's callback runs after
+  // the data is handed to the OS, in order, so the empty write's callback comes after all of them.
+  input.on("end", () => output.write("", () => process.exit(0)));
   input.resume();
 }
 
@@ -99,6 +109,9 @@ function main(argv = process.argv.slice(2), env = process.env) {
   const o = parseArgs(argv, env);
   if (o.help) { process.stdout.write(HELP); return 0; }
   const log = o.quiet ? () => {} : (s) => process.stderr.write(s + "\n");
+  // Last line of defence: nothing a client sends may take the server down. Every request path
+  // already catches its own errors; anything that still escapes is logged, not fatal.
+  process.on("uncaughtException", (e) => { try { process.stderr.write("memglow memory server: unexpected error (kept running): " + (e && e.stack || e) + "\n"); } catch { /* ignore */ } });
   if (o.unknown) { process.stderr.write(`memglow-memory-server: unknown option(s): ${o.unknown.join(" ")}\n\n${HELP}`); return 2; }
   const root = path.resolve(o.root);
   const t0 = Date.now();
@@ -109,8 +122,8 @@ function main(argv = process.argv.slice(2), env = process.env) {
     const m = /^(?:\[?([^\]]*)\]?:)?(\d+)$/.exec(o.listen.trim());
     if (!m) { process.stderr.write(`memglow-memory-server: bad --listen "${o.listen}" (expected HOST:PORT)\n`); return 2; }
     const host = m[1] || "127.0.0.1", port = Number(m[2]);
-    const server = createHttpServer({ rpc: srv.rpc, store: srv.store, log });
-    server.on("error", (e) => { process.stderr.write(`memglow-memory-server: cannot listen on ${host}:${port}: ${e.message}\n`); srv.close(); process.exit(1); });
+    const server = createHttpServer({ rpc: srv.rpc, store: srv.store, log, allowOrigins: o.allowOrigins, token: o.token });
+    server.once("error", (e) => { process.stderr.write(`memglow-memory-server: cannot listen on ${host}:${port}: ${e.message}\n`); srv.close(); process.exit(1); });
     server.listen(port, host, () => log(`memglow memory server: listening on http://${host}:${server.address().port}/mcp`));
     const stop = () => { srv.close(); server.close(); process.exit(0); };
     process.on("SIGINT", stop); process.on("SIGTERM", stop);

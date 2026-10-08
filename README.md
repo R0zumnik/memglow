@@ -838,6 +838,12 @@ memglow memory-server --root ~/knowledge --stdio                    # or stdio
 - **HTTP**: legacy sessions (`initialize` → `Mcp-Session-Id`) and the MCP 2026-07-28
   per-request mode (no session, `MCP-Protocol-Version` header and/or `params._meta`) both work;
   JSON answers, or one SSE event for a client that only accepts `text/event-stream`.
+- **Security**: a request carrying an `Origin` header (a browser page — DNS rebinding) is
+  refused unless listed with `--allow-origin` (default: none; MCP and CLI clients send no
+  Origin and are accepted). `--token` (better: env `MEMGLOW_MEMORY_TOKEN`) requires
+  `Authorization: Bearer …` on every request but `GET /healthz`. Only regular files whose real
+  path stays inside `--root` are indexed or read: symlinks leaving it, dot-files/dot-folders
+  (`.git/…`) and special files are refused.
 - `bench/compat.js` compares it with another server call by call (latency, identical reads,
   search overlap, text shape); `bench/memory-server-speed.js` measures it on a notes folder.
 
