@@ -880,6 +880,11 @@ memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000 --read-write \
 - **File names**: the title as is, like basic-memory (`--kebab-filenames` for kebab-case). memglow's
   own note index (viewer, proxy levers) only knows notes whose file name is a slug, so with
   free-form titles prefer `--kebab-filenames`.
+- **Run it as the notes folder's owner** (1045:100 on the NAS) **or as root**: a write replaces the
+  file, so a server running as another user makes every note it touches its own (it warns at
+  startup). As root, new files get the folder's owner, and group-write when the folder has it.
+- Startup removes temp files an interrupted write left (`.mg-<hex>.tmp`) and reports notes present
+  under two paths (an interrupted move) in `basic_memory_diagnostics`.
 - **`--on-write CMD`**: a shell command run in the notes folder after writes, debounced (10 s of
   quiet by default, `--on-write-delay-ms`, never less; at most 60 s after the first pending
   write), never blocking a write, never two at once; `MEMGLOW_CHANGED_FILES` lists the changed

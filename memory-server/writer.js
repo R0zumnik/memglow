@@ -27,6 +27,18 @@ const crypto = require("crypto");
 const { spawn } = require("child_process");
 const { SKIP_DIRS } = require("../lib/store/store");
 
+const TEMP_RE = /^\.mg-[0-9a-f]{8}\.tmp$/;
+const OLD_TEMP_RE = /^\..+\.memglow-tmp-\d+-[0-9a-f]{10}$/;
+
+/**
+ * A startup warning when the server's user is not the owner of the notes folder (and not root):
+ * every file it rewrites would then become owned by the server's user.
+ */
+function ownershipWarning(rootStat, uid = typeof process.getuid === "function" ? process.getuid() : null) {
+  if (uid == null || uid === 0 || !rootStat || rootStat.uid === uid) return null;
+  return `memglow memory server: warning: running as uid ${uid} but the notes folder belongs to uid ${rootStat.uid}:${rootStat.gid} — files it rewrites will belong to uid ${uid}. Run it as the folder's owner (e.g. 1045:100 on the NAS) or as root (it then gives new files the folder's owner).`;
+}
+
 class WriteError extends Error {
   constructor(message, code) { super(message); this.code = code || "WRITE_FAILED"; }
 }
@@ -75,8 +87,9 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
 
   /**
    * A cleaned path whose segments reuse existing entries that differ only by Unicode
-   * normalisation (a folder created in NFD by a Mac over SMB is reused, not duplicated next to an
-   * NFC twin); a new segment is written in NFC.
+   * normalisation or by case (a folder created in NFD by a Mac over SMB, "Alice.md" next to an
+   * existing "alice.md" — the same name to a case-insensitive SMB client) instead of creating a
+   * twin; a new segment is written in NFC.
    */
   function canonicalRel(input) {
     const parts = cleanRel(input).split("/");
@@ -88,7 +101,8 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
       try { entries = fs.readdirSync(dirAbs); } catch { entries = null; }
       if (!entries || !entries.includes(seg)) {
         const want = seg.normalize("NFC");
-        const hit = entries ? entries.find((e) => e.normalize("NFC") === want) : null;
+        const lower = want.toLowerCase();
+        const hit = entries ? (entries.find((e) => e.normalize("NFC") === want) || entries.find((e) => e.normalize("NFC").toLowerCase() === lower)) : null;
         name = hit || want;
       }
       out.push(name);
@@ -140,6 +154,7 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
     for (const d of missing) {
       try { await fsp.mkdir(d); } catch (e) { if (e.code !== "EEXIST") throw e; }
       await ownLikeParent(d);
+      await groupWriteLikeParent(d);
     }
     const { real } = await checkAncestors(absDir);
     const st = await fsp.stat(real);
@@ -170,7 +185,8 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
     if (bytes > maxFileBytes) throw new WriteError(`the note would be too large (${bytes} bytes > ${maxFileBytes})`, "TOO_LARGE");
     const dir = path.dirname(abs), base = path.basename(abs);
     await mkdirs(dir);
-    const tmp = path.join(dir, `.${base}.memglow-tmp-${process.pid}-${crypto.randomBytes(5).toString("hex")}`);
+    // A short temp name (any name the target can have, the temp can have too).
+    const tmp = path.join(dir, `.mg-${crypto.randomBytes(4).toString("hex")}.tmp`);
     let fh = null, linked = false;
     try {
       fh = await fsp.open(tmp, "wx", 0o666);
@@ -184,6 +200,7 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
           await fh.chown(owner.uid, owner.gid);
         } catch (e) { log(`memglow memory server: chown ${abs}: ${e.message}`); }
       }
+      if (!prev) await groupWriteLikeParent(abs, fh);
       if (fsync) await fh.sync();
       await fh.close(); fh = null;
       if (hooks.beforeRename) await hooks.beforeRename(tmp, abs);
@@ -230,6 +247,21 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
     if (path.dirname(srcAbs) !== path.dirname(dstAbs)) await fsyncDir(path.dirname(srcAbs));
   }
 
+  /**
+   * Running as root: a file or folder just created is group-writable when its parent folder is
+   * (a share whose users write through the group keeps working). `fh` = an open handle, or null.
+   */
+  async function groupWriteLikeParent(p, fh = null) {
+    if (!chownToParent || fileMode != null) return;
+    try {
+      const ps = await fsp.stat(path.dirname(p));
+      if (!(ps.mode & 0o020)) return;
+      const st = fh ? await fh.stat() : await fsp.stat(p);
+      if (st.mode & 0o020) return;
+      if (fh) await fh.chmod((st.mode & 0o7777) | 0o020); else await fsp.chmod(p, (st.mode & 0o7777) | 0o020);
+    } catch (e) { log(`memglow memory server: chmod ${p}: ${e.message}`); }
+  }
+
   /** Running as root: give a file or folder just created the owner of its parent folder. */
   async function ownLikeParent(p) {
     if (!chownToParent) return;
@@ -268,6 +300,35 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
     const dst = path.join(root, trashRel, rel);
     await moveNoClobber(abs, dst);
     return trashRel + "/" + rel;
+  }
+
+  /**
+   * Removes temp files a crash left behind (".mg-<8 hex>.tmp", and the older
+   * ".<name>.memglow-tmp-<pid>-<hex>"), inside the root only, older than `minAgeMs`. Returns the
+   * project-relative paths removed.
+   */
+  function cleanupTemps(minAgeMs = 60000) {
+    const removed = [];
+    const now = Date.now();
+    const walk = (rel, depth) => {
+      if (depth > 64) return;
+      let entries;
+      try { entries = fs.readdirSync(rel ? path.join(root, rel) : root, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const r = rel ? rel + "/" + e.name : e.name;
+        if (e.isDirectory()) { if (!e.name.startsWith(".") && !SKIP_DIRS.has(e.name)) walk(r, depth + 1); continue; }
+        if (!e.isFile() || !(TEMP_RE.test(e.name) || OLD_TEMP_RE.test(e.name))) continue;
+        try {
+          const abs = path.join(root, r);
+          if (now - fs.statSync(abs).mtimeMs < minAgeMs) continue;
+          fs.unlinkSync(abs);
+          removed.push(r);
+        } catch { /* gone or not ours to remove */ }
+      }
+    };
+    walk("", 0);
+    if (removed.length) log(`memglow memory server: removed ${removed.length} temp file(s) left by an interrupted write`);
+    return removed;
   }
 
   // ---- the on-write hook ----
@@ -321,7 +382,7 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
   }
 
   return {
-    run, cleanRel, canonicalRel, backupToTrash, target, checkAncestors, mkdirs, readText, writeAtomic, moveNoClobber, trashFolder, toTrash, wrote,
+    run, cleanRel, canonicalRel, cleanupTemps, backupToTrash, target, checkAncestors, mkdirs, readText, writeAtomic, moveNoClobber, trashFolder, toTrash, wrote,
     flushHook, fail: () => { counters.failed++; },
     /** Resolves when every write queued so far is done (shutdown). */
     idle: () => tail,
@@ -329,4 +390,4 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
   };
 }
 
-module.exports = { createWriter, WriteError };
+module.exports = { createWriter, WriteError, ownershipWarning, TEMP_RE };

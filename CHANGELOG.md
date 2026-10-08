@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.5.2c — internal (not published)
+
+"Cold-review fixes, write side." Each with a regression test in
+`test/memory-server-write-fixes.test.js`.
+
+### Fixed
+
+- append/prepend on a missing note named by a project-prefixed permalink (`main/memory/x`) no
+  longer creates a stray `main/` tree with a `main/main/…` permalink: the prefix is dropped
+  whatever the identifier form (kept only if the root really has a `<project>` folder).
+- Case-insensitive name collisions (the share is reached over SMB): a name differing only by case
+  from an existing file or folder is that file or folder — write_note refuses it (or overwrites it
+  with `overwrite=true`), move_note refuses it.
+- A metadata merge keeps the frontmatter's comment and blank lines.
+- Section operations: setext headings (`Title\n===` / `---`) are headings; a code fence that is
+  never closed makes them refuse with a clear error instead of hiding the headings after it.
+- Every frontmatter written is read back before the write (refused on mismatch); keys like
+  `a:b` are read correctly; NEL / LINE / PARAGRAPH SEPARATOR are written escaped in double quotes.
+- move_note refuses symbolic links (a note, or a directory containing any) instead of breaking them.
+- Ownership: a startup warning when the server's user does not own the notes folder (run it as
+  the folder's owner — 1045:100 on the NAS — or as root); as root, new files and folders are
+  group-writable when their parent folder is.
+- Startup removes temp files left by an interrupted write (exact names only, inside the root,
+  older than a minute) and reports notes present under several paths (an interrupted move leaves
+  two hard links) or permalinks; diagnostics list them.
+- The temp file name is short (`.mg-<8 hex>.tmp`): a 240-character title works.
+- `## C#` is the heading "C#" (a closing `#` run needs a space before it; read side too).
+- Mixed line endings: lines an edit does not touch keep their own ending; new lines take the
+  note's dominant one.
+
 ## 0.4.5.2b — internal (not published)
 
 "Write-side review fixes." An adversarial review of 0.4.5.2 (data loss, races, path escape,

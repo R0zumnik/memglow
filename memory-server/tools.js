@@ -550,6 +550,11 @@ function createTools({ store, project = store.project, readOnly = true, startedA
       `- runtime: Node.js ${process.version} on ${os.platform()} ${os.arch()}`,
       "- search: lexical (BM25-style, accent folding, EN+FR stop-words); vector / semantic / hybrid use the same engine",
     ];
+    const twins = sameFileTwins(store.notes());
+    if (twins.length) {
+      lines.push("", "## Same file under several paths (an interrupted move leaves two hard links; or a symlink): keep one");
+      for (const t of twins.slice(0, 50)) lines.push(`- ${t.join(", ")}`);
+    }
     const col = store.collisions();
     if (col.length) {
       lines.push("", "## Permalink collisions (several files declare the same permalink; the first one wins)");
@@ -592,4 +597,16 @@ function createTools({ store, project = store.project, readOnly = true, startedA
   return { call, tools: TOOLS, engine, warm: () => engine.warm() };
 }
 
-module.exports = { createTools, SERVER_VERSION, READ_ONLY_MESSAGE, WRITES_UNAVAILABLE, UNSUPPORTED_MESSAGE, MAX_QUERY_CHARS, MAX_QUERY_TERMS };
+/** Groups of notes that are the same file (same inode) under different paths. */
+function sameFileTwins(notes) {
+  const byIno = new Map();
+  for (const n of notes) {
+    const ino = String(n.statKey || "").split(":").pop();
+    if (!ino || ino === "0" || ino === "undefined") continue;
+    const a = byIno.get(ino);
+    if (a) a.push(n.rel); else byIno.set(ino, [n.rel]);
+  }
+  return [...byIno.values()].filter((a) => a.length > 1);
+}
+
+module.exports = { sameFileTwins, createTools, SERVER_VERSION, READ_ONLY_MESSAGE, WRITES_UNAVAILABLE, UNSUPPORTED_MESSAGE, MAX_QUERY_CHARS, MAX_QUERY_TERMS };

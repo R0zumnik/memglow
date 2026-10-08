@@ -163,6 +163,8 @@ function createWriteTools({ store, writer, project, overwriteDefault = false, ke
   }
 
   async function executePlan(plan, { overwrite }) {
+    // Again inside the queue: a note created meanwhile under another case / normalisation counts.
+    plan.rel = writer.canonicalRel(plan.rel);
     const t = await writer.target(plan.rel);
     if (t.stat) {
       if (!overwrite) return { action: "conflict", rel: t.rel, existing: store.resolve(t.rel) };
@@ -322,10 +324,10 @@ function createWriteTools({ store, writer, project, overwriteDefault = false, ke
       const n = noteFor(identifier);
       if (!n) {
         if (operation !== "append" && operation !== "prepend") return { kind: "not-found" };
-        let id = identifier.trim();
-        const isUrl = /^memory:\/\//i.test(id);
-        id = id.replace(/^memory:\/\//i, "");
-        if (isUrl && id.startsWith(project + "/")) id = id.slice(project.length + 1);
+        let id = identifier.trim().replace(/^memory:\/\//i, "").replace(/^\/+/, "");
+        // A permalink carries the project prefix ("main/memory/x"); the file goes to "memory/x"
+        // (unless the root really has a "<project>" folder).
+        if (id.startsWith(project + "/") && !fs.existsSync(path.join(store.root, project))) id = id.slice(project.length + 1);
         const cut = id.lastIndexOf("/");
         const title = (cut >= 0 ? id.slice(cut + 1) : id).replace(/\.md$/i, "");
         const directory = cut >= 0 ? id.slice(0, cut) : "";
@@ -434,6 +436,15 @@ function createWriteTools({ store, writer, project, overwriteDefault = false, ke
         if (!st || !st.isDirectory() || !real) return { kind: "none" };
         if (dst === src || dst.startsWith(src + "/")) return { kind: "error", message: "the destination is the directory itself or inside it" };
         const moved = store.notes().filter((n) => n.rel.startsWith(src + "/")).map((n) => n.rel);
+        const links = [];
+        (function walk(d, depth) {
+          if (depth > 64) return;
+          for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+            if (e.isSymbolicLink()) links.push(path.relative(store.root, path.join(d, e.name)));
+            else if (e.isDirectory()) walk(path.join(d, e.name), depth + 1);
+          }
+        })(srcAbs, 0);
+        if (links.length) return { kind: "error", message: `the directory contains symbolic links (${links.slice(0, 3).join(", ")}), which a move could break; move them by hand first` };
         try { await writer.moveNoClobber(srcAbs, dstAbs, { directory: true }); }
         catch (e) { if (e instanceof WriteError && e.code === "EXISTS") return { kind: "exists" }; throw e; }
         const newRels = moved.map((rel) => dst + rel.slice(src.length));
@@ -469,6 +480,7 @@ function createWriteTools({ store, writer, project, overwriteDefault = false, ke
       if (srcExt && ext.toLowerCase() !== srcExt.toLowerCase()) return { kind: "ext-mismatch", n, dest, ext, srcExt };
       const src = await writer.target(n.rel);
       if (!src.stat) return { kind: "not-found" };
+      if (src.isLink) return { kind: "symlink", rel: n.rel };
       const dstAbs = path.join(store.root, rel);
       await writer.checkAncestors(dstAbs);
       try { await writer.moveNoClobber(src.isLink ? src.linkAbs : src.abs, dstAbs); }
@@ -488,6 +500,7 @@ function createWriteTools({ store, writer, project, overwriteDefault = false, ke
       case "not-found":
         return fail("NOTE_NOT_FOUND", ["# Move Failed - Note Not Found", "", `No note matches '${identifier}' (moves need an exact title, permalink or path).`, "", "## What to try", `- \`search_notes("${identifier.split("/").pop()}")\` to find its exact permalink.`, "- `list_directory(\"/\")` to browse the notes."].join("\n"));
       case "security": return fail("SECURITY_VALIDATION_ERROR", securityText(r.dest));
+      case "symlink": return fail("SYMLINK", `# Move Failed - Symbolic Link\n\n'${r.rel}' is a symbolic link; moving it could break it. Move its target, or the link by hand.`);
       case "same": return fail("DESTINATION_SAME_AS_SOURCE", `# Move Failed - Destination Same As Source\n\nThe note '${identifier}' is already at '${r.n.rel}'. Choose another destination to move or rename it.`);
       case "no-ext": return fail("FILE_EXTENSION_REQUIRED", `# Move Failed - File Extension Required\n\nThe destination '${r.dest}' needs a file extension, e.g. \`move_note("${identifier}", "${r.dest}.${r.srcExt || "md"}")\`.`);
       case "ext-mismatch": return fail("FILE_EXTENSION_MISMATCH", `# Move Failed - File Extension Mismatch\n\nThe destination ends in '.${r.ext}' but the note is a '.${r.srcExt}' file; keep '.${r.srcExt}'.`);

@@ -18,9 +18,9 @@
  */
 const path = require("path");
 const { createStore } = require("../lib/store/store");
-const { createTools, SERVER_VERSION } = require("./tools");
+const { createTools, SERVER_VERSION, sameFileTwins } = require("./tools");
 const { createRpc, INSTRUCTIONS, INSTRUCTIONS_RW } = require("./rpc");
-const { createWriter } = require("./writer");
+const { createWriter, ownershipWarning } = require("./writer");
 const { createHttpServer } = require("./http");
 
 const HELP = `memglow memory server ${SERVER_VERSION} (preview)
@@ -105,7 +105,7 @@ function parseArgs(argv, env = process.env) {
  * enabled only with readOnly: false. `writerHooks` (tests): fault injection in the writer.
  */
 function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 3000, watch = true, maxFileBytes, log = () => {},
-  fsync = true, fileMode = null, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent }) {
+  fsync = true, cleanupTempsMinAgeMs = 60000, fileMode = null, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent }) {
   let tools = null, warmTimer = null;
   // The search index is rebuilt lazily by the next search anyway; warming it after a change is
   // coalesced (a burst of writes costs one rebuild, not one per write).
@@ -116,6 +116,13 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
   const store = createStore({ root, project, pollMs, watch, log, ...(maxFileBytes ? { maxFileBytes } : {}), onChange });
   store.start();
   const writer = readOnly ? null : createWriter({ store, fsync, fileMode, onWrite, onWriteDelayMs, log, hooks: writerHooks, ...(maxFileBytes ? { maxFileBytes } : {}), ...(chownToParent != null ? { chownToParent } : {}) });
+  if (writer) {
+    try { const w = ownershipWarning(require("fs").statSync(root)); if (w) log(w); } catch { /* no root: nothing to warn about */ }
+    writer.cleanupTemps(cleanupTempsMinAgeMs);
+    const twins = sameFileTwins(store.notes());
+    const col = store.collisions();
+    if (twins.length || col.length) log(`memglow memory server: ${twins.length + col.length} note(s) present under several paths or permalinks (an interrupted move?) — see basic_memory_diagnostics`);
+  }
   tools = createTools({ store, project, readOnly, writer, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
   tools.warm();
   const rpc = createRpc({ tools, instructions: readOnly ? INSTRUCTIONS : INSTRUCTIONS_RW });
