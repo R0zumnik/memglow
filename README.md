@@ -125,7 +125,18 @@ own memory, from the activity your hooks report:
   deterministic, no AI — each hook is cut at its last clause or word boundary, and nothing is
   ever lost: the dropped words must already be in the linked note's `description` or body, or
   the plan also writes them there as a new `description:` line; a line whose note is missing or
-  whose existing `description` does not cover it is left exactly as it is.
+  whose existing `description` does not cover it is left exactly as it is. The index text plus
+  the rendered memory-hygiene rules form a **cache-stable prefix**: identical bytes every session
+  unless one of them actually changes, which is what lets an LLM provider's prompt cache hit. When
+  it changes often (3+ times in a week) you get a tip that batching index edits keeps that cache
+  warm (cached input tokens cost ≈0.1× — the figures are also in the `memory_health` MCP tool).
+- **Maintenance (N)** — the same three deterministic tiers above (archive, split, index trim),
+  run on a schedule (once at start, then every `maintenanceEveryHours`, default 24 — see
+  [Configuration](#configuration)) and ranked by estimated token gain, so you do not have to open
+  three different blocks to find out there is something to do. Each item has a **Do it** button
+  that starts the matching proposal through the normal pipeline above (nothing is ever applied
+  from this list itself) and a **Dismiss** button; a dismissed item stays dismissed. Also exposed
+  read-only as the `maintenance_proposals` MCP tool.
 - **Time to find a note · 7 days** — from the activity memglow already receives: for each
   search, the first read by the same assistant (same source, machine and channel) within
   **2 minutes**. Median time to the note, median steps (each extra search before the read is one
@@ -801,6 +812,7 @@ answer "no notes found".
 | `organisation_suggestions` | `limit` | Notes about one subject scattered across sub-themes of a group (same rules as Memory cost → Organisation), with the reasons and a ready-to-paste instruction for the assistant's own memory tool that names your protected groups. |
 | `archive_lookup` | `query`, `limit` | For when a search of the live memory found nothing: the [archived sections](#archive) whose topic or original note matches, read from the archive summary — title, original note, archive note, `[[link]]`, date, ≈tokens. Never the archived text. |
 | `index_trim_plan` | `maxChars` | Which index lines could be shortened deterministically (same rule as Memory cost → Always loaded → **Trim the index**) and the tokens that would save per session, plus a "skipped" list with why a line was left as is. The plan only — it writes nothing; the assistant's own `indexTrim` proposal is what actually applies it. |
+| `maintenance_proposals` | *(none)* | The same scheduled **Maintenance** list the viewer shows — dormant sections, over-threshold notes, an index-trim opportunity, ranked by estimated token gain — computed fresh and read-only on every call (never a cache file, never a counter touched). Applying one still goes through the normal assistant pipeline, not this tool. |
 
 No write tool, and no tool ever returns a full note body: only ids, titles, token estimates,
 frontmatter descriptions and section headings — masked for secret-looking lines like everywhere
@@ -897,6 +909,7 @@ With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 | `sessionsPerDay` | `5` | Always loaded: sessions per day when no read of the index note was counted |
 | `indexWarningTokens` | `2000` | Always loaded: "trim" tip above this; also the threshold of the proxy's `indexWarning` |
 | `MEMGLOW_INDEX_TRIM_MAX_CHARS` / `indexTrimMaxChars` | `90` | **Trim the index**: an index line's hook longer than this many characters is a candidate for deterministic shortening (30-1000) |
+| `MEMGLOW_MAINTENANCE_EVERY_HOURS` / `maintenanceEveryHours` | `24` | **Maintenance**: how often the scheduled scan (archive/split/indexTrim) reruns; `0` turns off the repeat (the start-up scan still runs once) (0-8784) |
 | `MEMGLOW_ARCHIVE_AFTER_DAYS` / `archiveAfterDays` (or `archive.afterDays`) | `105` | [archive tier](#archive): a section is dormant after this many days without a read, a search hit or an edit (7-3650) |
 | `archive.folder`, `archive.summaryNote` | `archive`, `archive-summary` | where archive notes and the archive summary go (inside the notes folder) |
 | `archive.maxSuggestions`, `archive.minSectionTokens` | `20`, `100` | at most this many dormant sections listed (biggest first); smaller sections are never suggested |

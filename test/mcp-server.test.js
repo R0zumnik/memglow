@@ -72,8 +72,8 @@ test("inputSchema validator: object/string/integer, required, additionalProperti
   assert.match(validate(schema, "nope"), /expected an object/);
 });
 
-test("tool registry: seven read-only tools, strict schemas, no write tool", () => {
-  assert.deepStrictEqual(TOOLS.map((t) => t.name).sort(), ["archive_lookup", "index_trim_plan", "memory_health", "note_cost", "organisation_suggestions", "related_notes", "split_plan"]);
+test("tool registry: eight read-only tools, strict schemas, no write tool", () => {
+  assert.deepStrictEqual(TOOLS.map((t) => t.name).sort(), ["archive_lookup", "index_trim_plan", "maintenance_proposals", "memory_health", "note_cost", "organisation_suggestions", "related_notes", "split_plan"]);
   for (const t of TOOLS) {
     assert.strictEqual(t.inputSchema.type, "object");
     assert.strictEqual(t.inputSchema.additionalProperties, false, t.name);
@@ -354,7 +354,7 @@ test("real process: initialize + tools/list + tools/call over actual stdio, demo
     child.stdin.write(wire);
     const [initRes, listRes, healthRes, splitRes] = await readLines(child, 4);
     assert.strictEqual(initRes.result.serverInfo.name, "memglow-mcp");
-    assert.strictEqual(listRes.result.tools.length, 7);
+    assert.strictEqual(listRes.result.tools.length, 8);
     assert.match(healthRes.result.content[0].text, /Incident log/);
     const splitData = JSON.parse(splitRes.result.content[0].text.match(/```json\n([\s\S]*)\n```/)[1]);
     assert.strictEqual(splitData.split.length, 4, "the demo's Incident log splits into 4 parts");
@@ -372,6 +372,6 @@ test("real process: starts on its own with an empty / absent notes folder (no cr
     child.stdin.write(wire);
     const [initRes, listRes] = await readLines(child, 2);
     assert.ok(initRes.result.protocolVersion);
-    assert.strictEqual(listRes.result.tools.length, 7);
+    assert.strictEqual(listRes.result.tools.length, 8);
   } finally { child.kill(); }
 });

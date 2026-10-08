@@ -121,6 +121,30 @@ test("recent activity kept for the graph, demo activity is not", () => {
   assert.strictEqual(m.graph().activities.length, 1);
 });
 
+test("createMemory (0.4.4.4): costNotes()/graph() are sorted by relative path — deterministic regardless of creation order", () => {
+  // Written in reverse alphabetical order (and across folders) on purpose: a plain readdirSync
+  // would often just mirror that order back. costNotes()/graph() must come out sorted by relative
+  // path every time, so every list derived from them (the always-loaded prefix's hash included)
+  // never changes just because a filesystem happened to list entries differently.
+  const dir = tmpMemory({
+    "zeta.md": "z",
+    "projects/y.md": "---\ntheme: projects\n---\ny",
+    "alpha.md": "a",
+    "projects/beta.md": "---\ntheme: projects\n---\nb",
+  });
+  const memory = createMemory({ dir, config });
+  const ids1 = memory.costNotes().map((n) => n.rel);
+  const sorted = ids1.slice().sort();
+  assert.deepStrictEqual(ids1, sorted, "costNotes() already sorted by relative path");
+  assert.deepStrictEqual(ids1, ["alpha.md", "projects/beta.md", "projects/y.md", "zeta.md"]);
+  // graph() nodes come from the same sorted iteration.
+  const nodeIds = memory.graph().nodes.map((n) => n.id);
+  assert.deepStrictEqual(nodeIds, ["alpha", "beta", "y", "zeta"]);
+  // Rescanning (e.g. after a poll) keeps the same order.
+  memory.scan();
+  assert.deepStrictEqual(memory.costNotes().map((n) => n.rel), ids1);
+});
+
 test("config: default themes, token and password minimum lengths", () => {
   assert.ok(config.themes.length >= 3);
   assert.throws(() => loadConfig({ MEMGLOW_TOKEN: "short" }, os.tmpdir()), /32/);
