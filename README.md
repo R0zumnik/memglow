@@ -836,7 +836,8 @@ memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000 --read-write \
     basic-memory lays it out (`title`, `type`, `permalink`, the `metadata` keys, `tags`;
     same quoting and line folding), merges a frontmatter the content itself starts with, and
     refuses an existing note unless `overwrite=true` (`--overwrite-default` flips that default).
-    Replacing keeps the note's other frontmatter keys and its permalink.
+    Replacing keeps the note's other frontmatter keys and its permalink, and copies the previous
+    version to `.trash/` first.
   - `edit_note`: `append`, `prepend` (after the frontmatter), `find_replace` (exactly
     `expected_replacements` occurrences, default 1, else nothing changes), `replace_section`
     (`replace_subsections`, default true), `insert_before_section`, `insert_after_section` (a
@@ -845,6 +846,9 @@ memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000 --read-write \
     `append`/`prepend` on a missing note create it.
   - `move_note` (a note or, with `is_directory`, a folder) never replaces an existing file; the
     permalink is kept (`--update-permalinks-on-move` makes it follow the new path).
+  - `edit_note`, `move_note` and `delete_note` refuse an identifier that only matches by title or
+    file name and fits several notes (use the permalink). A frontmatter change is read back before
+    it is written: if any key would not read back as intended, nothing is written.
   - `delete_note` **never deletes**: files move to `<root>/.trash/<timestamp>/<same path>`, a
     dot-folder nothing indexes, searches or serves. Restore = move the file back; empty the trash
     by hand.
@@ -859,7 +863,11 @@ memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000 --read-write \
   appeared meanwhile; the index is updated by the write itself (the next read sees it, the watcher
   re-reads nothing). Files keep their mode (`--file-mode 0664` to force one); running as root,
   new files and folders take the owner of the folder they are created in (a container running as
-  root keeps the share's owner, e.g. 1045:100 on a Synology).
+  root keeps the share's owner, e.g. 1045:100 on a Synology). Names differing only by Unicode normalisation (NFD
+  from a Mac over SMB) reuse the existing folder or file instead of creating a twin.
+- **File names**: the title as is, like basic-memory (`--kebab-filenames` for kebab-case). memglow's
+  own note index (viewer, proxy levers) only knows notes whose file name is a slug, so with
+  free-form titles prefer `--kebab-filenames`.
 - **`--on-write CMD`**: a shell command run in the notes folder after writes, debounced (10 s of
   quiet by default, `--on-write-delay-ms`, never less; at most 60 s after the first pending
   write), never blocking a write, never two at once; `MEMGLOW_CHANGED_FILES` lists the changed

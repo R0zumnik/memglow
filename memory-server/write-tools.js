@@ -140,7 +140,7 @@ function createWriteTools({ store, writer, project, overwriteDefault = false, ke
     let stem = sanitizeForFilename(title);
     if (kebabFilenames) stem = generatePermalink(stem).replace(/\//g, "-");
     if (!stem) throw new ArgError(`title '${title}' gives an empty file name`);
-    const rel = writer.cleanRel(dir ? `${dir}/${stem}.md` : `${stem}.md`);
+    const rel = writer.canonicalRel(dir ? `${dir}/${stem}.md` : `${stem}.md`);
 
     const em = {};
     if (metadata) Object.assign(em, metadata);
@@ -167,8 +167,10 @@ function createWriteTools({ store, writer, project, overwriteDefault = false, ke
     if (t.stat) {
       if (!overwrite) return { action: "conflict", rel: t.rel, existing: store.resolve(t.rel) };
       // Replace: the body is new; the frontmatter keeps every key it had (bytes unchanged),
-      // title/type and the given keys set, the permalink kept.
+      // title/type and the given keys set, the permalink kept. The previous version is copied to
+      // the trash first (an overwrite is the one write that can drop a whole body).
       const old = await writer.readText(t.abs);
+      await writer.backupToTrash(t.abs, t.rel);
       const env = E.unwrap(old);
       const parts = E.splitNote(env.text);
       let text;
@@ -422,7 +424,7 @@ function createWriteTools({ store, writer, project, overwriteDefault = false, ke
 
     if (isDir) {
       let src, dst;
-      try { src = writer.cleanRel(dirArg(identifier)); dst = writer.cleanRel(destPath); }
+      try { src = writer.cleanRel(dirArg(identifier)); dst = writer.canonicalRel(destPath); }
       catch { return fail("SECURITY_VALIDATION_ERROR", securityText(destPath)); }
       const r = await queued(async () => {
         const srcAbs = path.join(store.root, src), dstAbs = path.join(store.root, dst);
@@ -460,7 +462,7 @@ function createWriteTools({ store, writer, project, overwriteDefault = false, ke
         dest = folder ? `${folder}/${path.posix.basename(n.rel)}` : path.posix.basename(n.rel);
       }
       let rel;
-      try { rel = writer.cleanRel(dest); } catch { return { kind: "security", dest }; }
+      try { rel = writer.canonicalRel(dest); } catch { return { kind: "security", dest }; }
       if (rel === n.rel) return { kind: "same", n, dest };
       const ext = path.posix.extname(rel).slice(1), srcExt = path.posix.extname(n.rel).slice(1);
       if (!ext) return { kind: "no-ext", dest, srcExt };
@@ -505,7 +507,10 @@ function createWriteTools({ store, writer, project, overwriteDefault = false, ke
     const env = E.unwrap(text);
     const parts = E.splitNote(env.text);
     if (parts.block == null || parseYaml(parts.block).error) return store.noteWritten(rel, text, t.stat);
-    const out = E.rewrap(E.replaceBlock(parts.head, parts.block, E.setKeys(parts.block, { permalink: want })) + parts.body, env);
+    let block;
+    // The move itself is done: a permalink that cannot be rewritten safely just stays as it was.
+    try { block = E.setKeys(parts.block, { permalink: want }); } catch (e) { if (e instanceof E.EditError) return store.noteWritten(rel, text, t.stat); throw e; }
+    const out = E.rewrap(E.replaceBlock(parts.head, parts.block, block) + parts.body, env);
     const st = out === text ? t.stat : await writer.writeAtomic(t.abs, out, t.stat);
     return store.noteWritten(rel, out, st);
   }

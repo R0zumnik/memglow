@@ -129,3 +129,27 @@ test("file names and permalinks follow basic-memory's rules", () => {
   assert.strictEqual(generatePermalink("x/emoji 🎉 party.md"), "x/emoji-party");
   assert.strictEqual(generatePermalink("x/myCamelCase.md"), "x/my-camel-case");
 });
+
+test("yaml writer and reader agree: any string value reads back exactly (seeded fuzz)", () => {
+  const { parseYaml } = require("../lib/store/frontmatter");
+  let seed = 12345;
+  const rnd = () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const parts = ["a", "Z", "é", "—", "😀", " ", "  ", "\n", "\n\n", "\t", "'", "\"", "\\", ":", ": ", "# ", "#", "-", "- ", "?", "[", "]", "{", "}", ",", "&", "*", "!", "|", ">", "%", "@", "`", "0", "1.5", ".", "~", "yes", "null", "true", "2026-01-01", "x".repeat(40), "word ", "\r", "\x07"];
+  for (let n = 0; n < 5000; n++) {
+    let s = "";
+    const len = Math.floor(rnd() * 14);
+    for (let i = 0; i < len; i++) s += parts[Math.floor(rnd() * parts.length)];
+    const y = dumpYaml({ k: s, l: [s, "z"], m: { n: s } });
+    const d = parseYaml(y);
+    assert.ok(!d.error && d.data.k === s && d.data.l[0] === s && d.data.l[1] === "z" && d.data.m.n === s, JSON.stringify(s) + " → " + JSON.stringify(y));
+  }
+});
+
+test("a frontmatter change that would not read back as intended is refused (no corrupted block)", () => {
+  const E = require("../lib/store/note-edit");
+  // A double-quoted value continued at column 0 looks like a key to a line-based editor.
+  const text = "---\ntitle: T\ndescription: \"first\nsecond: part\"\nother: 1\n---\nbody\n";
+  assert.throws(() => E.mergeFrontmatter(text, { description: "new" }), (e) => e instanceof E.EditError && e.code === "BAD_FRONTMATTER");
+  // The same edit on an ordinary block works and touches only that key.
+  assert.strictEqual(E.mergeFrontmatter("---\ntitle: T\ndescription: old\nother: 1\n---\nbody\n", { description: "new: value" }), "---\ntitle: T\ndescription: 'new: value'\nother: 1\n---\nbody\n");
+});

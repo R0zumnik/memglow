@@ -376,3 +376,24 @@ test("edit/move/delete never guess: an identifier matching several notes by titl
     assert.match(await s.text("edit_note", { identifier: "memory/new/fresh.md", operation: "append", content: "x" }), /file_path: memory\/new\/fresh\.md\n/);
   } finally { s.done(); }
 });
+
+test("overwrite keeps the previous version in the trash; Unicode-normalisation twins are not created", async () => {
+  const s = setup();
+  try {
+    const before = s.file("memory/people/alice.md");
+    await s.text("write_note", { title: "alice", directory: "memory/people", content: "replaced", overwrite: true });
+    const stamps = fs.readdirSync(path.join(s.kb.root, ".trash"));
+    assert.strictEqual(stamps.length, 1);
+    assert.strictEqual(fs.readFileSync(path.join(s.kb.root, ".trash", stamps[0], "memory/people/alice.md"), "utf8"), before);
+    // A folder created in NFD (as a Mac over SMB does) is reused by an NFC directory argument…
+    const nfd = "Été".normalize("NFD"), nfc = "Été".normalize("NFC");
+    fs.mkdirSync(path.join(s.kb.root, "memory", nfd));
+    const out = await s.text("write_note", { title: "summer", directory: "memory/" + nfc, content: "x" });
+    assert.match(out, /^# Created note/);
+    assert.deepStrictEqual(fs.readdirSync(path.join(s.kb.root, "memory")).filter((n) => n.normalize("NFC") === nfc), [nfd], "no NFC twin folder");
+    // …and an NFD title meets the existing NFC file instead of creating a twin.
+    await s.text("write_note", { title: "Café " + nfc, directory: "memory/notes", content: "x" });
+    const dup = await s.text("write_note", { title: "Café " + "Été".normalize("NFD"), directory: "memory/notes", content: "y" });
+    assert.match(dup, /^# Error: Note already exists/);
+  } finally { s.done(); }
+});

@@ -17,6 +17,7 @@ const { stableId, stableInt, globToRegExp, slugify, words } = require("../lib/st
 const { TOOLS, WRITE_TOOLS, UNSUPPORTED_TOOLS } = require("./schemas");
 const { createWriteTools, ArgError } = require("./write-tools");
 const { WriteError } = require("./writer");
+const { EditError } = require("../lib/store/note-edit");
 
 const SERVER_VERSION = "0.4.5.2";
 const MAX_QUERY_CHARS = 2000;
@@ -573,7 +574,7 @@ function createTools({ store, project = store.project, readOnly = true, startedA
       if (readOnly) return errorResult(READ_ONLY_MESSAGE);
       if (!writes) return errorResult(WRITES_UNAVAILABLE);
       const fail = (e) => {
-        if (e instanceof ArgError || e instanceof ToolError || e instanceof WriteError) return errorResult(`Error calling tool '${name}': ${e.message}`);
+        if (e instanceof ArgError || e instanceof ToolError || e instanceof WriteError || e instanceof EditError) return errorResult(`Error calling tool '${name}': ${e.message}`);
         return errorResult(`Error calling tool '${name}': internal error (${e && e.message})`);
       };
       try { return writes[name](a).catch(fail); } catch (e) { return Promise.resolve(fail(e)); }

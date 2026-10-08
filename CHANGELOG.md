@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.5.2b — internal (not published)
+
+"Write-side review fixes." An adversarial review of 0.4.5.2 (data loss, races, path escape,
+frontmatter corruption, crash paths), plus a dry run of every write tool on a scratch copy of a
+real 265-note knowledge base (metadata merge, append, section replace, move, delete: every
+change exactly the one asked for, every read-back identical).
+
+### Fixed
+
+- **Metadata-only edits** (`append` with empty content + `metadata`) no longer add a final newline
+  to a file that had none: empty content leaves the body untouched.
+- **Frontmatter corruption guard**: after changing keys, the block is read back; every changed key
+  must hold its new value and every other key its old one, else nothing is written (a quoted value
+  continued at column 0 could otherwise be cut by the line-based edit).
+- **Frontmatter reader** (phase A too): multi-line quoted values are folded as YAML does (blank
+  line = newline, escaped line break, `\\x`/`\\U`/`\\e`… escapes), plain list items folded over
+  several lines, quoted keys with escapes, a comment after a quoted value. The writer's output
+  reads back exactly (seeded fuzz test); parsing of the real notes is unchanged.
+- **Ambiguous identifiers**: edit/move/delete refuse an identifier that only matches by title or
+  file name and fits several notes (they used to pick the first one).
+- **Overwrite keeps the old version**: `write_note(overwrite=true)` copies the previous file to
+  `.trash/<timestamp>/` before replacing it.
+- **Unicode normalisation**: a folder or file name differing only by NFC/NFD (a Mac over SMB) is
+  reused instead of creating a twin; new names are written in NFC.
+- **Ownership when running as root**: the `.trash` folders and the overwrite backups now get the
+  parent folder's / original file's owner too.
+- A frontmatter error during an overwrite is a clear tool error (was "internal error"); with
+  `--update-permalinks-on-move`, a permalink that cannot be rewritten safely is left as it was
+  instead of failing a move that already happened.
+- `edit_note` creating a note from a path identifier ending in `.md` no longer makes `x.md.md`.
+
 ## 0.4.5.2 — internal (not published)
 
 "The memory server, write side." Phase B of replacing basic-memory: the four write tools, with

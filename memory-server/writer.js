@@ -73,6 +73,30 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
     return rel;
   }
 
+  /**
+   * A cleaned path whose segments reuse existing entries that differ only by Unicode
+   * normalisation (a folder created in NFD by a Mac over SMB is reused, not duplicated next to an
+   * NFC twin); a new segment is written in NFC.
+   */
+  function canonicalRel(input) {
+    const parts = cleanRel(input).split("/");
+    let dirAbs = root;
+    const out = [];
+    for (const seg of parts) {
+      let name = seg;
+      let entries = null;
+      try { entries = fs.readdirSync(dirAbs); } catch { entries = null; }
+      if (!entries || !entries.includes(seg)) {
+        const want = seg.normalize("NFC");
+        const hit = entries ? entries.find((e) => e.normalize("NFC") === want) : null;
+        name = hit || want;
+      }
+      out.push(name);
+      dirAbs = path.join(dirAbs, name);
+    }
+    return out.join("/");
+  }
+
   /** The deepest existing ancestor of `abs` (itself included) must resolve inside the root. */
   async function checkAncestors(abs) {
     let cur = abs;
@@ -115,9 +139,7 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
     while (!fs.existsSync(cur)) { missing.unshift(cur); const up = path.dirname(cur); if (up === cur) break; cur = up; }
     for (const d of missing) {
       try { await fsp.mkdir(d); } catch (e) { if (e.code !== "EEXIST") throw e; }
-      if (chownToParent) {
-        try { const ps = await fsp.stat(path.dirname(d)); await fsp.chown(d, ps.uid, ps.gid); } catch (e) { log(`memglow memory server: chown ${d}: ${e.message}`); }
-      }
+      await ownLikeParent(d);
     }
     const { real } = await checkAncestors(absDir);
     const st = await fsp.stat(real);
@@ -208,19 +230,37 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
     if (path.dirname(srcAbs) !== path.dirname(dstAbs)) await fsyncDir(path.dirname(srcAbs));
   }
 
+  /** Running as root: give a file or folder just created the owner of its parent folder. */
+  async function ownLikeParent(p) {
+    if (!chownToParent) return;
+    try { const ps = await fsp.stat(path.dirname(p)); await fsp.chown(p, ps.uid, ps.gid); } catch (e) { log(`memglow memory server: chown ${p}: ${e.message}`); }
+  }
+
   /** A fresh trash folder for one delete: "<root>/.trash/<timestamp>[-n]" (rel form returned). */
   async function trashFolder() {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const trashRoot = path.join(root, ".trash");
-    try { await fsp.mkdir(trashRoot); } catch (e) { if (e.code !== "EEXIST") throw e; }
+    try { await fsp.mkdir(trashRoot); await ownLikeParent(trashRoot); } catch (e) { if (e.code !== "EEXIST") throw e; }
     const lst = await fsp.lstat(trashRoot);
     if (!lst.isDirectory()) throw new WriteError("the trash folder (.trash) is not a plain folder", "TRASH_UNAVAILABLE");
     for (let i = 0; i < 1000; i++) {
       const name = i ? `${stamp}-${i}` : stamp;
-      try { await fsp.mkdir(path.join(trashRoot, name)); return ".trash/" + name; }
+      try { await fsp.mkdir(path.join(trashRoot, name)); await ownLikeParent(path.join(trashRoot, name)); return ".trash/" + name; }
       catch (e) { if (e.code !== "EEXIST") throw e; }
     }
     throw new WriteError("could not create a trash folder", "TRASH_UNAVAILABLE");
+  }
+
+  /** Copies a file's current version into a fresh trash folder (before an overwrite). */
+  async function backupToTrash(abs, rel) {
+    const trash = await trashFolder();
+    const dst = path.join(root, trash, rel);
+    await mkdirs(path.dirname(dst));
+    await fsp.copyFile(abs, dst, fs.constants.COPYFILE_EXCL);
+    if (chownToParent) {
+      try { const st = await fsp.stat(abs); await fsp.chown(dst, st.uid, st.gid); } catch (e) { log(`memglow memory server: chown ${dst}: ${e.message}`); }
+    }
+    return trash + "/" + rel;
   }
 
   /** Moves a note file (abs, its rel) into `trashRel` keeping its relative path. */
@@ -281,7 +321,7 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
   }
 
   return {
-    run, cleanRel, target, checkAncestors, mkdirs, readText, writeAtomic, moveNoClobber, trashFolder, toTrash, wrote,
+    run, cleanRel, canonicalRel, backupToTrash, target, checkAncestors, mkdirs, readText, writeAtomic, moveNoClobber, trashFolder, toTrash, wrote,
     flushHook, fail: () => { counters.failed++; },
     /** Resolves when every write queued so far is done (shutdown). */
     idle: () => tail,
