@@ -8,7 +8,7 @@
  *
  * It watches the traffic: for each `tools/call` it matches the request with its response and
  * reports read / search / write + note ids (never content) to memglow, through lib/agent-core.js
- * (detached, 3 s timeout, silent), with the memory server's response time (`durationMs`, shown as
+ * (reportInProcess since 0.4.10.0: after the answer, in-process fetch, 3 s timeout, silent), with the memory server's response time (`durationMs`, shown as
  * "Memory engine speed" in memglow's Memory cost panel).
  *
  * v0.4 levers (lib/proxy-levers.js; switches in memglow.config.json → "proxy", or MEMGLOW_PROXY_*):
@@ -80,7 +80,7 @@ function monoMs() { return Number(process.hrtime.bigint() / 1000n) / 1000; }
  * arrives, with the time the server took (`durationMs`). Messages it cannot parse are ignored
  * (they are relayed anyway).
  */
-function createWatcher({ server, source = "mcp", onReport = (evt) => core.report(evt, source, { channel: "mcp-proxy" }), clock = monoMs }) {
+function createWatcher({ server, source = "mcp", onReport = (evt) => core.reportInProcess(evt, source, { channel: "mcp-proxy" }), clock = monoMs }) {
   const pending = new Map();
   const map = userMap();
   function each(msg, fn) { if (Array.isArray(msg)) msg.forEach(fn); else if (msg && typeof msg === "object") fn(msg); }

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.10.0 — internal (not published)
+
+Responsiveness, step 0: the activity report is off the request path.
+
+- The all-in-one server reported each call BEFORE sending its answer, and `lib/agent-core.js`
+  `report()` re-read the config file and the token synchronously and spawned one detached node
+  process per call. New `reportInProcess()`: scheduled with `setImmediate` (the answer is
+  written first), classified there, sent with an in-process `fetch` (`AbortSignal.timeout(3000)`,
+  at most 32 in flight), config and token cached and re-read every 30 s. Used by the all-in-one
+  server and by the standalone proxy's watcher (stdio and HTTP). Hooks keep `report()`: their
+  process exits right away, a detached sender is still what they need.
+- `bench/responsiveness.js`: the production set-up measured end to end (startup, `initialize`,
+  search / multiQuery / read / write latency, first search after a write, tokens per 10-hit
+  search, child processes per call, reports delivered, a real process's freshness and idle CPU).
+- Measured (265 synthetic notes, 2 cores, all-in-one with the default levers, over HTTP): search
+  p50 149 → 10 ms, multiQuery 218 → 17 ms, read 125 → 7 ms; child processes per call 1 → 0;
+  reports delivered 161/160 before and after (the `initialize` too).
+- Test: `test/report-inprocess.test.js` (no child process spawned, every report arrives, with
+  channel / machine / durationMs; settings cached; a viewer that is down is harmless).
+
 ## 0.4.9.1 — internal (not published)
 
 Security fixes from an audit, and two production bugs. One regression test per item

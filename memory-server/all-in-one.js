@@ -22,7 +22,8 @@
  * - After every successful write tool call the levers' note index is rescanned at once
  *   (index.afterWrite), before the levers look at the answer, so sizeWarning / duplicateHint /
  *   alreadyLoaded / the negative-cache fingerprint never work from a stale view of our own write.
- * - Activity is reported like the proxy does (lib/agent-core.js report), channel "memory-server".
+ * - Activity is reported like the proxy does (lib/agent-core.js reportInProcess: after the answer,
+ *   in process, no child process), channel "memory-server".
  * - Session key (`ctx.sessionKey`, set by memory-server/http.js): the Mcp-Session-Id; for an
  *   `initialize` that opens a session, the id this server is about to hand out (so the client's
  *   clientInfo and the "once per session" rules land in ITS session, not a shared one); for a
@@ -83,7 +84,10 @@ const isThenable = (x) => !!x && typeof x.then === "function";
 function createAllInOne({ rpc, root, env = process.env, name = "memglow-memory", source = "mcp", onReport, levers: lvIn, rules: rulesIn, log = () => {} }) {
   const lv = lvIn === undefined ? setupServerLevers({ root, env, serverName: name, log }) : lvIn;
   const rules = setupRules(env, rulesIn);
-  const report = onReport || ((evt) => core.report(evt, source, { channel: "memory-server" }));
+  // 0.4.10.0: in-process and after the answer (core.reportInProcess: setImmediate + fetch, cached
+  // settings) — it used to read the config and the token and spawn a node process per call,
+  // before the answer was even sent.
+  const report = onReport || ((evt) => core.reportInProcess(evt, source, { channel: "memory-server" }));
   const cfg = lv && lv.config ? lv.config : null;
   const leverWriteTools = new Set(cfg && Array.isArray(cfg.writeTools) ? cfg.writeTools : []);
   // A write the levers' own handleWrite already follows with index.afterWrite() (sizeWarning,
