@@ -50,7 +50,7 @@ function sameToken(a, b) {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 
-function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, allowOrigins = [], token = "" }) {
+function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, allowOrigins = [], token = "", readOnly = true }) {
   const origins = new Set((allowOrigins || []).map((o) => String(o).trim().replace(/\/+$/, "").toLowerCase()).filter(Boolean));
   const sessions = new Map(); // id → { version, lastSeen }
 
@@ -99,7 +99,13 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
     const p = url.pathname.replace(/\/+$/, "") || "/";
     if (p === "/healthz" && req.method === "GET") {
       const s = store ? store.stats() : {};
-      return send(res, 200, { ok: true, name: rpc.serverInfo.name, version: rpc.serverInfo.version, notes: s.notes, indexVersion: s.version, lastScanAt: s.lastScanAt ? new Date(s.lastScanAt).toISOString() : null });
+      // readOnly and tokenRequired are BOOLEANS only — never the token itself, never any other
+      // start-up flag (0.4.7.2 control panel: "memory-server status", read-only, never secrets).
+      return send(res, 200, {
+        ok: true, name: rpc.serverInfo.name, version: rpc.serverInfo.version, notes: s.notes,
+        indexVersion: s.version, lastScanAt: s.lastScanAt ? new Date(s.lastScanAt).toISOString() : null,
+        readOnly: !!readOnly, tokenRequired: !!token,
+      });
     }
     if (token) {
       const m = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || ""));

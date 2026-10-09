@@ -347,6 +347,57 @@ test("setup: usage counts and estimate, numbers only", () => {
   assert.deepStrictEqual(setup.priceOf({ model: "claude-haiku-4-5" }, "anthropic"), [1, 5]);
 });
 
+test("setup: memoryServerStatus — not configured, unreachable, and a fake /healthz (read-only, never a secret)", async () => {
+  assert.deepStrictEqual(await setup.memoryServerStatus({ url: "" }), { configured: false });
+  assert.deepStrictEqual(await setup.memoryServerStatus({ url: "not a url" }), { configured: true, ok: false, error: "bad-url" });
+  const unreachable = await setup.memoryServerStatus({ url: "http://127.0.0.1:1", timeoutMs: 300 });
+  assert.strictEqual(unreachable.configured, true);
+  assert.strictEqual(unreachable.ok, false);
+  // A fake memory server, its /healthz answering the real shape (memory-server/http.js), with a
+  // "secretValue"-looking field that must never surface.
+  const fake = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, name: "x", version: "0.9.0", notes: 42, readOnly: false, tokenRequired: true, secretValue: "sk-ant-should-never-appear" }));
+  });
+  await new Promise((ok) => fake.listen(0, "127.0.0.1", ok));
+  try {
+    const r = await setup.memoryServerStatus({ url: `http://127.0.0.1:${fake.address().port}/mcp` });
+    assert.deepStrictEqual(r, { configured: true, ok: true, readOnly: false, tokenRequired: true, version: "0.9.0", notes: 42 });
+  } finally { fake.close(); }
+});
+
+test("setup: GET /api/setup exposes control.proxy (lever sources), control.maintenance.generatedAt and control.memoryServer", async () => {
+  const t = await start();
+  try {
+    const r = await t.call("/api/setup");
+    assert.strictEqual(r.status, 200);
+    const c = r.json.control;
+    assert.ok(c, "control key present");
+    assert.strictEqual(c.maintenance.generatedAt, null, "no maintenance scan ran yet in this test server");
+    assert.deepStrictEqual(c.memoryServer, { configured: false }, "MEMGLOW_MEMORY_URL not set");
+    const sizeWarning = c.proxy.levers.find((l) => l.key === "sizeWarning");
+    assert.deepStrictEqual(sizeWarning, { key: "sizeWarning", value: true, source: "default", envLocked: false, day1: true });
+    const largeNoteTokens = c.proxy.caps.find((x) => x.key === "largeNoteTokens");
+    assert.strictEqual(largeNoteTokens.value, 5000);
+    assert.strictEqual(largeNoteTokens.source, "default");
+    // No secret anywhere in the control payload.
+    assert.ok(!/sk-ant|sk-test|Bearer /.test(JSON.stringify(c)));
+  } finally { await t.stop(); }
+});
+
+test("setup: control.proxy reflects an env-set lever as locked, and a page-saved tuning value as its source", async () => {
+  const t = await start({ MEMGLOW_PROXY_MULTI_QUERY: "0" });
+  try {
+    await t.call("/api/setup", { method: "PUT", body: { tuning: { largeNoteTokens: 4242 } } });
+    const r = await t.call("/api/setup");
+    const multiQuery = r.json.control.proxy.levers.find((l) => l.key === "multiQuery");
+    assert.deepStrictEqual(multiQuery, { key: "multiQuery", value: false, source: "env", envLocked: true, day1: true });
+    const largeNoteTokens = r.json.control.proxy.caps.find((x) => x.key === "largeNoteTokens");
+    assert.strictEqual(largeNoteTokens.value, 4242);
+    assert.strictEqual(largeNoteTokens.source, "page");
+  } finally { await t.stop(); }
+});
+
 test("setup page: renders every step and AI settings, escapes server text, collects strictly", () => {
   const T = (k, p) => "[" + k + "]" + (p ? JSON.stringify(p) : "");
   const s = {

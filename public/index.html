@@ -50,6 +50,18 @@
         <p class="mg-setup__status" id="mg-llmset-status" role="status"></p>
       </form>
     </section>
+    <!-- Control-panel tile (public/control.js), opened from the gear menu: read-only in 0.4.7.2. -->
+    <section class="bn-tile mg-control" id="mg-control" hidden aria-labelledby="mg-control-title">
+      <div class="mg-cost__head">
+        <h2 class="bn-label" id="mg-control-title" data-i18n="control.title">Control panel</h2>
+        <p class="mg-cost__sub" data-i18n="control.intro">A read-only view of the MCP proxy's token-saving levers, memory maintenance, the memory server and recent measurements.</p>
+      </div>
+      <div id="mg-control-body"><p class="mg-cost__empty" data-i18n="common.loading">Loading…</p></div>
+      <div class="mg-setup__btns mg-setup__nav">
+        <button type="button" class="bn-btn" id="mg-control-close" data-i18n="control.close">Close</button>
+      </div>
+      <p class="mg-control__status" id="mg-control-status" role="status"></p>
+    </section>
     <section class="bn-tile mg-zones" id="mg-zones" data-api="/api/zones" hidden aria-labelledby="mg-zones-title">
       <div class="mg-cost__head">
         <h2 class="bn-label" id="mg-zones-title" data-i18n="zones.title">What are your big themes?</h2>
@@ -193,6 +205,7 @@
               <button type="button" class="bn-btn" id="mem-reorganiser" data-i18n="settings.rearrange">Rearrange</button>
               <button type="button" class="bn-btn" id="mem-zones" data-i18n="settings.protectedGroups">Protected groups</button>
               <button type="button" class="bn-btn" id="mem-llmset" data-i18n="settings.aiSettings">AI settings</button>
+              <button type="button" class="bn-btn" id="mem-control" data-i18n="settings.control">Control</button>
               <button type="button" class="bn-btn" id="mem-setup-again" data-i18n="setup.again">First-run setup</button>
             </div>
             <p class="mem-options__aide" data-i18n="settings.help">Drag a bubble to move it; double-click it to release it, double-click the background to recenter. The view (settings, layout, camera) is saved on this memglow instance: every browser and device that opens it gets the same view. “Rearrange” starts again from a fresh layout and keeps the settings.</p>
@@ -235,6 +248,7 @@
 <script src="/cost.js?v={{v:cost.js}}"></script>
 <script src="/zones.js?v={{v:zones.js}}"></script>
 <script src="/setup.js?v={{v:setup.js}}"></script>
+<script src="/control.js?v={{v:control.js}}"></script>
 {{assistantScript}}
 </body>
 </html>

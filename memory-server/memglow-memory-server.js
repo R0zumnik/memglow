@@ -184,7 +184,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
     const m = /^(?:\[?([^\]]*)\]?:)?(\d+)$/.exec(o.listen.trim());
     if (!m) { process.stderr.write(`memglow-memory-server: bad --listen "${o.listen}" (expected HOST:PORT)\n`); return 2; }
     const host = m[1] || "127.0.0.1", port = Number(m[2]);
-    const server = createHttpServer({ rpc: srv.rpc, store: srv.store, log, allowOrigins: o.allowOrigins, token: o.token });
+    const server = createHttpServer({ rpc: srv.rpc, store: srv.store, log, allowOrigins: o.allowOrigins, token: o.token, readOnly: o.readOnly });
     server.once("error", (e) => { process.stderr.write(`memglow-memory-server: cannot listen on ${host}:${port}: ${e.message}\n`); srv.close(); process.exit(1); });
     server.listen(port, host, () => log(`memglow memory server: listening on http://${host}:${server.address().port}/mcp`));
     // Writes in progress finish first (at most 10 s), so a stop never leaves a half-done edit

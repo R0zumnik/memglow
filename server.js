@@ -41,6 +41,7 @@ const STATIC = {
   "/cost.js": ["cost.js", "text/javascript; charset=utf-8"],
   "/zones.js": ["zones.js", "text/javascript; charset=utf-8"],
   "/setup.js": ["setup.js", "text/javascript; charset=utf-8"],
+  "/control.js": ["control.js", "text/javascript; charset=utf-8"],
   "/i18n.js": ["i18n.js", "text/javascript; charset=utf-8"],
   "/vendor/memglow-graph.js": ["vendor/memglow-graph.js", "text/javascript; charset=utf-8"],
   ...Object.fromEntries(I18N_LANGS.map((code) => [`/i18n/${code}.json`, [`i18n/${code}.json`, "application/json; charset=utf-8"]])),
@@ -459,7 +460,12 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       done(body);
     });
   }
-  const setupNow = (req) => setupLib.publicSetup({ config, saved: setupStore.read(), env: runEnv, dataDir, memglowHome, req, usage });
+  const setupNow = (req, memoryServer) => setupLib.publicSetup({
+    config, saved: setupStore.read(), env: runEnv, dataDir, memglowHome, req, usage,
+    maintenanceGeneratedAt: maintenanceStore.read().generatedAt, memoryServer,
+  });
+  /** Settings → Control's optional memory-server health check (0.4.7.2): short timeout, never throws. */
+  const memoryServerNow = () => setupLib.memoryServerStatus({ url: runEnv.MEMGLOW_MEMORY_URL, fetchImpl }).catch(() => ({ configured: false }));
   /** Hosts a key may be sent to, per provider, with the settings in effect now. */
   const destinations = () => Object.fromEntries(setupLib.PROVIDER_IDS.map((id) => {
     const row = setupLib.publicSetup({ config, saved: {}, env: runEnv, dataDir, memglowHome, req: null }).assistant.providers.find((x) => x.id === id);
@@ -749,7 +755,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       return json(res, 200, { ...z, themes: zonesLib.overview(config, memory.costNotes(), z.labels) });
     }
     if (p === "/api/view") return json(res, 200, view.publicView(views.read()));
-    if (p === "/api/setup") return json(res, 200, setupNow(req));
+    if (p === "/api/setup") { memoryServerNow().then((ms) => json(res, 200, setupNow(req, ms))); return; }
     if (p.startsWith("/api/note/")) {
       const n = memory.note(decodeURIComponent(p.slice("/api/note/".length)), { withBody: config.showBodies });
       return n ? json(res, 200, n) : json(res, 404, { error: "not found" });

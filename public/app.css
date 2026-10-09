@@ -770,6 +770,28 @@ a { color: var(--bn-accent-teal); }
 .mg-setup__rules-preview { width: 100%; }
 .mg-setup__rules-preview summary { cursor: pointer; font-size: 12px; color: var(--bn-ink-dim); }
 .mg-setup__rules-preview .mg-setup__code { max-height: 220px; overflow: auto; }
+
+/* ---- Settings → Control panel (public/control.js) ---- */
+.mg-control { grid-column: 1 / -1; }
+.mg-control__section { margin: 0 0 var(--bn-space-3); padding: var(--bn-space-2) var(--bn-space-3); border: 1px solid var(--bn-line); border-radius: 12px; background: var(--bn-surface-well); }
+.mg-control__section h3 { margin: 0 0 6px; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--bn-ink-dim); }
+.mg-control__levers { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.mg-control__lever { padding: 4px 0; border-top: 1px solid var(--bn-line); }
+.mg-control__lever:first-child { border-top: 0; }
+.mg-control__leverhead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.mg-control__leverhead code { color: var(--bn-ink); }
+.mg-control__badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--bn-chip-bg); color: var(--bn-ink-dim); }
+.mg-control__badge--on { color: var(--bn-accent-teal); }
+.mg-control__source, .mg-control__lock { font-size: 11px; color: var(--bn-ink-dim); }
+.mg-control__help { margin: 2px 0 0; font-size: 12px; color: var(--bn-ink-dim); overflow-wrap: anywhere; }
+.mg-control__advanced { margin-top: 8px; }
+.mg-control__advanced summary { cursor: pointer; font-size: 12px; color: var(--bn-ink-dim); }
+.mg-control__line { margin: 4px 0; font-size: 13px; color: var(--bn-ink); overflow-wrap: anywhere; }
+.mg-control__line--bad { color: #FFB86B; }
+.mg-control__subhead { margin: 8px 0 2px; font-size: 12px; color: var(--bn-ink-dim); }
+.mg-control__clients { list-style: none; margin: 0; padding: 0; font-size: 12px; color: var(--bn-ink); }
+.mg-control__status { margin: 4px 0 0; font-size: 12px; color: var(--bn-ink-dim); }
+.mg-control__status--bad { color: #FFB86B; }
 /* Phone: one column, full-width fields and buttons, 16 px text in the fields (no zoom on focus in
    iOS Safari), 40 px touch targets. After the rules above so it wins. */
 @media (max-width: 640px) {

@@ -1693,3 +1693,48 @@ test("duplicateHint (opt-in): the same note is never hinted twice in one session
     assert.strictEqual(r.length, 2, "a new session hints it again");
   } finally { await c2.close(); fs.rmSync(fx2.root, { recursive: true, force: true }); }
 });
+
+// ---------------------------------------------------------------------------------------------
+// Control panel (0.4.7.2): proxyControl() — read-only lever sources for Settings → Control.
+
+test("proxyControl: default / file / env sources, envLocked, day1 flag, and the largeNoteTokens/indexWarningTokens caps", () => {
+  const fx = makeNotes();
+  // Default everywhere.
+  const def = L.proxyControl({ MEMGLOW_HOME: fx.home }, fx.root);
+  const sizeWarning = def.levers.find((x) => x.key === "sizeWarning");
+  assert.deepStrictEqual(sizeWarning, { key: "sizeWarning", value: true, source: "default", envLocked: false, day1: true });
+  const dedupe = def.levers.find((x) => x.key === "dedupe");
+  assert.deepStrictEqual(dedupe, { key: "dedupe", value: false, source: "default", envLocked: false, day1: false });
+  const largeNoteTokens = def.caps.find((x) => x.key === "largeNoteTokens");
+  assert.strictEqual(largeNoteTokens.value, 5000);
+  assert.strictEqual(largeNoteTokens.source, "default");
+
+  // File (memglow.config.json): proxy.dedupe + largeNoteTokens.
+  fs.writeFileSync(path.join(fx.home, "memglow.config.json"), JSON.stringify({ largeNoteTokens: 3000, proxy: { dedupe: true } }));
+  const file = L.proxyControl({ MEMGLOW_HOME: fx.home }, fx.root);
+  assert.strictEqual(file.levers.find((x) => x.key === "dedupe").source, "file");
+  assert.strictEqual(file.levers.find((x) => x.key === "dedupe").value, true);
+  assert.strictEqual(file.caps.find((x) => x.key === "largeNoteTokens").source, "file");
+
+  // Env wins over the file, and locks the lever.
+  const env = L.proxyControl({ MEMGLOW_HOME: fx.home, MEMGLOW_PROXY_DEDUPE: "0", MEMGLOW_LARGE_NOTE_TOKENS: "9000" }, fx.root);
+  const dedupeEnv = env.levers.find((x) => x.key === "dedupe");
+  assert.deepStrictEqual(dedupeEnv, { key: "dedupe", value: false, source: "env", envLocked: true, day1: false });
+  const largeEnv = env.caps.find((x) => x.key === "largeNoteTokens");
+  assert.strictEqual(largeEnv.value, 9000);
+  assert.strictEqual(largeEnv.source, "env");
+  assert.strictEqual(largeEnv.envLocked, true);
+
+  // Page (setup.json "tuning"/"proxy") beats the file.
+  fs.mkdirSync(fx.data, { recursive: true });
+  fs.writeFileSync(path.join(fx.data, "setup.json"), JSON.stringify({ tuning: { largeNoteTokens: 4000 }, proxy: { dedupe: false } }));
+  const page = L.proxyControl({ MEMGLOW_HOME: fx.home, MEMGLOW_DATA_DIR: fx.data }, fx.root);
+  assert.strictEqual(page.caps.find((x) => x.key === "largeNoteTokens").source, "page");
+  assert.strictEqual(page.caps.find((x) => x.key === "largeNoteTokens").value, 4000);
+  assert.strictEqual(page.levers.find((x) => x.key === "dedupe").source, "page");
+  assert.strictEqual(page.levers.find((x) => x.key === "dedupe").value, false);
+
+  // Day-one levers are exactly the ones the task names.
+  const day1 = def.levers.filter((x) => x.day1).map((x) => x.key).sort();
+  assert.deepStrictEqual(day1, ["aliases", "indexWarning", "learnAliases", "multiQuery", "sizeWarning"]);
+});

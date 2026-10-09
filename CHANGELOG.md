@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.4.7.2 — internal (not published)
+
+"Settings / control panel, step 2: read-only control panel." A new Settings → Control tile shows,
+all read-only for now: every MCP proxy lever's current value and where it comes from (environment
+variable / Settings page / memglow.config.json / built-in default), the last memory-maintenance
+scan, an optional memory server's health, and a few measurements. Nothing here can be changed yet
+(0.4.7.3 adds the switches) — this step is only about SEEING the truth consistently.
+
+### Added
+
+- **`lib/proxy-levers.js`**: `proxyControl(env, cwd)` → `{ levers: [{ key, value, source, envLocked,
+  day1 }], caps: [{ key, value, source, envLocked, min, max }], dataDir }` for the 16 lever
+  booleans (`LEVER_META`, with `day1: true` for the five day-one levers — sizeWarning, multiQuery,
+  aliases, learnAliases, indexWarning) and two integer caps (`LEVER_INT_CAPS`: largeNoteTokens,
+  indexWarningTokens). `proxyConfig()` itself now ALSO resolves every lever boolean through the
+  page's saved `<dataDir>/setup.json` "proxy" section (env > page > file > default — `lib/defaults.js`
+  `resolveBool`, mirroring `resolveInt`), so "value" and "source" can never drift apart even though
+  nothing can save to that section until 0.4.7.3 (it reads as `{}` until then, a pure no-op).
+- **`lib/defaults.js`**: `resolveBool(envVal, pageVal, fileVal, def)` and `readSavedProxy(dataDir)`
+  (the "proxy" section of setup.json, read-only, {} until 0.4.7.3 can write it).
+- **`lib/setup.js`**: `memoryServerStatus({ url, fetchImpl, timeoutMs })` — an optional
+  `MEMGLOW_MEMORY_URL`'s own `GET /healthz`, 2 s timeout, never throws, never a secret:
+  `{ configured, ok, readOnly, tokenRequired, version, notes }` or `{ configured: false }` when
+  unset. `publicSetup()` gains `control: { proxy, maintenance: { generatedAt }, memoryServer,
+  proxySeen }` (the last field stays `null` until 0.4.7.5 wires it up).
+- **`memory-server/http.js`**: `GET /healthz` now also answers `readOnly` and `tokenRequired`
+  (booleans only — never the token itself, never any other start-up flag), threaded from
+  `memglow-memory-server.js`'s own `--read-write`/`--token`.
+- **`server.js`**: `setupNow()` includes the last maintenance scan's `generatedAt`; `GET /api/setup`
+  awaits an optional memory-server health check (short timeout, never blocks on a slow/absent one
+  past that timeout).
+- **`public/control.js`** (new) + a new "Control panel" tile in `public/index.html`
+  (`#mg-control`, opened from the gear menu's new "Control" button): four read-only sections —
+  Token savings (day-one levers, the rest under "Advanced", each with its one-line help text, its
+  on/off value and its source), Memory maintenance (last scan + opportunity count), Memory server
+  (health, or "not configured"), Measures (by-AI-tool tokens from `/api/cost`, and the proxy-seen
+  line — "not reported in yet" until 0.4.7.5). Never shows a secret, a disk path, a tool-mapping
+  table or any of the memory server's own start-up flags.
+- i18n: `settings.control`, 29 `control.*` keys, 16 `control.lever.*` one-line help texts (from the
+  lever descriptions at the top of `lib/proxy-levers.js`), and `common.hoursAgo`/`minutesAgo`/
+  `secondsAgo` (finer-grained than the existing `common.daysAgo`, for the proxy-seen badge) — all 8
+  languages.
+
+### Tests
+
+- `test/mcp-proxy-levers.test.js`: `proxyControl()` — default/file/env/page sources, envLocked,
+  the day-one list, the largeNoteTokens/indexWarningTokens caps.
+- `test/setup.test.js`: `memoryServerStatus()` (not configured, unreachable, a fake `/healthz`
+  with a secret-looking field that must never surface), and `GET /api/setup`'s `control` key end
+  to end (default sources, an env-locked lever, a page-saved tuning value reflected as "page").
+- `test/i18n.test.js`: `control.js`'s `EN_CONTROL` fallback added to the "matches en.json exactly"
+  and "every page language" checks; a new assertion that `controlRender()` routes every section
+  through `T()` (lever names themselves are never translated).
+
 ## 0.4.7.1 — internal (not published)
 
 "Settings / control panel, step 1: single source of truth for config." Start of 0.4.7 ("the

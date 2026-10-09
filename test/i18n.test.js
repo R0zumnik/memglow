@@ -15,6 +15,7 @@ const costPage = require("../public/cost.js");
 const aiPage = require("../public/assistant.js");
 const zonesPage = require("../public/zones.js");
 const setupPage = require("../public/setup.js");
+const controlPage = require("../public/control.js");
 
 const PUBLIC = path.join(__dirname, "..", "public");
 const LANGS = ["en", "fr", "de", "es", "pt-BR", "ja", "ko", "zh-CN"];
@@ -160,7 +161,7 @@ test("i18n: server.js serves every language file and the loader, with the page's
 
 test("i18n: app.js/cost.js/assistant.js/zones.js English fallbacks match public/i18n/en.json exactly", () => {
   const en = loadLang("en");
-  for (const [name, dict] of [["app.js EN_APP", appPage.EN_APP], ["cost.js EN_COST", costPage.EN_COST], ["assistant.js EN_AI", aiPage.EN_AI], ["zones.js EN_ZONES", zonesPage.EN_ZONES], ["setup.js EN_SETUP", setupPage.EN_SETUP]]) {
+  for (const [name, dict] of [["app.js EN_APP", appPage.EN_APP], ["cost.js EN_COST", costPage.EN_COST], ["assistant.js EN_AI", aiPage.EN_AI], ["zones.js EN_ZONES", zonesPage.EN_ZONES], ["setup.js EN_SETUP", setupPage.EN_SETUP], ["control.js EN_CONTROL", controlPage.EN_CONTROL]]) {
     for (const k of Object.keys(dict)) {
       assert.ok(Object.prototype.hasOwnProperty.call(en, k), `${name}: "${k}" is not a real en.json key`);
       assert.deepStrictEqual(dict[k], en[k], `${name}: "${k}" has drifted from en.json`);
@@ -200,6 +201,20 @@ test("i18n: v0.4 texts go through keys — journal channel, organisation facts, 
   // Assistant: regroup and archive jobs.
   assert.ok(aiPage.aiRenderJob({ id: "j", kind: "archive", state: "running", note: { label: "L" }, chars: 3 }, "X", T).includes("[ai.askingArchive]"));
   assert.ok(aiPage.aiAskForm("rg-1", "L", [], "", "regroup", T).includes("[ai.regroupAskMsg]"));
+  // Control panel: levers, maintenance, memory server and measures sections all go through keys.
+  const ctrl = controlPage.controlRender({
+    setup: { control: {
+      proxy: { levers: [{ key: "sizeWarning", value: true, source: "default", envLocked: false, day1: true }, { key: "dedupe", value: false, source: "env", envLocked: true, env: "MEMGLOW_PROXY_DEDUPE", day1: false }], caps: [] },
+      maintenance: { generatedAt: Date.UTC(2026, 9, 1) }, memoryServer: { configured: true, ok: true, readOnly: true, tokenRequired: false, version: "0.9", notes: 3 },
+      proxySeen: { t: Date.UTC(2026, 9, 1) - 5000, durationMs: 42 },
+    } },
+    maintenance: { items: [{ id: "a" }] },
+    cost: { clientTokens: { byClient: { "claude-code": { tokens: 100, calls: 2 } } } },
+  }, T);
+  for (const k of ["control.sectionSavings", "control.on", "control.locked", "control.sectionMaintenance", "control.maintenanceItems:1", "control.sectionMemoryServer", "control.memoryServerOk", "control.sectionMeasures", "control.proxySeen", "control.byClientTitle"]) {
+    assert.ok(ctrl.includes("[" + k), k);
+  }
+  assert.ok(ctrl.includes("sizeWarning") && ctrl.includes("dedupe"), "lever names shown verbatim, never translated");
 });
 
 // ---- numbers and dates in the page language (Intl) ----
@@ -306,7 +321,7 @@ test("i18n: no hardcoded English UI text remains outside the English fallback bl
   for (const phrase of [
     "Loading the graph…", "Settings", "Find a note", "Release all bubbles", "Live activity",
     "What are your big themes?", "Protected groups", "Not now", "Light",
-    "Set up memglow", "AI settings", "First-run setup", "Skip set-up",
+    "Set up memglow", "AI settings", "First-run setup", "Skip set-up", "Control panel",
   ]) {
     let i = index.indexOf(phrase);
     assert.ok(i >= 0, `index.html should still show "${phrase}" as the pre-JS default`);
