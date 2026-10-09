@@ -481,6 +481,32 @@ test("setup: PUT /api/setup { proxy } obeys the same CSRF/rate-limit/body-size g
   } finally { await t.stop(); }
 });
 
+test("setup: control.proxySeen reflects the last channel:\"mcp-proxy\" POST /api/activity, with its durationMs", async () => {
+  const token = "p".repeat(40);
+  const t = await start({ MEMGLOW_TOKEN: token });
+  try {
+    const before = await t.call("/api/setup");
+    assert.strictEqual(before.json.control.proxySeen, null, "nothing reported yet");
+    const r = await t.call("/api/activity", {
+      method: "POST", headers: { authorization: `Bearer ${token}` },
+      body: { type: "read", ids: ["a"], source: "mcp", channel: "mcp-proxy", durationMs: 42 },
+    });
+    assert.strictEqual(r.status, 204);
+    const after = await t.call("/api/setup");
+    assert.ok(after.json.control.proxySeen, "now reported");
+    assert.strictEqual(after.json.control.proxySeen.durationMs, 42);
+    assert.ok(Date.now() - after.json.control.proxySeen.t < 5000);
+    // A hook-channel event (not the proxy) never updates it.
+    const r2 = await t.call("/api/activity", {
+      method: "POST", headers: { authorization: `Bearer ${token}` },
+      body: { type: "read", ids: ["a"], source: "hook", channel: "hook", durationMs: 999 },
+    });
+    assert.strictEqual(r2.status, 204);
+    const after2 = await t.call("/api/setup");
+    assert.strictEqual(after2.json.control.proxySeen.durationMs, 42, "a hook event does not touch proxySeen");
+  } finally { await t.stop(); }
+});
+
 test("setup page: renders every step and AI settings, escapes server text, collects strictly", () => {
   const T = (k, p) => "[" + k + "]" + (p ? JSON.stringify(p) : "");
   const s = {

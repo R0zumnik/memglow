@@ -204,17 +204,26 @@ test("i18n: v0.4 texts go through keys — journal channel, organisation facts, 
   // Control panel: levers, maintenance, memory server and measures sections all go through keys.
   const ctrl = controlPage.controlRender({
     setup: { control: {
-      proxy: { levers: [{ key: "sizeWarning", value: true, source: "default", envLocked: false, day1: true }, { key: "dedupe", value: false, source: "env", envLocked: true, env: "MEMGLOW_PROXY_DEDUPE", day1: false }], caps: [] },
+      proxy: {
+        levers: [{ key: "sizeWarning", value: true, source: "default", envLocked: false, day1: true }, { key: "dedupe", value: false, source: "env", envLocked: true, env: "MEMGLOW_PROXY_DEDUPE", day1: false }],
+        caps: [{ key: "largeNoteTokens", value: 5000, source: "default" }],
+      },
       maintenance: { generatedAt: Date.UTC(2026, 9, 1) }, memoryServer: { configured: true, ok: true, readOnly: true, tokenRequired: false, version: "0.9", notes: 3 },
       proxySeen: { t: Date.UTC(2026, 9, 1) - 5000, durationMs: 42 },
-    } },
+    }, tuning: { maintenanceEveryHours: 24, archiveAfterDays: 105, indexTrimMaxChars: 90, indexWarningTokens: 2000, sessionsPerDay: 5, locked: {} } },
     maintenance: { items: [{ id: "a" }] },
-    cost: { clientTokens: { byClient: { "claude-code": { tokens: 100, calls: 2 } } } },
+    cost: { clientTokens: { byClient: { "claude-code": { tokens: 100, calls: 2 } }, byLever: { dedupe: { tokens: 50, calls: 1 } } } },
   }, T);
-  for (const k of ["control.sectionSavings", "control.locked", "control.sectionMaintenance", "control.maintenanceItems:1", "control.sectionMemoryServer", "control.memoryServerOk", "control.sectionMeasures", "control.proxySeen", "control.byClientTitle", "aiset.save"]) {
+  for (const k of [
+    "control.sectionSavings", "control.locked", "control.sectionMaintenance", "control.maintenanceItems:1",
+    "control.sectionMemoryServer", "control.memoryServerOk", "control.sectionMeasures", "control.proxySeen",
+    "control.byClientTitle", "control.byLeverTitle", "control.runNow", "control.maintEveryHoursLabel",
+    "control.archiveAfterDaysLabel", "control.indexTrimMaxCharsLabel", "control.indexWarningTokensLabel",
+    "control.sessionsPerDayLabel", "aiset.save",
+  ]) {
     assert.ok(ctrl.includes("[" + k), k);
   }
-  assert.ok(ctrl.includes("sizeWarning") && ctrl.includes("dedupe"), "lever names shown verbatim, never translated");
+  assert.ok(ctrl.includes("sizeWarning") && ctrl.includes("dedupe") && ctrl.includes("largeNoteTokens"), "lever/cap names shown verbatim, never translated");
 });
 
 // ---- numbers and dates in the page language (Intl) ----

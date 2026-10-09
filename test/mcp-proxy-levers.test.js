@@ -398,9 +398,35 @@ test("readClientSavings: sums `clients` across the window, ignores other days an
     },
   }));
   const r = L.readClientSavings(dir, { now, windowDays: 7 });
-  assert.deepStrictEqual(r, { days: 7, byClient: { "claude-code": { tokens: 150, calls: 3 }, cursor: { tokens: 10, calls: 1 } } });
+  assert.deepStrictEqual(r, { days: 7, byClient: { "claude-code": { tokens: 150, calls: 3 }, cursor: { tokens: 10, calls: 1 } }, byLever: {} });
   assert.strictEqual(L.readClientSavings(null), null, "no data folder at all: null, not a throw");
-  assert.deepStrictEqual(L.readClientSavings(path.join(dir, "does-not-exist")), { days: 7, byClient: {} }, "unreadable file: empty, still valid");
+  assert.deepStrictEqual(L.readClientSavings(path.join(dir, "does-not-exist")), { days: 7, byClient: {}, byLever: {} }, "unreadable file: empty, still valid");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("readClientSavings: byLever sums dedupe/toc/alreadyLoaded/deltaRead across the window, independent of `clients` presence", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-readlevers-"));
+  const now = Date.UTC(2026, 9, 2, 12, 0, 0);
+  const today = new Date(now).toISOString().slice(0, 10);
+  const yesterday = new Date(now - 86400000).toISOString().slice(0, 10);
+  const tooOld = new Date(now - 30 * 86400000).toISOString().slice(0, 10);
+  fs.writeFileSync(path.join(dir, "proxy-savings.json"), JSON.stringify({
+    version: 1,
+    days: {
+      // No `clients` key at all this day: lever figures must still count.
+      [today]: { dedupe: 300, dedupeCalls: 3, toc: 50, tocCalls: 1 },
+      [yesterday]: { dedupe: 100, dedupeCalls: 1, alreadyLoaded: 20, alreadyLoadedCalls: 2, clients: { "claude-code": { tokens: 5, calls: 1 } } },
+      [tooOld]: { dedupe: 99999, dedupeCalls: 99 }, // outside the window: ignored
+      "not-a-day": { dedupe: "nope" }, // malformed: ignored without throwing
+    },
+  }));
+  const r = L.readClientSavings(dir, { now, windowDays: 7 });
+  assert.deepStrictEqual(r.byLever, {
+    dedupe: { tokens: 400, calls: 4 },
+    toc: { tokens: 50, calls: 1 },
+    alreadyLoaded: { tokens: 20, calls: 2 },
+  });
+  assert.deepStrictEqual(r.byClient, { "claude-code": { tokens: 5, calls: 1 } });
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

@@ -54,6 +54,7 @@ var EN_CONTROL = {
   "control.memoryServerTokenNo": "no token required",
   "control.measuresEmpty": "No measurements yet.",
   "control.byClientTitle": "By AI tool (7 days)",
+  "control.byLeverTitle": "By lever (7 days)",
   "control.proxySeen": "MCP proxy last seen {ago} ({ms} ms)",
   "control.proxyNeverSeen": "The MCP proxy has not reported in yet.",
   "control.lever.sizeWarning": "Warn when a note being read (or just written) is over the large-note threshold.",
@@ -255,10 +256,19 @@ function controlRenderMeasures(clientTokens, proxySeen, now, T) {
   out += '<p class="mg-control__line">' + (proxySeen ? cEsc(T("control.proxySeen", { ago: controlAgo((now || Date.now()) - proxySeen.t, T), ms: proxySeen.durationMs != null ? proxySeen.durationMs : "?" })) : cEsc(T("control.proxyNeverSeen"))) + '</p>';
   var by = (clientTokens && clientTokens.byClient) || {};
   var ids = Object.keys(by);
-  if (!ids.length) { out += '<p class="mg-control__line">' + cEsc(T("control.measuresEmpty")) + '</p>'; return out; }
-  out += '<p class="mg-control__subhead">' + cEsc(T("control.byClientTitle")) + '</p><ul class="mg-control__clients">' +
-    ids.map(function (id) { return '<li>' + cEsc(id) + ': ' + (by[id].tokens || 0) + ' tokens, ' + (by[id].calls || 0) + ' calls</li>'; }).join("") +
-    '</ul>';
+  var byLever = (clientTokens && clientTokens.byLever) || {};
+  var leverIds = Object.keys(byLever);
+  if (!ids.length && !leverIds.length) { out += '<p class="mg-control__line">' + cEsc(T("control.measuresEmpty")) + '</p>'; return out; }
+  if (ids.length) {
+    out += '<p class="mg-control__subhead">' + cEsc(T("control.byClientTitle")) + '</p><ul class="mg-control__clients">' +
+      ids.map(function (id) { return '<li>' + cEsc(id) + ': ' + (by[id].tokens || 0) + ' tokens, ' + (by[id].calls || 0) + ' calls</li>'; }).join("") +
+      '</ul>';
+  }
+  if (leverIds.length) {
+    out += '<p class="mg-control__subhead">' + cEsc(T("control.byLeverTitle")) + '</p><ul class="mg-control__clients">' +
+      leverIds.map(function (k) { return '<li><code>' + cEsc(k) + '</code>: ' + (byLever[k].tokens || 0) + ' tokens, ' + (byLever[k].calls || 0) + ' calls</li>'; }).join("") +
+      '</ul>';
+  }
   return out;
 }
 

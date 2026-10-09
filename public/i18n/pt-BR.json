@@ -498,5 +498,6 @@
   "control.indexWarningTokensLabel": "O próprio índice está grande demais acima de (tokens)",
   "control.sessionsPerDayLabel": "Sessões por dia (quando os contadores de atividade não conseguem saber)",
   "control.runNow": "Executar agora",
-  "control.ranNow": "Análise concluída: {n} item(ns) encontrado(s)."
+  "control.ranNow": "Análise concluída: {n} item(ns) encontrado(s).",
+  "control.byLeverTitle": "Por chave (7 dias)"
 }

@@ -499,5 +499,6 @@
   "control.indexWarningTokensLabel": "The index itself is too large above (tokens)",
   "control.sessionsPerDayLabel": "Sessions per day (when activity counters cannot tell)",
   "control.runNow": "Run now",
-  "control.ranNow": "Scan complete: {n} item(s) found."
+  "control.ranNow": "Scan complete: {n} item(s) found.",
+  "control.byLeverTitle": "By lever (7 days)"
 }

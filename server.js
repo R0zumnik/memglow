@@ -182,6 +182,11 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
   for (const [url, [file]] of Object.entries(statics)) {
     fingerprints[url] = crypto.createHash("sha1").update(fs.readFileSync(path.join(PUBLIC, file))).digest("hex").slice(0, 10);
   }
+  // 0.4.7.5 (Settings → Control, "Mesures"): the last channel:"mcp-proxy" activity event — a live,
+  // in-memory signal only (never persisted: "proxy seen" is about whether one is running RIGHT
+  // NOW, not a history). `{ t, durationMs }`, `durationMs` possibly null when the proxy did not
+  // report one.
+  let proxySeen = null;
   let streams = 0, assistStreams = 0;
   let postWindow = 0, postsInWindow = 0;
   function assistRateOk() {
@@ -462,7 +467,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
   }
   const setupNow = (req, memoryServer) => setupLib.publicSetup({
     config, saved: setupStore.read(), env: runEnv, dataDir, memglowHome, req, usage,
-    maintenanceGeneratedAt: maintenanceStore.read().generatedAt, memoryServer,
+    maintenanceGeneratedAt: maintenanceStore.read().generatedAt, memoryServer, proxySeen,
   });
   /** Settings → Control's optional memory-server health check (0.4.7.2): short timeout, never throws. */
   const memoryServerNow = () => setupLib.memoryServerStatus({ url: runEnv.MEMGLOW_MEMORY_URL, fetchImpl }).catch(() => ({ configured: false }));
@@ -506,6 +511,9 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
           if (r.ok || r.who.type === "search") findTime.add({ ...r.who, ids: r.ok ? r.ids : [] });
           const ms = cleanDuration(body.durationMs);
           if (ms != null) engineSpeed.add({ type: r.who.type, ms, t: r.who.t });
+          // 0.4.7.5: "proxy seen" — any accepted-or-unknown event the proxy itself marked with
+          // its own channel, whatever its type (read/search/write).
+          if (r.who.channel === "mcp-proxy") proxySeen = { t: r.who.t, durationMs: ms };
         }
         headers(res);
         res.statusCode = r.ok ? 204 : r.reason === "rate" ? 429 : 202;

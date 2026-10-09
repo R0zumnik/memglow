@@ -498,5 +498,6 @@
   "control.indexWarningTokensLabel": "Der Index selbst ist zu groß ab (Token)",
   "control.sessionsPerDayLabel": "Sitzungen pro Tag (wenn die Aktivitätszähler es nicht wissen können)",
   "control.runNow": "Jetzt ausführen",
-  "control.ranNow": "Scan abgeschlossen: {n} Eintrag/Einträge gefunden."
+  "control.ranNow": "Scan abgeschlossen: {n} Eintrag/Einträge gefunden.",
+  "control.byLeverTitle": "Nach Hebel (7 Tage)"
 }

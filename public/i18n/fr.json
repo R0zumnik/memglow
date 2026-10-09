@@ -498,5 +498,6 @@
   "control.indexWarningTokensLabel": "L’index lui-même est trop grand au-delà de (jetons)",
   "control.sessionsPerDayLabel": "Sessions par jour (quand les compteurs d’activité ne peuvent pas le dire)",
   "control.runNow": "Lancer maintenant",
-  "control.ranNow": "Analyse terminée : {n} élément(s) trouvé(s)."
+  "control.ranNow": "Analyse terminée : {n} élément(s) trouvé(s).",
+  "control.byLeverTitle": "Par levier (7 jours)"
 }

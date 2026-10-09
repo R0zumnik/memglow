@@ -202,14 +202,17 @@ test("server: /api/cost exposes the MCP proxy's per-client token accounting (cou
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
     const before = await (await fetch(base + "/api/cost")).json();
-    assert.deepStrictEqual(before.clientTokens, { days: 7, byClient: {} }, "no proxy-savings.json yet: empty, not missing");
+    assert.deepStrictEqual(before.clientTokens, { days: 7, byClient: {}, byLever: {} }, "no proxy-savings.json yet: empty, not missing");
 
     const today = new Date().toISOString().slice(0, 10);
     fs.writeFileSync(path.join(dataDir, "proxy-savings.json"), JSON.stringify({
-      version: 1, days: { [today]: { clients: { "claude-code": { tokens: 1234, calls: 5 }, cursor: { tokens: 6, calls: 1 } } } },
+      version: 1, days: { [today]: { clients: { "claude-code": { tokens: 1234, calls: 5 }, cursor: { tokens: 6, calls: 1 } }, dedupe: 400, dedupeCalls: 4 } },
     }));
     const after = await (await fetch(base + "/api/cost")).json();
-    assert.deepStrictEqual(after.clientTokens, { days: 7, byClient: { "claude-code": { tokens: 1234, calls: 5 }, cursor: { tokens: 6, calls: 1 } } });
+    assert.deepStrictEqual(after.clientTokens, {
+      days: 7, byClient: { "claude-code": { tokens: 1234, calls: 5 }, cursor: { tokens: 6, calls: 1 } },
+      byLever: { dedupe: { tokens: 400, calls: 4 } },
+    });
   } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 

@@ -498,5 +498,6 @@
   "control.indexWarningTokensLabel": "索引自体がこのしきい値（トークン）を超えると大きすぎると判定",
   "control.sessionsPerDayLabel": "1日あたりのセッション数（活動カウンターで判断できない場合）",
   "control.runNow": "今すぐ実行",
-  "control.ranNow": "スキャン完了: {n} 件の改善点が見つかりました。"
+  "control.ranNow": "スキャン完了: {n} 件の改善点が見つかりました。",
+  "control.byLeverTitle": "レバー別（7日間）"
 }

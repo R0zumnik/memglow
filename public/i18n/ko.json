@@ -498,5 +498,6 @@
   "control.indexWarningTokensLabel": "색인 자체가 이 기준(토큰)을 넘으면 너무 큼",
   "control.sessionsPerDayLabel": "하루 세션 수 (활동 카운터로 알 수 없을 때)",
   "control.runNow": "지금 실행",
-  "control.ranNow": "스캔 완료: {n}개 항목을 찾았습니다."
+  "control.ranNow": "스캔 완료: {n}개 항목을 찾았습니다.",
+  "control.byLeverTitle": "레버별 (7일)"
 }

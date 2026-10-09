@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.7.5 — internal (not published)
+
+"Settings / control panel, step 5: proxy present + per-lever savings." The Control panel's
+"Measures" section now shows a live "MCP proxy last seen X ago (N ms)" badge, and the per-lever
+token savings (`dedupe`/`toc`/`alreadyLoaded`/`deltaRead`) alongside the existing per-AI-tool
+figures — both already written to `proxy-savings.json` by `lib/proxy-levers.js`'s own
+`createSavings`, but never read back until now.
+
+### Added
+
+- **`server.js`**: an in-memory `proxySeen = { t, durationMs }`, updated from `POST
+  /api/activity` whenever an accepted (or "unknown", e.g. a missed search) event carries
+  `channel: "mcp-proxy"` — never persisted (a live "is one running right now" signal, not a
+  history); fed into `publicSetup()`'s `control.proxySeen`.
+- **`lib/proxy-levers.js`**: `readClientSavings()` now also returns `byLever` — the SAME
+  `proxy-savings.json` the per-AI-tool figures already come from, summed over the window, one
+  entry per lever that has ever saved tokens. A day missing `clients` entirely still contributes
+  its lever figures (the two were always independent writes).
+- **`public/control.js`**: "Measures" shows the proxy-seen badge (already partly wired in
+  0.4.7.2) with "ago" at second/minute/hour/day granularity, and a new "By lever" list next to
+  "By AI tool".
+- i18n: `control.byLeverTitle`, all 8 languages (the badge and "by AI tool" strings already
+  shipped in 0.4.7.2).
+
+### Tests
+
+- `test/mcp-proxy-levers.test.js`: `readClientSavings().byLever` — summed across the window,
+  independent of `clients` presence, outside-window days ignored, malformed entries dropped.
+- `test/setup.test.js`: `control.proxySeen` end to end — `null` until a real `channel:"mcp-proxy"`
+  `POST /api/activity`, then reflects `t`/`durationMs`; a `channel:"hook"` event never touches it.
+- `test/speed.test.js`: `/api/cost`'s `clientTokens` now carries `byLever` too (updated the two
+  existing exact-shape assertions this added field changed).
+
 ## 0.4.7.4 — internal (not published)
 
 "Settings / control panel, step 4: maintenance tuning." The Control panel's "Memory maintenance"
