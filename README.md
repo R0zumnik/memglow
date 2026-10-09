@@ -874,7 +874,10 @@ measured this way — your own notes, query mix and hardware will differ.
 
 - **Read tools**: `search_notes`, `read_note`, `read_content`, `view_note`,
   `build_context`, `recent_activity`, `list_directory`, `list_memory_projects`,
-  `list_workspaces`, `search` / `fetch`, `basic_memory_diagnostics`. `schema_*`,
+  `list_workspaces`, `search` / `fetch`, `basic_memory_diagnostics`. `read_content` serves text
+  and image files only (`.md .txt .json .csv .yaml .yml .png .jpg .jpeg .gif .webp .svg .pdf`,
+  since 0.4.9.1); `--serve-files any` (or `MEMGLOW_MEMORY_SERVE_FILES=any`) serves any regular
+  file under the root, as before. `schema_*`,
   `create_memory_project` and `delete_project` answer "not supported".
 - **Write tools — only with `--read-write`** (or `MEMGLOW_MEMORY_READ_WRITE=1`; `--read-only`
   always wins). Without it they answer `memglow memory server: read-only (phase A / shadow mode)`.
@@ -907,7 +910,9 @@ measured this way — your own notes, query mix and hardware will differ.
   folder fsync — a crash leaves the old file; `--no-fsync` for very slow disks); a file changed
   on disk during an edit is re-read and the edit redone; a new note never replaces a file that
   appeared meanwhile; the index is updated by the write itself (the next read sees it, the watcher
-  re-reads nothing). Files keep their mode (`--file-mode 0664` to force one); running as root,
+  re-reads nothing). Files keep their mode, and a new note file gets `0660` (since 0.4.9.1; it
+  used to get `0666` minus the umask, usually world-readable — `--file-mode 0664` to force a mode
+  on every file written); its group still comes from the folder. Running as root,
   new files and folders take the owner of the folder they are created in (a container running as
   root keeps the share's owner, e.g. 1045:100 on a Synology). Names differing only by Unicode normalisation (NFD
   from a Mac over SMB) reuse the existing folder or file instead of creating a twin.

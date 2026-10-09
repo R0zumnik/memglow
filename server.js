@@ -519,7 +519,18 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
   }));
 
   const httpServer = http.createServer((req, res) => {
-    const url = new URL(req.url, "http://localhost");
+    // 0.4.9.1 (S2): nothing a client sends may take the viewer down — a request the handler
+    // cannot cope with is answered (400/500), never thrown out of this callback.
+    try { route(req, res); }
+    catch (e) {
+      console.error("[memglow] request failed:", e && e.message);
+      try { if (!res.headersSent) json(res, 500, { error: "internal error" }); else res.destroy(); } catch { /* socket gone */ }
+    }
+  });
+  function route(req, res) {
+    let url;
+    try { url = new URL(req.url, "http://localhost"); }
+    catch { return json(res, 400, { error: "bad request-target" }); }
     const p = url.pathname;
     const assistant = assistantNow();
 
@@ -830,7 +841,10 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
     if (p === "/api/view") return json(res, 200, view.publicView(views.read()));
     if (p === "/api/setup") return json(res, 200, setupNow(req, memoryServerNow()));
     if (p.startsWith("/api/note/")) {
-      const n = memory.note(decodeURIComponent(p.slice("/api/note/".length)), { withBody: config.showBodies });
+      let id;
+      try { id = decodeURIComponent(p.slice("/api/note/".length)); }
+      catch { return json(res, 400, { error: "bad note id" }); }
+      const n = memory.note(id, { withBody: config.showBodies });
       return n ? json(res, 200, n) : json(res, 404, { error: "not found" });
     }
     if (p === "/api/stream") {
@@ -847,7 +861,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       return;
     }
     return notFound(res);
-  });
+  }
   // Real deployments (main(), below) start the scheduler right away ("runs ... at start"); a
   // caller that only uses createServer() directly (every Node test) gets it lazily instead, the
   // first time GET /api/maintenance is actually requested.
@@ -877,6 +891,9 @@ function withInstalledDefaults(env = process.env, cwd = process.cwd()) {
 }
 
 function main(env = process.env) {
+  // 0.4.9.1 (S2): last line of defence — an error escaping a handler is logged, not fatal.
+  process.on("uncaughtException", (e) => { try { console.error("[memglow] unexpected error (kept running):", e && e.stack || e); } catch { /* ignore */ } });
+  process.on("unhandledRejection", (e) => { try { console.error("[memglow] unhandled rejection (kept running):", e && e.stack || e); } catch { /* ignore */ } });
   const config = loadConfig(withInstalledDefaults(env));
   if (!fs.existsSync(config.memoryDir)) {
     console.error(`memglow: memory folder not found: ${config.memoryDir}\nRun \`memglow init\`, or set MEMORY_DIR to a folder of Markdown notes (try MEMORY_DIR=./demo/memory).`);

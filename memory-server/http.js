@@ -240,4 +240,4 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
   return server;
 }
 
-module.exports = { createHttpServer, wantsSseOnly, sessionKeyFor };
+module.exports = { createHttpServer, wantsSseOnly, sessionKeyFor, connKey };

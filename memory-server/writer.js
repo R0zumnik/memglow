@@ -46,7 +46,11 @@ class WriteError extends Error {
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }); // keeps a BOM: it is written back
 const isRoot = () => typeof process.getuid === "function" && process.getuid() === 0;
 
-function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 * 1024 * 1024, onWrite = "", onWriteDelayMs = 10000, log = () => {}, hooks = {}, chownToParent = isRoot() }) {
+// 0.4.9.1 (S8): the mode of a NEW note file when no --file-mode is given (was 0666 & ~umask, i.e.
+// usually world-readable). The group still comes from the folder (setgid / chown as root).
+const NEW_FILE_MODE = 0o660;
+
+function createWriter({ store, fsync = true, fileMode = null, newFileMode = NEW_FILE_MODE, maxFileBytes = 4 * 1024 * 1024, onWrite = "", onWriteDelayMs = 10000, log = () => {}, hooks = {}, chownToParent = isRoot() }) {
   const root = store.root;
   const realRoot = () => store.realRoot();
   let tail = Promise.resolve();
@@ -194,6 +198,7 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
       if (hooks.afterTmpWrite) await hooks.afterTmpWrite(tmp, abs);
       if (fileMode != null) await fh.chmod(fileMode);
       else if (prev) await fh.chmod(prev.mode & 0o7777);
+      else if (newFileMode != null) await fh.chmod(newFileMode);
       if (chownToParent) {
         try {
           const owner = prev || await fsp.stat(dir);
@@ -390,4 +395,4 @@ function createWriter({ store, fsync = true, fileMode = null, maxFileBytes = 4 *
   };
 }
 
-module.exports = { createWriter, WriteError, ownershipWarning, TEMP_RE };
+module.exports = { createWriter, WriteError, ownershipWarning, TEMP_RE, NEW_FILE_MODE };

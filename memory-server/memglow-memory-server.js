@@ -37,13 +37,16 @@ options:
                   Env MEMGLOW_MEMORY_READ_WRITE=1. Without it the server is read-only.
   --read-only     write tools answer an error (the default; wins over --read-write)
   --file-mode MODE  octal mode for every file written (e.g. 0664; default: an existing file
-                  keeps its mode, a new one gets 0666 minus the umask)
+                  keeps its mode, a new one gets 0660 — group kept from the folder as before)
   --on-write CMD  shell command run after writes (debounced, never blocking a write), in the
                   notes folder, with MEMGLOW_CHANGED_FILES (one path per line) — e.g. a git
                   snapshot script
   --on-write-delay-ms N  quiet time before the on-write command runs (default and minimum 10000)
   --overwrite-default  write_note replaces an existing note when \`overwrite\` is omitted
                   (default: it refuses, like basic-memory)
+  --serve-files text|any  read_content serves only text and image files (.md .txt .json .csv
+                  .yaml .yml .png .jpg .jpeg .gif .webp .svg .pdf) by default; "any" serves any
+                  regular file under the root, as before 0.4.9.1. Env MEMGLOW_MEMORY_SERVE_FILES
   --kebab-filenames  file names of new notes in kebab-case (default: the title as is)
   --update-permalinks-on-move  a moved note's permalink follows its new path (default: kept)
   --no-fsync      do not fsync written files (still atomic; faster on slow disks, but a power
@@ -70,7 +73,8 @@ function parseArgs(argv, env = process.env) {
     readWrite: /^(1|true|yes|on)$/i.test(String(env.MEMGLOW_MEMORY_READ_WRITE || "")), forceReadOnly: false, fileMode: null, onWrite: env.MEMGLOW_MEMORY_ON_WRITE || "", onWriteDelayMs: 10000,
     overwriteDefault: false, kebabFilenames: false, updatePermalinksOnMove: false, fsync: true,
     allowOrigins: String(env.MEMGLOW_MEMORY_ALLOW_ORIGIN || "").split(",").map((x) => x.trim()).filter(Boolean), token: env.MEMGLOW_MEMORY_TOKEN || "",
-    levers: /^(1|true|yes|on)$/i.test(String(env.MEMGLOW_MEMORY_LEVERS || "")), name: "", source: "mcp" };
+    levers: /^(1|true|yes|on)$/i.test(String(env.MEMGLOW_MEMORY_LEVERS || "")), name: "", source: "mcp",
+    serveFiles: String(env.MEMGLOW_MEMORY_SERVE_FILES || "").toLowerCase() === "any" ? "any" : "text" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--root") o.root = argv[++i] || "";
@@ -93,6 +97,10 @@ function parseArgs(argv, env = process.env) {
     else if (a === "--update-permalinks-on-move") o.updatePermalinksOnMove = true;
     else if (a === "--poll-ms") o.pollMs = Math.max(0, Number(argv[++i]) || 0);
     else if (a === "--no-watch") o.watch = false;
+    else if (a === "--serve-files" || a.startsWith("--serve-files=")) {
+      const v = String(a === "--serve-files" ? argv[++i] || "" : a.slice(14)).toLowerCase();
+      if (v === "any" || v === "text") o.serveFiles = v; else o.badServeFiles = v;
+    }
     else if (a === "--allow-origin") o.allowOrigins.push(...String(argv[++i] || "").split(",").map((x) => x.trim()).filter(Boolean));
     else if (a === "--token") o.token = argv[++i] || "";
     else if (a === "--levers") o.levers = true;
@@ -123,7 +131,7 @@ function parseArgs(argv, env = process.env) {
  * dispatcher and `rawRpc` the server's own.
  */
 function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 3000, watch = true, maxFileBytes, log = () => {},
-  fsync = true, cleanupTempsMinAgeMs = 60000, fileMode = null, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne }) {
+  fsync = true, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne }) {
   let tools = null, warmTimer = null;
   // The search index is rebuilt lazily by the next search anyway; warming it after a change is
   // coalesced (a burst of writes costs one rebuild, not one per write).
@@ -141,7 +149,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     const col = store.collisions();
     if (twins.length || col.length) log(`memglow memory server: ${twins.length + col.length} note(s) present under several paths or permalinks (an interrupted move?) — see basic_memory_diagnostics`);
   }
-  tools = createTools({ store, project, readOnly, writer, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
+  tools = createTools({ store, project, readOnly, writer, serveFiles, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
   tools.warm();
   const rawRpc = createRpc({ tools, instructions: readOnly ? INSTRUCTIONS : INSTRUCTIONS_RW });
   const aio = allInOne ? createAllInOne({ rpc: rawRpc, root, log, ...(allInOne === true ? {} : allInOne) }) : null;
@@ -192,12 +200,14 @@ function main(argv = process.argv.slice(2), env = process.env) {
   // Last line of defence: nothing a client sends may take the server down. Every request path
   // already catches its own errors; anything that still escapes is logged, not fatal.
   process.on("uncaughtException", (e) => { try { process.stderr.write("memglow memory server: unexpected error (kept running): " + (e && e.stack || e) + "\n"); } catch { /* ignore */ } });
+  process.on("unhandledRejection", (e) => { try { process.stderr.write("memglow memory server: unhandled rejection (kept running): " + (e && e.stack || e) + "\n"); } catch { /* ignore */ } });
   if (o.unknown) { process.stderr.write(`memglow-memory-server: unknown option(s): ${o.unknown.join(" ")}\n\n${HELP}`); return 2; }
+  if (o.badServeFiles != null) { process.stderr.write(`memglow-memory-server: bad --serve-files "${o.badServeFiles}" (expected text or any)\n`); return 2; }
   if (o.badFileMode != null) { process.stderr.write(`memglow-memory-server: bad --file-mode "${o.badFileMode}" (expected an octal mode such as 0664)\n`); return 2; }
   const root = path.resolve(o.root);
   const t0 = Date.now();
   const srv = createMemoryServer({ root, project: o.project, readOnly: o.readOnly, pollMs: o.pollMs, watch: o.watch, log,
-    fsync: o.fsync, fileMode: o.fileMode, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
+    fsync: o.fsync, fileMode: o.fileMode, serveFiles: o.serveFiles, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
     allInOne: o.levers ? { env, name: o.name || "memglow-memory", source: o.source } : false });
   const st = srv.store.stats();
   log(`memglow memory server ${SERVER_VERSION}: ${st.notes} notes indexed from ${root} in ${Date.now() - t0} ms (project "${o.project}", ${o.readOnly ? "read-only" : "read-write"}${st.watching ? ", watching" : ""})`);

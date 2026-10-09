@@ -48,6 +48,11 @@ const negativeCacheLib = require("../lib/negative-cache");
 const deltaReadLib = require("../lib/delta-read");
 const memoryRules = require("../lib/memory-rules");
 const { StringDecoder } = require("string_decoder");
+const { connKey } = require("../memory-server/http");
+
+// A request body larger than this is refused (413) and its connection dropped — never truncated
+// and relayed (0.4.9.1, S5).
+const MAX_BODY = 10 * 1024 * 1024;
 
 function parseArgs(argv) {
   const o = { name: "", upstream: "", listen: "", source: "mcp", cmd: [] };
@@ -404,6 +409,26 @@ function postJsonRpc(lib, target, baseHeaders, id, params) {
   });
 }
 
+/** A small JSON error answer (the proxy's own, never the upstream's). */
+function sendError(res, status, message, headers = {}) {
+  try {
+    if (res.headersSent) { res.destroy(); return; }
+    const out = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: status === 413 ? -32600 : -32000, message } }), "utf8");
+    res.writeHead(status, { "content-type": "application/json", "content-length": String(out.length), ...headers });
+    res.end(out);
+  } catch { try { res.destroy(); } catch { /* gone */ } }
+}
+
+/**
+ * Stops reading a refused request body: the 413 goes out with "Connection: close", then the
+ * socket is destroyed a moment later (not at once, so the client can still read the answer).
+ */
+function dropSoon(req) {
+  try { req.socket.end(); } catch { /* ignore */ }
+  const t = setTimeout(() => { try { req.destroy(); } catch { /* ignore */ } }, 1000);
+  if (t.unref) t.unref();
+}
+
 function createHttpProxy(o) {
   const up = new URL(o.upstream);
   const lib = up.protocol === "https:" ? https : http;
@@ -411,18 +436,62 @@ function createHttpProxy(o) {
   const lv = o.levers === undefined ? setupLevers(process.env, server) : o.levers; // tests pass their own (or null)
   const rules = setupRules(process.env, o.rules);
   let mqN = 0;
-  return http.createServer((req, res) => {
+  const srv = http.createServer((req, res) => {
+    try { handle(req, res); }
+    catch (e) {
+      try { process.stderr.write("memglow-mcp-proxy: request failed: " + (e && e.message) + "\n"); } catch { /* ignore */ }
+      sendError(res, 500, "memglow-mcp-proxy: internal error");
+    }
+  });
+  function handle(req, res) {
+    // 0.4.9.1 (S1): a malformed request-target (e.g. "http://[::1") is answered 400 — `new URL`
+    // used to throw here, outside any handler, and take the whole proxy down.
+    let incoming;
+    try { incoming = new URL(req.url, "http://x"); }
+    catch { return sendError(res, 400, "memglow-mcp-proxy: bad request-target"); }
     const w = createWatcher({ server, source: o.source, onReport: o.onReport });
-    const sk = String(req.headers["mcp-session-id"] || "default");
+    // 0.4.9.1: the session key. A request carrying an Mcp-Session-Id is keyed by it; one without
+    // (an `initialize`, or a stateless 2026-07-28 request) by its TCP connection — never one
+    // shared "default" session for every client, which gave the memory rules to the first client
+    // only and mixed up lever 7, lever 8's exemption and per-client savings. When the upstream
+    // answers an `initialize` with a new Mcp-Session-Id, that session's state moves under it.
+    const reqSid = req.headers["mcp-session-id"] ? String(req.headers["mcp-session-id"]) : "";
+    let sk = reqSid ? "sid:" + reqSid : connKey(req.socket);
+    const adoptSession = (h) => {
+      const sid = h && h["mcp-session-id"] ? String(h["mcp-session-id"]) : "";
+      if (!sid || reqSid) return;
+      const to = "sid:" + sid;
+      if (to === sk) return;
+      try { if (lv && lv.renameSession) lv.renameSession(sk, to); } catch { /* keep going */ }
+      try { if (rules && rules.renameSession) rules.renameSession(sk, to); } catch { /* keep going */ }
+      sk = to;
+    };
     const chunks = [];
-    let size = 0;
-    req.on("data", (c) => { size += c.length; if (size <= 10 * 1024 * 1024) chunks.push(c); });
+    let size = 0, tooBig = false;
+    const refuse = () => {
+      tooBig = true;
+      chunks.length = 0;
+      req.pause();
+      res.on("finish", () => dropSoon(req));
+      sendError(res, 413, "Request body too large", { connection: "close" });
+    };
+    const declared = Number(req.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > MAX_BODY) return refuse();
+    req.on("error", () => { /* client went away */ });
+    req.on("data", (c) => { if (tooBig) return; size += c.length; if (size > MAX_BODY) refuse(); else chunks.push(c); });
     req.on("end", () => {
+      if (tooBig) return;
+      try { onBody(); }
+      catch (e) {
+        try { process.stderr.write("memglow-mcp-proxy: request failed: " + (e && e.message) + "\n"); } catch { /* ignore */ }
+        sendError(res, 500, "memglow-mcp-proxy: internal error");
+      }
+    });
+    function onBody() {
       let body = Buffer.concat(chunks);
       let parsed;
       if (body.length) { try { parsed = JSON.parse(body.toString("utf8")); } catch { parsed = undefined; /* not JSON */ } }
       const target = new URL(up.href);
-      const incoming = new URL(req.url, "http://x");
       incoming.searchParams.forEach((v, k) => target.searchParams.set(k, v));
       const baseHeaders = hopless(req.headers);
       delete baseHeaders.host; delete baseHeaders["content-length"];
@@ -466,6 +535,7 @@ function createHttpProxy(o) {
       const headers = { ...baseHeaders };
       if (body.length) headers["content-length"] = String(body.length);
       const pr = lib.request(target, { method: req.method, headers }, (ur) => {
+        adoptSession(ur.headers);
         const type = String(ur.headers["content-type"] || "");
         const encoded = !!ur.headers["content-encoding"] && ur.headers["content-encoding"] !== "identity";
         if (wanted && !encoded && (type.includes("json") || type.includes("text/event-stream"))) {
@@ -509,11 +579,16 @@ function createHttpProxy(o) {
       // client went away (e.g. closed an SSE stream): stop the upstream request too
       res.on("close", () => { if (!res.writableFinished) pr.destroy(); });
       pr.end(body);
-    });
-  });
+    }
+  }
+  return srv;
 }
 
 if (require.main === module) {
+  // 0.4.9.1 (S1): last line of defence, as in memglow-memory-server.js — nothing a client sends
+  // may take the proxy down; anything that still escapes a handler is logged, not fatal.
+  process.on("uncaughtException", (e) => { try { process.stderr.write("memglow-mcp-proxy: unexpected error (kept running): " + (e && e.stack || e) + "\n"); } catch { /* ignore */ } });
+  process.on("unhandledRejection", (e) => { try { process.stderr.write("memglow-mcp-proxy: unhandled rejection (kept running): " + (e && e.stack || e) + "\n"); } catch { /* ignore */ } });
   const o = parseArgs(process.argv.slice(2));
   if (o.help) {
     process.stdout.write("usage:\n  memglow-mcp-proxy [--name NAME] -- <memory MCP server command>\n  memglow-mcp-proxy --upstream URL --listen HOST:PORT [--name NAME]\nlevers (v0.4): MEMGLOW_PROXY_SIZE_WARNING, _MULTI_QUERY (default on), _SEARCH_DETAILS, _SUGGESTIONS, MEMGLOW_PROXY_DEDUPE, _TOC, _ARCHIVE_HINT, _HIDE_UNSUPPORTED, _ALREADY_LOADED, _NEGATIVE_CACHE, _INDEX_HINT, _DELTA_READ (default off)\n  or memglow.config.json → \"proxy\": { ... } — see mcp-proxy/README.md\nmemory rules (default on): MEMGLOW_RULES=0 to turn off, or Settings → Memory rules — see README.md\n");

@@ -55,7 +55,12 @@ const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
 const trimBody = (n) => n.body.trim();
 const dirOf = (rel) => { const d = path.posix.dirname(rel); return d === "." ? "" : d; };
 
-function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {} }) {
+// 0.4.9.1 (S6): the file types read_content serves by default — text and images. Any other
+// regular file under the root (a database, a key file, a script…) only with `serveFiles: "any"`
+// (`--serve-files any`), the behaviour before 0.4.9.1.
+const SERVE_EXT = new Set([".md", ".txt", ".json", ".csv", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf"]);
+
+function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text" }) {
   const engine = createSearch(store);
   const writes = !readOnly && writer ? createWriteTools({ store, writer, project, ...writeOptions }) : null;
   const projectId = stableId("memglow-project:" + project);
@@ -227,6 +232,9 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     if (!st.isFile()) return errorResult(`Not a file: '${p}'`);
     if (st.size > 10 * 1024 * 1024) return errorResult(`File too large to read: '${rel}' (${st.size} bytes)`);
     const ext = path.extname(rel).toLowerCase();
+    if (serveFiles !== "any" && !SERVE_EXT.has(ext)) {
+      return errorResult(`File type not served: '${p}' (read_content serves ${[...SERVE_EXT].join(" ")} files; start the server with --serve-files any to serve any file)`);
+    }
     let obj;
     if (TEXT_EXT.has(ext) || !ext) {
       const text = fs.readFileSync(abs, "utf8").replace(/^﻿/, "");
@@ -609,4 +617,4 @@ function sameFileTwins(notes) {
   return [...byIno.values()].filter((a) => a.length > 1);
 }
 
-module.exports = { sameFileTwins, createTools, SERVER_VERSION, READ_ONLY_MESSAGE, WRITES_UNAVAILABLE, UNSUPPORTED_MESSAGE, MAX_QUERY_CHARS, MAX_QUERY_TERMS };
+module.exports = { SERVE_EXT, sameFileTwins, createTools, SERVER_VERSION, READ_ONLY_MESSAGE, WRITES_UNAVAILABLE, UNSUPPORTED_MESSAGE, MAX_QUERY_CHARS, MAX_QUERY_TERMS };

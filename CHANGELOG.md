@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.4.9.1 — internal (not published)
+
+Security fixes from an audit, and two production bugs. One regression test per item
+(`test/security-0491.test.js`).
+
+- **S1 — the HTTP proxy could be killed by one malformed request.** `new URL(req.url)` threw on a
+  bad request-target (e.g. a raw `POST http://[::1 HTTP/1.1`) outside any handler. It now answers
+  400; the whole request handler is wrapped (500 on an unexpected error), and the CLI installs
+  `uncaughtException` / `unhandledRejection` handlers that log and keep serving, as the memory
+  server already did (which now also logs unhandled rejections).
+- **S2 — the viewer could be killed by `/api/note/%E0%A4%A`** (`decodeURIComponent` threw a
+  `URIError`). Now 400, as is a malformed request-target; the request handler is wrapped (500
+  instead of a crash) and `main()` installs the same last-line handlers. Every other
+  `decodeURIComponent` / `new URL` / `JSON.parse` on request input in the server code was
+  already guarded (checked by grep: `memory-server/http.js`, `lib/store/store.js`,
+  `lib/setup.js`, `server.js` bodies, the proxy's relays).
+- **Proxy session keys.** The HTTP proxy filed every request without an `Mcp-Session-Id` under
+  one shared "default" session: only the first client after a restart got the memory rules, and
+  lever 7, lever 8's exemption and per-client savings lost who the client was. A stateless
+  request is now keyed by its TCP connection (`memory-server/http.js` `connKey`, same as the
+  all-in-one server); an `initialize` is keyed by its connection, then its state moves under the
+  `Mcp-Session-Id` the upstream hands out (`renameSession` on the levers and the rules relay).
+- **multiQuery listed a note twice** (production: `project-memglow-v05-engine-roadmap` in hit 1
+  and again as the last block). Two causes, both fixed in `lib/proxy-levers.js`: (1) a hit whose
+  note the levers' index cannot resolve (file name ≠ permalink, a note outside the index folder)
+  was keyed by its whole block text, which differs per phrasing (score, match) — it is now keyed
+  by its own `permalink:` line first; (2) `frameOf` only recognised a footer when nothing but
+  "---" blocks followed it, so a section after the footer (related notes…) became a "hit" — in a
+  page of `### ` hits everything from the first "---" block after the last hit heading is now
+  frame. The kept frame never repeats a note already listed among the merged hits.
+- **S5** — a proxy request body over 10 MB was truncated silently and still relayed. Now 413,
+  "Connection: close", and the request is dropped (declared or streamed length).
+- **S6** — `read_content` served any regular file under the root. It now serves only
+  `.md .txt .json .csv .yaml .yml .png .jpg .jpeg .gif .webp .svg .pdf`; `--serve-files any`
+  (env `MEMGLOW_MEMORY_SERVE_FILES=any`) restores the old behaviour.
+- **S7** — the CLI assistant provider's child environment now also drops `MEMGLOW_MEMORY_*` and
+  every variable whose name contains TOKEN / PASSWORD / SECRET / KEY — except Claude Code's own
+  sign-in variables (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`),
+  which the `claude` child needs to run at all.
+- **S8** — a new note file got `0666 & ~umask` (usually world-readable). It now gets `0660` when
+  no `--file-mode` is given; an existing file still keeps its mode, and the group still comes
+  from the folder (chown to the parent's owner when running as root, as before).
+
 ## 0.4.7.6 — internal (not published)
 
 Fix round on the 0.4.7 settings / control panel, after a cold review confirmed 2 critical, 2
