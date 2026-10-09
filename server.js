@@ -902,6 +902,9 @@ function main(env = process.env) {
   const memory = createMemory({ dir: config.memoryDir, config, pollMs: config.pollMs });
   const server = createServer(config, memory);
   if (server.memglowStartMaintenance) server.memglowStartMaintenance();
+  // A failed listen (EADDRINUSE…) must still end the process with an error (0.4.10.6b): the
+  // uncaughtException handler above would otherwise swallow it.
+  server.on("error", (e) => { console.error(`memglow: cannot listen on ${config.host}:${config.port}: ${e.message}`); process.exit(1); });
   return server.listen(config.port, config.host, () => {
     console.log(`memglow: ${config.memoryDir}`);
     console.log(`memglow: open http://${config.host === "0.0.0.0" ? "localhost" : config.host}:${config.port}`);

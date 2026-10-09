@@ -11,7 +11,9 @@
  *    target, then the folder fsync'd. `fsyncMode` (0.4.10.1): "sync" (default, the above),
  *    "deferred" (answer right after the rename; the file and folder fsyncs run just after, in the
  *    background, and idle() waits for them — a power cut within a second or so of a write can
- *    lose that write, a reader or a crash of this process never sees a torn file), "none" (no
+ *    lose that write — on btrfs / default ext4 the previous version survives, on XFS the note can come
+ *    back empty —; a reader or a crash of this process never sees a torn file; fsync errors are
+ *    logged and counted), "none" (no
  *    fsync at all; `fsync: false` is the old spelling of it). A failure at any step removes the temporary file and leaves
  *    the previous version intact. A new note is linked into place (never replaces a file that
  *    appeared in the meantime).
@@ -83,7 +85,13 @@ function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, 
       fh = await fsp.open(p, "r");
       await fh.sync();
       counters.deferredSyncs++;
-    } catch { /* gone (moved, deleted) or not supported: best effort */ }
+    } catch (e) {
+      // Gone (moved, deleted): nothing to sync. Anything else (EIO…) is logged and counted.
+      if (!e || (e.code !== "ENOENT" && e.code !== "ENOTDIR" && e.code !== "EISDIR" && e.code !== "EINVAL")) {
+        counters.deferredSyncErrors = (counters.deferredSyncErrors || 0) + 1;
+        log(`memglow memory server: deferred fsync of ${p} failed: ${e && (e.code || e.message)}`);
+      }
+    }
     finally { if (fh) await fh.close().catch(() => {}); }
   }
   async function flushLoop() {

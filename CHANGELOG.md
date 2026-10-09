@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.10.6b — internal (not published)
+
+Fixes from an adversarial review of 0.4.9.1 → 0.4.10.6 (a read-only review, findings reproduced).
+Ranking, `updateIndex`, the snippet rewrite, `candidates()` and the search metadata's `pure`
+shortcut were checked equivalent to the old code; these were not:
+
+- **Watcher: a folder deleted and recreated was never watched again** (its dead watcher stayed in
+  the map). Watchers now remember their folder's inode and are replaced when it changes; an event
+  about a known folder whose inode changed triggers a rescan. A non-note file written in a note
+  folder (a log, a database) no longer triggers rescans at all — only a new / gone / replaced
+  folder does.
+- **Watcher: a wanted rescan was dropped** when a write landed during its asynchronous walk
+  (`scanAsync` discards a result older than a write) — with `--poll-ms 0` forever. It is now
+  re-queued.
+- **Startup: changes during the chunked load were missed** (watchers were armed only after it).
+  They are armed right after the listing now. And a store change during a deferred start no
+  longer queues a full synchronous `tools.warm()` that defeated the chunked warm-up.
+- **Deferred fsync**: the docs claimed "never torn" unconditionally. Corrected (README, `--help`,
+  writer comment): on XFS / ext4 `noauto_da_alloc` an edited note can come back empty after a
+  power cut inside the window; `sync` there. A background fsync error other than "gone" is now
+  logged and counted (`stats().deferredSyncErrors`). Stdio mode now also waits for pending
+  writes and fsyncs on SIGTERM / SIGINT.
+- **A failed listen exited 0**: the new `uncaughtException` handlers swallowed EADDRINUSE. The
+  viewer and the HTTP proxy now exit 1 on a listen error.
+- `childEnv` also keeps `ANTHROPIC_FOUNDRY_API_KEY` (Claude Code's own). The rules relay's
+  per-session set is capped at 5000 keys; the levers' `renameSession` settles a replaced
+  session's pending search.
+- Tests: `test/review-0410-6b.test.js`, one more in `test/watch-0410-4.test.js`.
+- Left as is (documented risks): new notes are 0660 (a reader under another uid outside the
+  folder's group loses access — `--file-mode 0664` restores world-read); Bedrock / Vertex
+  credentials (`AWS_*`, `GOOGLE_*` keys) are stripped from the assistant's `claude` child by S7;
+  lever 8's hash of a note the store skips (> 4 MB, not UTF-8) is not the file's own bytes;
+  stateless clients opening one connection per request get one lever session each.
+
 ## 0.4.10.6 — internal (not published)
 
 Responsiveness, step 6: shorter answers. **Goldens updated on purpose** (listed below).

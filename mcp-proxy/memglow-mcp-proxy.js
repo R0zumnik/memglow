@@ -596,7 +596,9 @@ if (require.main === module) {
   }
   if (o.upstream) {
     const [host, port] = (o.listen || "127.0.0.1:8765").split(":");
-    createHttpProxy(o).listen(Number(port), host || "127.0.0.1", () =>
+    const px = createHttpProxy(o);
+    px.on("error", (e) => { process.stderr.write(`memglow-mcp-proxy: cannot listen on ${host || "127.0.0.1"}:${port}: ${e.message}\n`); process.exit(1); });
+    px.listen(Number(port), host || "127.0.0.1", () =>
       process.stderr.write(`memglow-mcp-proxy: http://${host || "127.0.0.1"}:${port} -> ${o.upstream}\n`));
   } else runStdio(o);
 }

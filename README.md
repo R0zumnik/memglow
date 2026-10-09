@@ -939,7 +939,13 @@ measured this way — your own notes, query mix and hardware will differ.
     the background (shutdown and `idle()` wait for them). **Trade-off**: a power cut (or a kernel
     crash) within ~1–3 s of a write can lose that last write — the note is then still its
     previous version (or, for a note just created, missing or empty) — but a file is never torn.
-    Safe with a UPS. Measured on a temp folder: write p50 ≈8 ms instead of ≈2.4 s.
+    "Never torn" relies on the filesystem writing a replaced file's data before the rename that
+    replaces it (ext4's default `auto_da_alloc`, btrfs' rename-over-existing flush — Synology
+    volumes are one or the other). **On XFS, or ext4 mounted `noauto_da_alloc`, an edited note
+    can come back EMPTY after a power cut in that window** (the previous version lost too): use
+    `sync` there. A note just created (hard link) or moved within that second is in the same
+    window. A failed background fsync (EIO) is logged and counted (`deferredSyncErrors`). A crash or `kill -9` of the server alone loses nothing (the data is
+    in the OS cache). Safe with a UPS. Measured on a temp folder: write p50 ≈8 ms instead of ≈2.4 s.
   - `none`: no fsync at all (still atomic); the OS writes the data back on its own schedule
     (typically within 30 s).
   The settings panel shows the active mode as a read-only badge under "Memory server" (when

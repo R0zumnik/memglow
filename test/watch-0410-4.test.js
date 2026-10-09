@@ -106,3 +106,21 @@ test("CLI: watching is the default, --no-watch opts out, the poll interval stays
   assert.strictEqual(parseArgs(["--poll-ms", "15000"]).pollMs, 15000);
   assert.match(HELP, /--no-watch/);
 });
+
+test("a non-note file written all the time in a note folder causes no rescan; a new or removed folder does", async () => {
+  const root = kb(10);
+  const store = createStore({ root, pollMs: 0 }).start();
+  try {
+    await sleep(100);
+    const s0 = store.stats().fullScans;
+    for (let i = 0; i < 100; i++) { fs.appendFileSync(path.join(root, "memory", "family", "app.log"), "line " + i + "\n"); if (i % 20 === 0) await sleep(30); }
+    fs.writeFileSync(path.join(root, "memory", "notes.sqlite"), "db");
+    await sleep(300);
+    assert.strictEqual(store.stats().fullScans, s0, "a log / database file: no rescan");
+    fs.mkdirSync(path.join(root, "memory", "fresh-dir"));
+    assert.ok(await until(() => store.stats().fullScans > s0, 1500) != null, "a new folder: one rescan");
+    const s1 = store.stats().fullScans;
+    fs.rmSync(path.join(root, "memory", "fresh-dir"), { recursive: true });
+    assert.ok(await until(() => store.stats().fullScans > s1, 1500) != null, "a watched folder gone: one rescan");
+  } finally { store.stop(); }
+});

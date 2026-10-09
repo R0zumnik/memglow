@@ -56,7 +56,8 @@ options:
   --fsync-mode sync|deferred|none  durability of writes (default: sync). sync: fsync the file
                   and its folder before answering. deferred: answer right after the atomic rename,
                   fsync just after in the background (a power cut within ~1-3 s of a write can lose
-                  that write, never tear a file; safe with a UPS). none: no fsync. Env
+                  that write; on btrfs / ext4 defaults the previous version survives, on XFS or
+                  ext4 noauto_da_alloc the note can come back empty; safe with a UPS). none: no fsync. Env
                   MEMGLOW_MEMORY_FSYNC, or "memoryServer": { "fsyncMode": … } in memglow.config.json
                   (MEMGLOW_CONFIG or ~/.memglow only, never the current folder)
   --no-fsync      same as --fsync-mode none
@@ -174,11 +175,12 @@ function resolveFsyncMode(o, env = process.env) {
 
 function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 3000, watch = true, maxFileBytes, log = () => {},
   fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", structuredRead = true, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne, deferStart = false }) {
-  let tools = null, warmTimer = null;
+  let tools = null, warmTimer = null, isReady = !deferStart;
   // The search index is rebuilt lazily by the next search anyway; warming it after a change is
   // coalesced (a burst of writes costs one rebuild, not one per write).
   const onChange = () => {
-    if (!tools || warmTimer) return;
+    // Not during a deferred start: warmAsync builds the index in chunks (0.4.10.6b).
+    if (!tools || warmTimer || (deferStart && !isReady)) return;
     warmTimer = setImmediate(() => { warmTimer = null; try { tools.warm(); } catch { /* next search rebuilds */ } });
   };
   const store = createStore({ root, project, pollMs, watch, log, ...(maxFileBytes ? { maxFileBytes } : {}), onChange });
@@ -192,7 +194,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     if (twins.length || col.length) log(`memglow memory server: ${twins.length + col.length} note(s) present under several paths or permalinks (an interrupted move?) — see basic_memory_diagnostics`);
   };
   tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
-  let ready, isReady = !deferStart;
+  let ready;
   if (!deferStart) {
     store.start();
     startupChecks();
@@ -312,6 +314,13 @@ function main(argv = process.argv.slice(2), env = process.env) {
     process.on("SIGINT", stop); process.on("SIGTERM", stop);
     return null;
   }
+  // SIGTERM / SIGINT in stdio mode too: pending writes and fsyncs first (0.4.10.6b).
+  const stopStdio = () => {
+    const idle = srv.writer ? srv.writer.idle() : Promise.resolve();
+    const cap = new Promise((ok) => { const t = setTimeout(ok, 10000); if (t.unref) t.unref(); });
+    Promise.race([idle, cap]).finally(() => { srv.close(); process.exit(0); });
+  };
+  process.on("SIGINT", stopStdio); process.on("SIGTERM", stopStdio);
   // stdin closed: pending writes AND their deferred fsyncs finish first (at most 10 s).
   runStdio(srv.rpc, process.stdin, process.stdout, () => {
     const idle = srv.writer ? srv.writer.idle() : Promise.resolve();
