@@ -48,6 +48,9 @@ options:
   --serve-files text|any  read_content serves only text and image files (.md .txt .json .csv
                   .yaml .yml .png .jpg .jpeg .gif .webp .svg .pdf) by default; "any" serves any
                   regular file under the root, as before 0.4.9.1. Env MEMGLOW_MEMORY_SERVE_FILES
+  --no-structured-read  read_note's text answer carries the note once (in content), without the
+                  FastMCP structuredContent copy of the same text (fewer tokens with clients that
+                  pass both on). Env MEMGLOW_MEMORY_STRUCTURED_READ=0
   --kebab-filenames  file names of new notes in kebab-case (default: the title as is)
   --update-permalinks-on-move  a moved note's permalink follows its new path (default: kept)
   --fsync-mode sync|deferred|none  durability of writes (default: sync). sync: fsync the file
@@ -82,7 +85,8 @@ function parseArgs(argv, env = process.env) {
     overwriteDefault: false, kebabFilenames: false, updatePermalinksOnMove: false, fsync: true,
     allowOrigins: String(env.MEMGLOW_MEMORY_ALLOW_ORIGIN || "").split(",").map((x) => x.trim()).filter(Boolean), token: env.MEMGLOW_MEMORY_TOKEN || "",
     levers: /^(1|true|yes|on)$/i.test(String(env.MEMGLOW_MEMORY_LEVERS || "")), name: "", source: "mcp",
-    serveFiles: String(env.MEMGLOW_MEMORY_SERVE_FILES || "").toLowerCase() === "any" ? "any" : "text" };
+    serveFiles: String(env.MEMGLOW_MEMORY_SERVE_FILES || "").toLowerCase() === "any" ? "any" : "text",
+    structuredRead: !/^(0|false|no|off)$/i.test(String(env.MEMGLOW_MEMORY_STRUCTURED_READ || "")) };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--root") o.root = argv[++i] || "";
@@ -109,6 +113,7 @@ function parseArgs(argv, env = process.env) {
     else if (a === "--update-permalinks-on-move") o.updatePermalinksOnMove = true;
     else if (a === "--poll-ms") o.pollMs = Math.max(0, Number(argv[++i]) || 0);
     else if (a === "--no-watch") o.watch = false;
+    else if (a === "--no-structured-read") o.structuredRead = false;
     else if (a === "--serve-files" || a.startsWith("--serve-files=")) {
       const v = String(a === "--serve-files" ? argv[++i] || "" : a.slice(14)).toLowerCase();
       if (v === "any" || v === "text") o.serveFiles = v; else o.badServeFiles = v;
@@ -168,7 +173,7 @@ function resolveFsyncMode(o, env = process.env) {
 }
 
 function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 3000, watch = true, maxFileBytes, log = () => {},
-  fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne, deferStart = false }) {
+  fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", structuredRead = true, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne, deferStart = false }) {
   let tools = null, warmTimer = null;
   // The search index is rebuilt lazily by the next search anyway; warming it after a change is
   // coalesced (a burst of writes costs one rebuild, not one per write).
@@ -186,7 +191,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     const col = store.collisions();
     if (twins.length || col.length) log(`memglow memory server: ${twins.length + col.length} note(s) present under several paths or permalinks (an interrupted move?) — see basic_memory_diagnostics`);
   };
-  tools = createTools({ store, project, readOnly, writer, serveFiles, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
+  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
   let ready, isReady = !deferStart;
   if (!deferStart) {
     store.start();
@@ -274,7 +279,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   // 0.4.10.2: the port opens at once; the notes folder is loaded and indexed in the background
   // (requests meanwhile wait for it, they never fail).
   const srv = createMemoryServer({ root, project: o.project, readOnly: o.readOnly, pollMs: o.pollMs, watch: o.watch, log,
-    fsync: o.fsync, fsyncMode: fsyncInfo.mode, fileMode: o.fileMode, serveFiles: o.serveFiles, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
+    fsync: o.fsync, fsyncMode: fsyncInfo.mode, fileMode: o.fileMode, serveFiles: o.serveFiles, structuredRead: o.structuredRead, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
     allInOne: o.levers ? { env, name: o.name || "memglow-memory", source: o.source } : false, deferStart: true });
   if (fsyncInfo.warning) log(fsyncInfo.warning);
   srv.ready.then(() => {

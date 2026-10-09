@@ -876,6 +876,13 @@ basic-memory on the same notes folder; relevance (MRR) 0.283 vs 0.130 over 31 re
 search→read pairs; reads byte-identical between the two servers. No claim beyond what was
 measured this way — your own notes, query mix and hardware will differ.
 
+- **Search text output** (0.4.10.6, leaner): one `### title` block per hit with `- permalink:`,
+  `- score:` and a `- match:` excerpt of at most 120 characters around the query (no match line
+  when it would only repeat the title), and a short footer (`*10 results, page 1, more: page=2*`).
+  The `external_id` line is gone from the text (it stays in `output_format: "json"`). About
+  −30 to −40 % tokens per 10-hit search. `--no-structured-read` (env
+  `MEMGLOW_MEMORY_STRUCTURED_READ=0`) also drops the FastMCP `structuredContent` copy of the note
+  from `read_note`'s text answer.
 - **Read tools**: `search_notes`, `read_note`, `read_content`, `view_note`,
   `build_context`, `recent_activity`, `list_directory`, `list_memory_projects`,
   `list_workspaces`, `search` / `fetch`, `basic_memory_diagnostics`. `read_content` serves text

@@ -11,9 +11,13 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { createSearch } = require("../lib/store/search");
+const { createSearch, clip } = require("../lib/store/search");
+
+// 0.4.10.6: search_notes' TEXT output is leaner — no external_id line (it stays in the json
+// output), the match excerpt cut to MATCH_MAX characters around the query, a shorter footer.
+const MATCH_MAX = 120;
 const { parseTimeframe } = require("../lib/store/timeframe");
-const { stableId, stableInt, globToRegExp, slugify, words } = require("../lib/store/text");
+const { stableId, stableInt, globToRegExp, slugify, words, fold } = require("../lib/store/text");
 const { TOOLS, WRITE_TOOLS, UNSUPPORTED_TOOLS } = require("./schemas");
 const { createWriteTools, ArgError } = require("./write-tools");
 const { WriteError } = require("./writer");
@@ -72,7 +76,7 @@ const dirOf = (rel) => { const d = path.posix.dirname(rel); return d === "." ? "
 // (`--serve-files any`), the behaviour before 0.4.9.1.
 const SERVE_EXT = new Set([".md", ".txt", ".json", ".csv", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf"]);
 
-function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text" }) {
+function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true }) {
   const engine = createSearch(store);
   const writes = !readOnly && writer ? createWriteTools({ store, writer, project, ...writeOptions }) : null;
   const projectId = stableId("memglow-project:" + project);
@@ -159,17 +163,22 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     const chunks = [{ text: head, ...(pure ? { perm: [], ids: [] } : refsOf(head)) }];
     for (const h of r.results) {
       const j = hitJson(h);
-      const blk = [`### ${j.title}`, `- permalink: ${j.permalink}`, `- external_id: ${j.external_id}`, `- score: ${h.score.toFixed(4)}`];
-      if (h.match) blk.push(`- match: ${h.match.replace(/\s+/g, " ").slice(0, 200)}`);
+      const blk = [`### ${j.title}`, `- permalink: ${j.permalink}`, `- score: ${h.score.toFixed(4)}`];
+      // An excerpt that only repeats the title (the note's "# Title" heading line, or the title
+      // itself when no line matched) says nothing new: no match line then.
+      const rawMatch = h.match ? h.match.replace(/\s+/g, " ").trim() : "";
+      const sameAsTitle = !!rawMatch && fold(rawMatch.replace(/^#{1,6}\s+/, "")).trim() === fold(j.title).trim();
+      const match = rawMatch && !sameAsTitle ? clip(rawMatch, h.qterms, MATCH_MAX) : "";
+      if (match) blk.push(`- match: ${match}`);
       lines.push(...blk, "");
       const text = blk.join("\n").trim();
       // "own": the block's only reference is its permalink line, read whole by both parsers.
-      const own = !REF_LIKE.test(j.title) && !REF_LIKE.test(h.match || "") && OWN_PERMALINK.test(j.permalink) && OWN_END.test(j.permalink) && j.permalink.length <= 200;
+      const own = !REF_LIKE.test(j.title) && !REF_LIKE.test(match) && OWN_PERMALINK.test(j.permalink) && OWN_END.test(j.permalink) && j.permalink.length <= 200;
       if (!own) pure = false;
       chunks.push({ text, ...(own ? { perm: [j.permalink], ids: [j.permalink] } : refsOf(text)) });
     }
     const c = r.results.length;
-    const foot = `*${c} result${c === 1 ? "" : "s"} | page ${r.page}, page_size ${r.page_size}${r.has_more ? " | more available" : ""}*`;
+    const foot = `*${c} result${c === 1 ? "" : "s"}${r.page > 1 || r.has_more ? `, page ${r.page}` : ""}${r.has_more ? `, more: page=${r.page + 1}` : ""}*`;
     lines.push("---", foot);
     chunks.push({ text: "---\n" + foot, perm: [], ids: [] });
     const out = textResult(lines.join("\n"));
@@ -220,7 +229,9 @@ function createTools({ store, project = store.project, readOnly = true, startedA
           frontmatter: n.frontmatter,
         });
       }
-      return textResult(n.raw);
+      // 0.4.10.6: `structuredRead: false` (--no-structured-read) — the note once, in `content`,
+      // not again as structuredContent { result } (FastMCP's duplicate: some clients pass both on).
+      return structuredRead ? textResult(n.raw) : { content: [{ type: "text", text: n.raw }], isError: false };
     }
     const page = int(args.page, 1, { min: 1, name: "page" });
     const pageSize = int(args.page_size, 10, { min: 1, max: 100, name: "page_size" });

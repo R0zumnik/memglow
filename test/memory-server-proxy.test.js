@@ -64,7 +64,8 @@ test("through the proxy (legacy session): tools/list gains memglow_queries, sear
     assert.match(merged, /### Rugby Club\n- permalink: main\/memory\/projects\/rugby-club/, "hit of phrasing 2");
     assert.ok(!/memglow: merged results/.test(merged), "tier A: our plain-text blocks are merged as is");
     assert.match(merged, /^# Search Results: tea\n\*project: main\*\n\n### /, "the first phrasing's header stays on top");
-    assert.match(merged, /\n\n---\n\*1 result \| page 1, page_size 10\*$/, "…and its footer at the bottom");
+    // 0.4.10.6 (golden updated on purpose): the shorter footer.
+    assert.match(merged, /\n\n---\n\*1 result\*$/, "…and its footer at the bottom");
     assert.strictEqual((merged.match(/^# Search Results/gm) || []).length, 1, "other phrasings' headers dropped");
     assert.deepStrictEqual(mq.json.result.structuredContent, { result: merged }, "the FastMCP text wrap stays in step");
 

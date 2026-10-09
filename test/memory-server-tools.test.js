@@ -33,14 +33,19 @@ test("tools/list mirrors basic-memory's 21 tool names, with schemas and annotati
   assert.deepStrictEqual(TOOLS.find((t) => t.name === "write_note").inputSchema.required, ["title", "content", "directory"]);
 });
 
-test("search_notes text: header, one blank-line-separated block per hit with permalink/external_id/score/match, footer", () => {
+test("search_notes text: header, one blank-line-separated block per hit with permalink/score/match, footer", () => {
   const s = setup();
   try {
     const out = s.text("search_notes", { query: "garden", page_size: 2, project: "whatever", project_id: "x", search_all_projects: true });
     const blocks = out.split(/\n\s*\n/);
     assert.strictEqual(blocks[0], "# Search Results: garden\n*project: main*");
-    assert.match(blocks[1], /^### Garden Project\n- permalink: main\/memory\/projects\/garden-project\n- external_id: [0-9a-f-]{36}\n- score: \d+\.\d{4}\n- match: .+$/);
-    assert.match(out, /\n---\n\*2 results \| page 1, page_size 2 \| more available\*$/);
+    // 0.4.10.6 (golden updated on purpose): no external_id line in the TEXT output (still in json),
+    // a match excerpt of at most 120 characters, a shorter footer.
+    assert.match(blocks[1], /^### Garden Project\n- permalink: main\/memory\/projects\/garden-project\n- score: \d+\.\d{4}\n- match: .{1,120}$/);
+    assert.ok(!/external_id/.test(out));
+    assert.match(out, /\n---\n\*2 results, page 1, more: page=2\*$/);
+    assert.match(s.text("search_notes", { query: "garden", page: 2, page_size: 2 }), /\n---\n\*\d results?, page 2(, more: page=3)?\*$/);
+    assert.match(s.text("search_notes", { query: "alice", page_size: 50 }), /\n---\n\*\d+ results?\*$/);
     const none = s.text("search_notes", { query: "nothingmatchesthis" });
     assert.match(none, /^No results found for 'nothingmatchesthis' in project 'main'/);
     assert.match(s.text("search_notes", {}), /^# No Search Criteria/);

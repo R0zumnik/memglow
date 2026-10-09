@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.10.6 — internal (not published)
+
+Responsiveness, step 6: shorter answers. **Goldens updated on purpose** (listed below).
+
+- `search_notes` TEXT output (`memory-server/tools.js`):
+  - no `- external_id:` line any more (still in `output_format: "json"`, as `external_id`);
+  - the `- match:` excerpt cut to 120 characters around the first query term
+    (`lib/store/search.js` `clip()`, the snippet's own cut generalised — at 200 it is
+    byte-for-byte the old cut, the ranking snapshot still passes); no match line at all when the
+    excerpt only repeats the title (the note's `# title` heading, or the title used when no line
+    matched);
+  - footer `*N results | page P, page_size S | more available*` → `*N results*`, with
+    `, page P` only beyond page 1 or when more exist, and `, more: page=P+1` when they do.
+  - The block layout the levers rely on is unchanged (`### title`, `- permalink:` first, blank
+    line between hits, a `---` footer): `permalinksIn` / `idsInText`, `hitChunksOf`,
+    `resultIds`, searchDetails and the multiQuery merge all still resolve every hit (tested).
+- New `--no-structured-read` (env `MEMGLOW_MEMORY_STRUCTURED_READ=0`; default off = unchanged):
+  `read_note`'s text answer carries the note once, in `content`, without the FastMCP
+  `structuredContent: { result }` copy. JSON answers unchanged.
+- Measured, tokens (bytes / 4) per 10-hit search, text only: a production-like corpus
+  (kebab-case titles, long bullet lines, a `# title` heading per note) 779 → 491 (−37 %);
+  this repository's docs cut in 265 notes 608 → 461 (−24 %); the bench's dense synthetic corpus
+  1214 → ≈940 counting the structuredContent copy (−22 %); the test's own long-line corpus
+  881 → 549 (−38 %). The −40 % target is reached only where match lines were long or repeated
+  the title; the rest of a hit (title, permalink, score) is what the levers and clients need.
+- **Goldens changed on purpose**: `test/memory-server-tools.test.js` (search text block without
+  `external_id`, match ≤ 120, the new footer forms), `test/memory-server-proxy.test.js` (merged
+  footer `*1 result*`). The all-in-one ≡ proxy equivalence test is unchanged and passes (both
+  sides use the same server output).
+- Tests: `test/answers-0410-6.test.js`.
+
 ## 0.4.10.5 — internal (not published)
 
 Responsiveness, step 5: structured hand-off, posting lists.
