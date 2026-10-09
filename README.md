@@ -1212,6 +1212,36 @@ Interested? Say so in [GitHub Discussions → Pro interest](https://github.com/R
 
 The open-source edition stays free and MIT.
 
+<a id="control-panel"></a>
+## 🎚️ Control panel
+
+**Settings → Control** is one place to see — and, for the levers, change — the settings that used
+to be scattered across `memglow.config.json`, environment variables and the [MCP proxy](#mcp-proxy)'s
+own defaults:
+
+- **Token savings** — every proxy lever (see [MCP proxy](#mcp-proxy) for what each one does), with
+  its current value and where that value comes from: an environment variable (locked, shown
+  disabled), this page, `memglow.config.json`, or the built-in default. Day-one levers
+  (`sizeWarning`, `multiQuery`, `aliases`, `learnAliases`, `indexWarning`) are shown first; the
+  rest are under "Advanced". **Saving needs the MCP proxy restarted** — it reads its levers once,
+  at start.
+- **Memory maintenance** — the last scheduled scan's time and how many opportunities it found, a
+  **Run now** button, and five tuning fields (scan interval, archive-after days, index-trim
+  candidate line length, the index's own "too large" threshold, sessions/day) — same priority as
+  everywhere else: environment variable > this page > `memglow.config.json` > default.
+- **Memory server** — if `MEMGLOW_MEMORY_URL` points at a [memglow memory server](#memory-server),
+  its health (reachable, read-only or read-write, whether it needs a token, version, notes
+  count) — read-only, never a secret.
+- **Measures** — whether the MCP proxy has reported in recently, and per-AI-tool and per-lever
+  token totals (the same counts [Memory cost](#memory-cost)'s "By AI tool" line already uses).
+
+The panel never shows (not even as a field to type into) the memory server's own `--token`,
+`--read-write`, `--allow-origin`, `--on-write`, `--file-mode` or `--no-fsync`, any API key or
+subscription token, the tool-name mappings (`readTools`/`searchTools`/`writeTools`/
+`unsupportedTools`), or a disk path. Saved settings live in the same `setup.json` as every other
+page here (`<dataDir>/setup.json`'s `proxy` and `tuning` sections), through the same CSRF-protected,
+rate-limited route.
+
 <a id="license"></a>
 ## 📄 License & thanks
 
