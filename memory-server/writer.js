@@ -56,6 +56,7 @@ const isRoot = () => typeof process.getuid === "function" && process.getuid() ==
 const NEW_FILE_MODE = 0o660;
 
 const FSYNC_MODES = ["sync", "deferred", "none"];
+const FSYNC_PARALLEL = 8;
 
 function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, newFileMode = NEW_FILE_MODE, maxFileBytes = 4 * 1024 * 1024, onWrite = "", onWriteDelayMs = 10000, log = () => {}, hooks = {}, chownToParent = isRoot() }) {
   const root = store.root;
@@ -78,11 +79,31 @@ function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, 
     if (flushing || !pendingSync.size) return;
     flushing = flushLoop().finally(() => { flushing = null; startFlush(); });
   }
+  /** Where a path went after moves, or null. */
+  function followMoves(p) {
+    for (let k = 0; k < 16; k++) {
+      let next = null;
+      for (const [src, m] of movedTo) {
+        if (p === src) { next = m.dst; break; }
+        if (m.directory && p.startsWith(src + path.sep)) { next = m.dst + p.slice(src.length); break; }
+      }
+      if (!next) return k ? p : null;
+      p = next;
+    }
+    return p;
+  }
   async function syncPath(p) {
     let fh = null;
     try {
       if (hooks.beforeDeferredSync) await hooks.beforeDeferredSync(p);
-      fh = await fsp.open(p, "r");
+      try { fh = await fsp.open(p, "r"); }
+      catch (e) {
+        // Moved while its fsync was in flight: sync it where it is now (0.4.10.7).
+        const to = e && e.code === "ENOENT" ? followMoves(p) : null;
+        if (!to) throw e;
+        fh = await fsp.open(to, "r");
+        p = to;
+      }
       await fh.sync();
       counters.deferredSyncs++;
     } catch (e) {
@@ -94,13 +115,36 @@ function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, 
     }
     finally { if (fh) await fh.close().catch(() => {}); }
   }
+  /** Runs fn over items, at most `n` at a time. */
+  async function pool(items, n, fn) {
+    let i = 0;
+    await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) await fn(items[i++]); }));
+  }
   async function flushLoop() {
     await new Promise((ok) => setImmediate(ok)); // after the answer has been written
     while (pendingSync.size) {
+      // 0.4.10.7: one batch = everything queued so far, coalesced — each file once (its latest
+      // version: the path is synced, whatever was renamed onto it last), each folder once — and
+      // synced in parallel (files first, then their folders): on btrfs concurrent fsyncs share one
+      // log commit, a queue of 60 writes no longer costs 60 sequential fsync round trips.
       const batch = [...pendingSync.entries()];
       pendingSync.clear();
-      for (const [p, isDir] of batch) if (!isDir) await syncPath(p);
-      for (const [p, isDir] of batch) if (isDir) await syncPath(p);
+      await pool(batch.filter(([, d]) => !d).map(([p]) => p), FSYNC_PARALLEL, syncPath);
+      await pool(batch.filter(([, d]) => d).map(([p]) => p), FSYNC_PARALLEL, syncPath);
+    }
+  }
+  /** A pending file fsync follows its file when it moves (0.4.10.7: never lost to ENOENT). */
+  // Recent moves (src → dst), for an fsync already taken from the queue when its file moved.
+  const movedTo = new Map();
+  function movePending(srcAbs, dstAbs, directory) {
+    movedTo.set(srcAbs, { dst: dstAbs, directory });
+    if (movedTo.size > 1000) movedTo.delete(movedTo.keys().next().value);
+    for (const [p, isDir] of [...pendingSync.entries()]) {
+      if (isDir) continue;
+      if (p === srcAbs || (directory && p.startsWith(srcAbs + path.sep))) {
+        pendingSync.delete(p);
+        pendingSync.set(dstAbs + p.slice(srcAbs.length), false);
+      }
     }
   }
 
@@ -239,7 +283,7 @@ function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, 
     await mkdirs(dir);
     // A short temp name (any name the target can have, the temp can have too).
     const tmp = path.join(dir, `.mg-${crypto.randomBytes(4).toString("hex")}.tmp`);
-    let fh = null, linked = false;
+    let fh = null, linked = false, tmpStat = null;
     try {
       fh = await fsp.open(tmp, "wx", 0o666);
       await fh.writeFile(text, "utf8");
@@ -255,6 +299,8 @@ function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, 
       }
       if (!prev) await groupWriteLikeParent(abs, fh);
       if (mode === "sync") await fh.sync();
+      // 0.4.10.7: the identity of the file we wrote, from its own descriptor, before the rename.
+      tmpStat = await fh.stat();
       await fh.close(); fh = null;
       if (hooks.beforeRename) await hooks.beforeRename(tmp, abs);
       if (prev) {
@@ -280,7 +326,14 @@ function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, 
     }
     if (mode === "deferred") deferSync(abs, false);
     await fsyncDir(dir);
-    return fsp.stat(abs);
+    if (hooks.afterRename) await hooks.afterRename(abs);
+    // 0.4.10.7: an outside save landed between the rename and this stat when the path no longer
+    // holds the file we wrote (another inode, or another size / mtime). The caller's store then
+    // keeps no stat for our text (`stale`) and re-reads the file instead of trusting it.
+    let st;
+    try { st = await fsp.stat(abs); } catch { st = { ...tmpStat, stale: true }; return st; }
+    if (!tmpStat || st.ino !== tmpStat.ino || st.size !== tmpStat.size || st.mtimeMs !== tmpStat.mtimeMs) st.stale = true;
+    return st;
   }
 
   /** Moves a file or folder; never replaces an existing target. */
@@ -297,6 +350,7 @@ function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, 
         await fsp.rename(srcAbs, dstAbs);
       }
     }
+    if (mode === "deferred") movePending(srcAbs, dstAbs, directory);
     await fsyncDir(path.dirname(dstAbs));
     if (path.dirname(srcAbs) !== path.dirname(dstAbs)) await fsyncDir(path.dirname(srcAbs));
   }
@@ -346,6 +400,10 @@ function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, 
     if (chownToParent) {
       try { const st = await fsp.stat(abs); await fsp.chown(dst, st.uid, st.gid); } catch (e) { log(`memglow memory server: chown ${dst}: ${e.message}`); }
     }
+    // 0.4.10.7: the backup is durable too (it is the only copy of the version being replaced).
+    if (mode === "sync") { let h = null; try { h = await fsp.open(dst, "r"); await h.sync(); } catch { /* best effort */ } finally { if (h) await h.close().catch(() => {}); } }
+    else if (mode === "deferred") deferSync(dst, false);
+    await fsyncDir(path.dirname(dst));
     return trash + "/" + rel;
   }
 

@@ -154,8 +154,10 @@ function createStoreMemory({ store, memoryDir, config }) {
   }
 
   const entry = (id) => (typeof id === "string" ? data().state.get(id) || null : null);
+  /** The entry after applying a pending outside save of its file (0.4.10.7, lever 8's check). */
+  const freshEntry = (id) => { const e = entry(id); if (e && store.refreshNote && store.refreshNote(prefix + e.rel)) return entry(id); return e; };
   /** The note's bytes as on disk (a BOM the reader dropped is put back), as a string. */
-  const textOf = (id) => { const e = entry(id); return e ? fullText(e.n) : null; };
+  const textOf = (id) => { const e = freshEntry(id); return e ? fullText(e.n) : null; };
   const bodyOf = (id) => { const e = entry(id); if (!e || e.n.size > MAX_NOTE_BYTES) return null; return memoryLib.parseFrontmatter(fullText(e.n)).body; };
 
   return {

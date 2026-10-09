@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.10.7 — internal (not published)
+
+Fix round before the production deploy (a cold review said GO with conditions). One regression
+test per item, `test/fix-0410-7.test.js`.
+
+1. **MAJOR — a stale note served forever after a racing outside save.** `writeAtomic` returned a
+   stat taken after the rename; an editor's save landing in that gap left the store with the
+   server's text under the editor's stat, so neither the watcher nor the poll ever re-read it.
+   The written file's identity is now taken from the temp file's descriptor before the rename;
+   when the path no longer holds that inode / size / mtime, the stat is marked `stale`, the store
+   keeps no valid stat for its text and re-reads the file at once.
+2. **MAJOR — shutdown could outlast Docker's grace period.** Deferred fsyncs ran one path at a
+   time (60 writes then SIGTERM: exit after 10 s, the old cap = Docker's default grace). Each
+   batch is now coalesced (a file once, a folder once) and synced 8 at a time; the shutdown wait
+   is `--shutdown-timeout` (default 25 s, env `MEMGLOW_MEMORY_SHUTDOWN_TIMEOUT`). README: the
+   deferred window can be several seconds on a slow btrfs; use `--stop-timeout 30` /
+   `stop_grace_period: 30s`. (This machine's /tmp fsync is ≈2 s: 60 pending writes now drain in
+   ≈16 s, exit 0.)
+3. Startup: each folder is watched as soon as the chunked load reaches it (before listing it);
+   events wait for the load to be applied, then apply.
+4. A rescan overlapping writes is merged (the files the writer changed meanwhile are left as
+   they are) instead of dropped: a write burst no longer postpones indexing a new folder.
+5. The `.trash` backup copy is fsync'd (sync: at once; deferred: queued). A file moved while its
+   deferred fsync was pending or in flight is synced at its new path (moves are followed).
+6. `read_note`, `edit_note` (`move_note`, `delete_note`) and lever 8's "unchanged" hash apply the
+   watcher events still in their debounce and stat the requested note first
+   (`store.refreshNote`): a read right after an outside save answers the new version.
+
 ## 0.4.10.6b — internal (not published)
 
 Fixes from an adversarial review of 0.4.9.1 → 0.4.10.6 (a read-only review, findings reproduced).

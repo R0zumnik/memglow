@@ -98,6 +98,8 @@ function createWriteTools({ store, writer, project, overwriteDefault = false, ke
    * name and fits several notes is refused (a destructive operation never guesses).
    */
   function noteFor(identifier) {
+    // 0.4.10.7: pending outside saves applied first (the identifier may name a note just created).
+    if (store.refreshNote) { const pre = store.resolve(identifier); store.refreshNote(pre ? pre.rel : null); }
     const r = store.resolveForWrite(identifier);
     if (r.ambiguous.length) {
       throw new ArgError(`'${identifier}' matches several notes (${r.ambiguous.slice(0, 5).map((n) => n.permalink).join(", ")}); use the permalink of the one you mean`);

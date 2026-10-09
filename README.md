@@ -937,7 +937,9 @@ measured this way — your own notes, query mix and hardware will differ.
     btrfs volume can take a second or more.
   - `deferred`: answered right after the rename; the file and folder fsyncs run just after, in
     the background (shutdown and `idle()` wait for them). **Trade-off**: a power cut (or a kernel
-    crash) within ~1–3 s of a write can lose that last write — the note is then still its
+    crash) inside the deferred window can lose that last write. The window is the time the
+    background fsyncs take: about a second on a quiet disk, but **several seconds (or more) on a
+    slow or busy btrfs volume**, and longer after a burst of writes — the note is then still its
     previous version (or, for a note just created, missing or empty) — but a file is never torn.
     "Never torn" relies on the filesystem writing a replaced file's data before the rename that
     replaces it (ext4's default `auto_da_alloc`, btrfs' rename-over-existing flush — Synology
@@ -946,6 +948,12 @@ measured this way — your own notes, query mix and hardware will differ.
     `sync` there. A note just created (hard link) or moved within that second is in the same
     window. A failed background fsync (EIO) is logged and counted (`deferredSyncErrors`). A crash or `kill -9` of the server alone loses nothing (the data is
     in the OS cache). Safe with a UPS. Measured on a temp folder: write p50 ≈8 ms instead of ≈2.4 s.
+    Pending fsyncs are coalesced (each file and each folder once per batch) and run 8 at a time.
+  - **Shutdown**: on SIGTERM / SIGINT the server waits for writes in progress and pending fsyncs,
+    at most `--shutdown-timeout` seconds (default 25, env `MEMGLOW_MEMORY_SHUTDOWN_TIMEOUT`).
+    Give the container a longer grace period than that, or the runtime kills it first:
+    `docker run --stop-timeout 30 …`, or `stop_grace_period: 30s` in docker compose (Docker's
+    default is 10 s).
   - `none`: no fsync at all (still atomic); the OS writes the data back on its own schedule
     (typically within 30 s).
   The settings panel shows the active mode as a read-only badge under "Memory server" (when

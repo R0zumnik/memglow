@@ -220,7 +220,9 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     const identifier = str(args.identifier);
     if (!identifier.trim()) throw new ToolError("identifier is required");
     const format = fmtOf(args.output_format);
-    const n = store.resolve(identifier);
+    // 0.4.10.7: an outside save the watcher has not applied yet is applied first.
+    let n = store.resolve(identifier);
+    if (store.refreshNote && store.refreshNote(n ? n.rel : null)) n = store.resolve(identifier);
     if (n) {
       if (format === "json") {
         return jsonResult({

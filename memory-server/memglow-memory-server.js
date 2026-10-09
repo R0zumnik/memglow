@@ -55,12 +55,16 @@ options:
   --update-permalinks-on-move  a moved note's permalink follows its new path (default: kept)
   --fsync-mode sync|deferred|none  durability of writes (default: sync). sync: fsync the file
                   and its folder before answering. deferred: answer right after the atomic rename,
-                  fsync just after in the background (a power cut within ~1-3 s of a write can lose
-                  that write; on btrfs / ext4 defaults the previous version survives, on XFS or
+                  fsync just after in the background (a power cut inside that window — a second
+                  or so, several seconds on a slow btrfs — can lose that write; on btrfs / ext4 defaults the previous version survives, on XFS or
                   ext4 noauto_da_alloc the note can come back empty; safe with a UPS). none: no fsync. Env
                   MEMGLOW_MEMORY_FSYNC, or "memoryServer": { "fsyncMode": … } in memglow.config.json
                   (MEMGLOW_CONFIG or ~/.memglow only, never the current folder)
   --no-fsync      same as --fsync-mode none
+  --shutdown-timeout S  on SIGTERM / SIGINT / end of stdin, wait at most S seconds for writes in
+                  progress and pending fsyncs (default 25). Keep it under the supervisor's grace
+                  period: docker run --stop-timeout 30 / compose stop_grace_period: 30s.
+                  Env MEMGLOW_MEMORY_SHUTDOWN_TIMEOUT
   --poll-ms N     fallback periodic rescan, in ms (default 3000; 0 = file watching only)
   --no-watch      do not watch the note folders (periodic rescan only). Not needed any more for a
                   .git snapshot folder: since 0.4.10.4 only the note folders themselves are
@@ -87,7 +91,8 @@ function parseArgs(argv, env = process.env) {
     allowOrigins: String(env.MEMGLOW_MEMORY_ALLOW_ORIGIN || "").split(",").map((x) => x.trim()).filter(Boolean), token: env.MEMGLOW_MEMORY_TOKEN || "",
     levers: /^(1|true|yes|on)$/i.test(String(env.MEMGLOW_MEMORY_LEVERS || "")), name: "", source: "mcp",
     serveFiles: String(env.MEMGLOW_MEMORY_SERVE_FILES || "").toLowerCase() === "any" ? "any" : "text",
-    structuredRead: !/^(0|false|no|off)$/i.test(String(env.MEMGLOW_MEMORY_STRUCTURED_READ || "")) };
+    structuredRead: !/^(0|false|no|off)$/i.test(String(env.MEMGLOW_MEMORY_STRUCTURED_READ || "")),
+    shutdownTimeoutMs: Math.max(0, Number(env.MEMGLOW_MEMORY_SHUTDOWN_TIMEOUT) || 25) * 1000 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--root") o.root = argv[++i] || "";
@@ -115,6 +120,10 @@ function parseArgs(argv, env = process.env) {
     else if (a === "--poll-ms") o.pollMs = Math.max(0, Number(argv[++i]) || 0);
     else if (a === "--no-watch") o.watch = false;
     else if (a === "--no-structured-read") o.structuredRead = false;
+    else if (a === "--shutdown-timeout" || a.startsWith("--shutdown-timeout=")) {
+      const v = Number(a === "--shutdown-timeout" ? argv[++i] : a.slice(19));
+      if (Number.isFinite(v) && v >= 0) o.shutdownTimeoutMs = v * 1000; else o.badShutdown = true;
+    }
     else if (a === "--serve-files" || a.startsWith("--serve-files=")) {
       const v = String(a === "--serve-files" ? argv[++i] || "" : a.slice(14)).toLowerCase();
       if (v === "any" || v === "text") o.serveFiles = v; else o.badServeFiles = v;
@@ -272,6 +281,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   process.on("uncaughtException", (e) => { try { process.stderr.write("memglow memory server: unexpected error (kept running): " + (e && e.stack || e) + "\n"); } catch { /* ignore */ } });
   process.on("unhandledRejection", (e) => { try { process.stderr.write("memglow memory server: unhandled rejection (kept running): " + (e && e.stack || e) + "\n"); } catch { /* ignore */ } });
   if (o.unknown) { process.stderr.write(`memglow-memory-server: unknown option(s): ${o.unknown.join(" ")}\n\n${HELP}`); return 2; }
+  if (o.badShutdown) { process.stderr.write("memglow-memory-server: bad --shutdown-timeout (expected a number of seconds)\n"); return 2; }
   if (o.badFsyncMode != null) { process.stderr.write(`memglow-memory-server: bad --fsync-mode "${o.badFsyncMode}" (expected sync, deferred or none)\n`); return 2; }
   if (o.badServeFiles != null) { process.stderr.write(`memglow-memory-server: bad --serve-files "${o.badServeFiles}" (expected text or any)\n`); return 2; }
   if (o.badFileMode != null) { process.stderr.write(`memglow-memory-server: bad --file-mode "${o.badFileMode}" (expected an octal mode such as 0664)\n`); return 2; }
@@ -300,7 +310,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
     server.once("error", (e) => { process.stderr.write(`memglow-memory-server: cannot listen on ${host}:${port}: ${e.message}\n`); srv.close(); process.exit(1); });
     server.listen(port, host, () => log(`memglow memory server: listening on http://${host}:${server.address().port}/mcp`));
     // Writes in progress — and, with --fsync-mode deferred, their pending fsyncs — finish first
-    // (at most 10 s), so a stop never leaves a half-done edit (an interrupted one would leave the
+    // (at most --shutdown-timeout, 25 s by default), so a stop never leaves a half-done edit (an interrupted one would leave the
     // old file anyway: writes are atomic).
     let stopping = false;
     const stop = () => {
@@ -308,7 +318,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
       stopping = true;
       server.close();
       const idle = srv.writer ? srv.writer.idle() : Promise.resolve();
-      const cap = new Promise((ok) => { const t = setTimeout(ok, 10000); if (t.unref) t.unref(); });
+      const cap = new Promise((ok) => { const t = setTimeout(ok, o.shutdownTimeoutMs); if (t.unref) t.unref(); });
       Promise.race([idle, cap]).finally(() => { srv.close(); process.exit(0); });
     };
     process.on("SIGINT", stop); process.on("SIGTERM", stop);
@@ -317,14 +327,14 @@ function main(argv = process.argv.slice(2), env = process.env) {
   // SIGTERM / SIGINT in stdio mode too: pending writes and fsyncs first (0.4.10.6b).
   const stopStdio = () => {
     const idle = srv.writer ? srv.writer.idle() : Promise.resolve();
-    const cap = new Promise((ok) => { const t = setTimeout(ok, 10000); if (t.unref) t.unref(); });
+    const cap = new Promise((ok) => { const t = setTimeout(ok, o.shutdownTimeoutMs); if (t.unref) t.unref(); });
     Promise.race([idle, cap]).finally(() => { srv.close(); process.exit(0); });
   };
   process.on("SIGINT", stopStdio); process.on("SIGTERM", stopStdio);
-  // stdin closed: pending writes AND their deferred fsyncs finish first (at most 10 s).
+  // stdin closed: pending writes AND their deferred fsyncs finish first (at most --shutdown-timeout).
   runStdio(srv.rpc, process.stdin, process.stdout, () => {
     const idle = srv.writer ? srv.writer.idle() : Promise.resolve();
-    const cap = new Promise((ok) => { const t = setTimeout(ok, 10000); if (t.unref) t.unref(); });
+    const cap = new Promise((ok) => { const t = setTimeout(ok, o.shutdownTimeoutMs); if (t.unref) t.unref(); });
     Promise.race([idle, cap]).finally(() => { srv.close(); process.exit(0); });
   }, srv.ready);
   return null;
