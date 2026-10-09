@@ -73,6 +73,13 @@ var EN_CONTROL = {
   "control.lever.deltaRead": "A note re-read after it changed gets only the diff, or a short header noting what changed since a past session.",
   "control.lever.duplicateHint": "Writing a new note whose title already matches or resembles an existing one gets a short duplicate warning.",
   "control.restartNotice": "Restart the MCP proxy to apply a lever change: it reads its settings once, at start.",
+  "control.maintEveryHoursLabel": "Scan every (hours, 0 = only at start)",
+  "control.archiveAfterDaysLabel": "Archive after not read for (days)",
+  "control.indexTrimMaxCharsLabel": "Index-trim candidate line length (characters)",
+  "control.indexWarningTokensLabel": "The index itself is too large above (tokens)",
+  "control.sessionsPerDayLabel": "Sessions per day (when activity counters cannot tell)",
+  "control.runNow": "Run now",
+  "control.ranNow": "Scan complete: {n} item(s) found.",
   "setup.saving": "Saving…", "setup.saved": "Saved.", "setup.notSaved": "Not saved: {error}",
   "aiset.save": "Save",
   "common.loading": "Loading…",
@@ -181,13 +188,54 @@ function controlCollectProxy(inputs) {
   return out;
 }
 
-/** The "Memory maintenance" section: last scan time + how many opportunities GET /api/maintenance lists. */
-function controlRenderMaintenance(maintenance, maintResult, now, T) {
+// 0.4.7.4: the "tuning" fields this section edits, [key, i18n label key, min, max].
+var MAINT_TUNING_FIELDS = [
+  ["maintenanceEveryHours", "control.maintEveryHoursLabel", 0, 24 * 366],
+  ["archiveAfterDays", "control.archiveAfterDaysLabel", 7, 3650],
+  ["indexTrimMaxChars", "control.indexTrimMaxCharsLabel", 30, 1000],
+  ["indexWarningTokens", "control.indexWarningTokensLabel", 100, 1000000],
+  ["sessionsPerDay", "control.sessionsPerDayLabel", 1, 1000],
+];
+
+/**
+ * The "Memory maintenance" section: last scan time + how many opportunities GET /api/maintenance
+ * lists, the five tuning fields (0.4.7.4, saved through PUT /api/setup's existing `tuning` body
+ * part — the same route AI settings' own tuning fields already use), and a "Run now" button
+ * (POST /api/maintenance/run). `vals` (optional): the tuning form's current, possibly-unsaved
+ * state, kept across a redraw.
+ */
+function controlRenderMaintenance(maintenance, maintResult, tuning, now, T, vals) {
   T = T || defaultControlT;
+  tuning = tuning || {};
+  var locked = tuning.locked || {};
   var generatedAt = maintenance && maintenance.generatedAt;
   var head = generatedAt ? T("control.maintenanceGeneratedAt", { date: new Date(generatedAt).toLocaleString() }) : T("control.maintenanceNever");
   var n = maintResult && Array.isArray(maintResult.items) ? maintResult.items.length : 0;
-  return '<p class="mg-control__line">' + cEsc(head) + (generatedAt ? " · " + cEsc(T("control.maintenanceItems", { n: n })) : "") + '</p>';
+  var out = '<p class="mg-control__line">' + cEsc(head) + (generatedAt ? " · " + cEsc(T("control.maintenanceItems", { n: n })) : "") + '</p>';
+  out += '<form id="mg-control-maint-form"><ul class="mg-control__tuning">' + MAINT_TUNING_FIELDS.map(function (f) {
+    var key = f[0], label = f[1], min = f[2], max = f[3];
+    var v = vals && Object.prototype.hasOwnProperty.call(vals, key) ? vals[key] : tuning[key];
+    var lock = locked[key];
+    return '<li><label class="mg-setup__field"><span>' + cEsc(T(label)) + '</span>' +
+      '<input class="mg-setup__input" type="number" data-maint="' + cEsc(key) + '" min="' + min + '" max="' + max + '" step="1" inputmode="numeric" value="' + cEsc(v == null ? "" : v) + '"' + (lock ? " disabled" : "") + '></label>' +
+      (lock ? '<span class="mg-control__lock">' + cEsc(T("control.locked", { name: lock })) + '</span>' : "") + '</li>';
+  }).join("") + '</ul>' +
+    '<div class="mg-setup__btns mg-control__btns"><button type="submit" class="bn-btn mg-zones__save">' + cEsc(T("aiset.save")) + '</button>' +
+    '<button type="button" class="bn-btn" id="mg-control-run-now">' + cEsc(T("control.runNow")) + '</button></div>' +
+    '<p class="mg-control__status" id="mg-control-maint-status" role="status"></p></form>';
+  return out;
+}
+
+/** What the maintenance-tuning inputs hold right now → { key: number } (disabled/locked excluded). */
+function controlCollectMaintTuning(inputs) {
+  var out = {};
+  Array.prototype.forEach.call(inputs || [], function (el) {
+    var k = el.getAttribute("data-maint");
+    if (!k || el.disabled) return;
+    var raw = String(el.value == null ? "" : el.value).trim();
+    if (raw !== "") out[k] = Number(raw);
+  });
+  return out;
 }
 
 /** The "Memory server" section: an optional MEMGLOW_MEMORY_URL's own /healthz, never a secret. */
@@ -215,15 +263,17 @@ function controlRenderMeasures(clientTokens, proxySeen, now, T) {
 }
 
 /** Full panel body from { setup, maintenance, cost } (GET /api/setup, /api/maintenance, /api/cost).
- * `vals` (optional): the levers form's current, possibly-unsaved state (kept across a redraw). */
+ * `vals` (optional): { proxy, maint } — each form's current, possibly-unsaved state, kept across
+ * a redraw (a language change, or right after the OTHER form saved). */
 function controlRender(data, T, vals) {
   T = T || defaultControlT;
+  vals = vals || {};
   var setup = data.setup || {};
   var c = setup.control || { proxy: { levers: [], caps: [] }, maintenance: {}, memoryServer: { configured: false }, proxySeen: null };
   var out = "";
   out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionSavings")) + '</h3>' +
-    '<form id="mg-control-proxy-form">' + controlRenderLevers(c.proxy, T, vals) + '</form></section>';
-  out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionMaintenance")) + '</h3>' + controlRenderMaintenance(c.maintenance, data.maintenance, Date.now(), T) + '</section>';
+    '<form id="mg-control-proxy-form">' + controlRenderLevers(c.proxy, T, vals.proxy) + '</form></section>';
+  out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionMaintenance")) + '</h3>' + controlRenderMaintenance(c.maintenance, data.maintenance, setup.tuning, Date.now(), T, vals.maint) + '</section>';
   out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionMemoryServer")) + '</h3>' + controlRenderMemoryServer(c.memoryServer, T) + '</section>';
   out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionMeasures")) + '</h3>' + controlRenderMeasures(data.cost && data.cost.clientTokens, c.proxySeen, Date.now(), T) + '</section>';
   return out;
@@ -234,7 +284,7 @@ if (typeof module !== "undefined" && module.exports) {
     cEsc: cEsc, EN_CONTROL: EN_CONTROL, resolveTextControl: resolveTextControl, defaultControlT: defaultControlT,
     controlAgo: controlAgo, controlSourceText: controlSourceText, controlLeverRow: controlLeverRow,
     controlRenderLevers: controlRenderLevers, controlCollectProxy: controlCollectProxy,
-    controlRenderMaintenance: controlRenderMaintenance,
+    controlRenderMaintenance: controlRenderMaintenance, controlCollectMaintTuning: controlCollectMaintTuning,
     controlRenderMemoryServer: controlRenderMemoryServer, controlRenderMeasures: controlRenderMeasures,
     controlRender: controlRender,
   };
@@ -251,8 +301,8 @@ if (typeof module !== "undefined" && module.exports) {
   var open = document.getElementById("mem-control");
   var T = defaultControlT;
   var banner = { root: document.getElementById("mg-banner"), msg: document.getElementById("mg-banner-msg"), btn: document.getElementById("mg-banner-btn") };
-  var last = null;   // { setup, maintenance, cost }
-  var typed = null;  // the proxy form's current, possibly-unsaved state (redraw-safe)
+  var last = null;         // { setup, maintenance, cost }
+  var typed = {};          // { proxy, maint } — each form's current, possibly-unsaved state
   var restartShown = false; // the restart notice, once a save actually changed a lever
 
   function get(url) {
@@ -261,26 +311,45 @@ if (typeof module !== "undefined" && module.exports) {
       return r.json();
     });
   }
+  function put(body2) {
+    return fetch("/api/setup", {
+      method: "PUT", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-Memglow": "1" },
+      body: JSON.stringify(body2),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) { var e = new Error(String(r.status)); e.mgStatus = r.status; e.body = j; throw e; }
+        return j;
+      });
+    });
+  }
   function say(text, bad) {
     status.textContent = text || "";
     status.className = "mg-control__status" + (bad ? " mg-control__status--bad" : "");
   }
-  function sayProxy(text, bad) {
-    var el = document.getElementById("mg-control-proxy-status");
+  function sayAt(id, text, bad) {
+    var el = document.getElementById(id);
     if (!el) return;
     el.textContent = text || "";
     el.className = "mg-control__status" + (bad ? " mg-control__status--bad" : "");
   }
+  function failAt(id, err) {
+    sayAt(id, T("setup.notSaved", { error: (err && err.body && err.body.error) || (err && err.mgStatus ? "HTTP " + err.mgStatus : T("error.connectionLost")) }), true);
+    if (typeof mgBannerKind === "function" && typeof mgErrorBanner === "function" && mgBannerKind(err) === "auth") mgErrorBanner(banner, "auth", T);
+  }
   function proxyForm() { return document.getElementById("mg-control-proxy-form"); }
+  function maintForm() { return document.getElementById("mg-control-maint-form"); }
+  function keepProxyTyped() { var f = proxyForm(); if (f) typed.proxy = controlCollectProxy(f.querySelectorAll("input[data-lever]")); }
+  function keepMaintTyped() { var f = maintForm(); if (f) typed.maint = controlCollectMaintTuning(f.querySelectorAll("input[data-maint]")); }
   function render() {
     body.innerHTML = controlRender(last, T, typed);
-    if (restartShown) sayProxy(T("control.restartNotice"), false);
+    if (restartShown) sayAt("mg-control-proxy-status", T("control.restartNotice"), false);
   }
   function load() {
     say(T("common.loading"), false);
     return Promise.all([get("/api/setup"), get("/api/maintenance"), get("/api/cost")]).then(function (r) {
       last = { setup: r[0], maintenance: r[1], cost: r[2] };
-      typed = null;
+      typed = {};
       if (typeof mgClearBanner === "function") mgClearBanner(banner);
       render();
       say("", false);
@@ -296,44 +365,54 @@ if (typeof module !== "undefined" && module.exports) {
   var closeOptions = function () { var o = document.getElementById("mem-options"); if (o && o.open) o.open = false; };
   if (open) open.addEventListener("click", function () { closeOptions(); openPanel(); });
   if (close) close.addEventListener("click", function () { tile.hidden = true; });
-  // The lever form (delegated: the form is redrawn on every load()/render()).
+  // Both forms are delegated (redrawn on every load()/render()).
   body.addEventListener("submit", function (e) {
-    var form = e.target && e.target.closest ? e.target.closest("#mg-control-proxy-form") : null;
-    if (!form) return;
+    var proxy = e.target && e.target.closest ? e.target.closest("#mg-control-proxy-form") : null;
+    var maint = proxy ? null : (e.target && e.target.closest ? e.target.closest("#mg-control-maint-form") : null);
+    if (!proxy && !maint) return;
     e.preventDefault();
-    typed = controlCollectProxy(form.querySelectorAll("input[data-lever]"));
-    sayProxy(T("setup.saving"), false);
-    fetch("/api/setup", {
-      method: "PUT", credentials: "same-origin",
-      headers: { "Content-Type": "application/json", "X-Memglow": "1" },
-      body: JSON.stringify({ proxy: typed }),
-    }).then(function (r) {
-      return r.json().catch(function () { return {}; }).then(function (j) {
-        if (!r.ok) { var e2 = new Error(String(r.status)); e2.mgStatus = r.status; e2.body = j; throw e2; }
-        return j;
-      });
-    }).then(function (j) {
-      last.setup = j;
-      typed = null;
-      restartShown = true;
-      render();
-    }).catch(function (err) {
-      sayProxy(T("setup.notSaved", { error: (err && err.body && err.body.error) || (err && err.mgStatus ? "HTTP " + err.mgStatus : T("error.connectionLost")) }), true);
-      if (typeof mgBannerKind === "function" && typeof mgErrorBanner === "function" && mgBannerKind(err) === "auth") mgErrorBanner(banner, "auth", T);
-    });
+    if (proxy) {
+      typed.proxy = controlCollectProxy(proxy.querySelectorAll("input[data-lever]"));
+      sayAt("mg-control-proxy-status", T("setup.saving"), false);
+      put({ proxy: typed.proxy }).then(function (j) {
+        last.setup = j;
+        typed.proxy = null;
+        restartShown = true;
+        render();
+      }).catch(function (err) { failAt("mg-control-proxy-status", err); });
+    } else {
+      typed.maint = controlCollectMaintTuning(maint.querySelectorAll("input[data-maint]"));
+      sayAt("mg-control-maint-status", T("setup.saving"), false);
+      put({ tuning: typed.maint }).then(function (j) {
+        last.setup = j;
+        typed.maint = null;
+        sayAt("mg-control-maint-status", T("setup.saved"), false);
+        render();
+      }).catch(function (err) { failAt("mg-control-maint-status", err); });
+    }
   });
-  // A toggle, before saving: keep it (redraw-safe) without losing the rest of the form's state.
+  body.addEventListener("click", function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest("#mg-control-run-now") : null;
+    if (!btn) return;
+    keepMaintTyped();
+    sayAt("mg-control-maint-status", T("setup.saving"), false);
+    fetch("/api/maintenance/run", { method: "POST", credentials: "same-origin", headers: { "X-Memglow": "1" } }).then(function (r) {
+      if (!r.ok) { var e2 = new Error(String(r.status)); e2.mgStatus = r.status; throw e2; }
+      return r.json();
+    }).then(function (j) {
+      last.maintenance = j;
+      sayAt("mg-control-maint-status", T("control.ranNow", { n: (j.items || []).length }), false);
+      render();
+    }).catch(function (err) { failAt("mg-control-maint-status", err); });
+  });
+  // A toggle/edit, before saving: keep it (redraw-safe) without losing the rest of that form.
   body.addEventListener("change", function (e) {
     var t = e.target;
-    if (!t || !t.getAttribute || !t.getAttribute("data-lever")) return;
-    var form = proxyForm();
-    if (form) typed = controlCollectProxy(form.querySelectorAll("input[data-lever]"));
+    if (!t || !t.getAttribute) return;
+    if (t.getAttribute("data-lever")) keepProxyTyped();
+    else if (t.getAttribute("data-maint")) keepMaintTyped();
   });
   document.addEventListener("memglow:language", function () {
-    if (!tile.hidden && last) {
-      var form = proxyForm();
-      if (form) typed = controlCollectProxy(form.querySelectorAll("input[data-lever]"));
-      render();
-    }
+    if (!tile.hidden && last) { keepProxyTyped(); keepMaintTyped(); render(); }
   });
 })();

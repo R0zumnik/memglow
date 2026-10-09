@@ -492,5 +492,12 @@
   "control.lever.indexHint": "A search whose only hit is the index gets a short excerpt of the index's own matching lines.",
   "control.lever.deltaRead": "A note re-read after it changed gets only the diff, or a short header noting what changed since a past session.",
   "control.lever.duplicateHint": "Writing a new note whose title already matches or resembles an existing one gets a short duplicate warning.",
-  "control.restartNotice": "Restart the MCP proxy to apply a lever change: it reads its settings once, at start."
+  "control.restartNotice": "Restart the MCP proxy to apply a lever change: it reads its settings once, at start.",
+  "control.maintEveryHoursLabel": "Scan every (hours, 0 = only at start)",
+  "control.archiveAfterDaysLabel": "Archive after not read for (days)",
+  "control.indexTrimMaxCharsLabel": "Index-trim candidate line length (characters)",
+  "control.indexWarningTokensLabel": "The index itself is too large above (tokens)",
+  "control.sessionsPerDayLabel": "Sessions per day (when activity counters cannot tell)",
+  "control.runNow": "Run now",
+  "control.ranNow": "Scan complete: {n} item(s) found."
 }

@@ -491,5 +491,12 @@
   "control.lever.indexHint": "Una búsqueda cuyo único resultado es el índice recibe un breve extracto de las líneas coincidentes del propio índice.",
   "control.lever.deltaRead": "Una nota releída tras cambiar recibe solo la diferencia, o un breve encabezado indicando qué cambió desde una sesión pasada.",
   "control.lever.duplicateHint": "Escribir una nota nueva cuyo título ya coincide o se parece a una existente genera un breve aviso de duplicado.",
-  "control.restartNotice": "Reinicia el proxy MCP para aplicar un cambio de interruptor: lee su configuración una sola vez, al iniciar."
+  "control.restartNotice": "Reinicia el proxy MCP para aplicar un cambio de interruptor: lee su configuración una sola vez, al iniciar.",
+  "control.maintEveryHoursLabel": "Analizar cada (horas, 0 = solo al iniciar)",
+  "control.archiveAfterDaysLabel": "Archivar tras (días) sin lectura",
+  "control.indexTrimMaxCharsLabel": "Longitud de las líneas candidatas a acortar (caracteres)",
+  "control.indexWarningTokensLabel": "El propio índice es demasiado grande por encima de (tokens)",
+  "control.sessionsPerDayLabel": "Sesiones por día (cuando los contadores de actividad no pueden saberlo)",
+  "control.runNow": "Ejecutar ahora",
+  "control.ranNow": "Análisis completo: {n} elemento(s) encontrado(s)."
 }

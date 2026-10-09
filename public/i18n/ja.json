@@ -491,5 +491,12 @@
   "control.lever.indexHint": "索引だけが唯一の結果だった検索には、索引自体の該当行の短い抜粋が表示されます。",
   "control.lever.deltaRead": "変更後に再読み込みされたノートには差分だけが、または過去のセッション以降の変更点を示す短い見出しが表示されます。",
   "control.lever.duplicateHint": "既存のノートと一致または類似するタイトルで新しいノートを書き込むと、短い重複の注意が表示されます。",
-  "control.restartNotice": "レバーの変更を適用するには MCP プロキシを再起動してください。設定は起動時に一度だけ読み込まれます。"
+  "control.restartNotice": "レバーの変更を適用するには MCP プロキシを再起動してください。設定は起動時に一度だけ読み込まれます。",
+  "control.maintEveryHoursLabel": "スキャン間隔（時間、0 = 起動時のみ）",
+  "control.archiveAfterDaysLabel": "未読のまま（日数）経過したらアーカイブ",
+  "control.indexTrimMaxCharsLabel": "短縮対象となる索引行の長さ（文字数）",
+  "control.indexWarningTokensLabel": "索引自体がこのしきい値（トークン）を超えると大きすぎると判定",
+  "control.sessionsPerDayLabel": "1日あたりのセッション数（活動カウンターで判断できない場合）",
+  "control.runNow": "今すぐ実行",
+  "control.ranNow": "スキャン完了: {n} 件の改善点が見つかりました。"
 }

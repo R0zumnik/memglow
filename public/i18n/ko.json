@@ -491,5 +491,12 @@
   "control.lever.indexHint": "유일한 결과가 색인뿐인 검색은 색인 자체의 일치하는 줄을 짧게 발췌해서 보여줍니다.",
   "control.lever.deltaRead": "변경 후 다시 읽은 노트는 차이점만, 또는 이전 세션 이후 변경된 내용을 알리는 짧은 머리글만 받습니다.",
   "control.lever.duplicateHint": "기존 노트와 이미 일치하거나 비슷한 제목으로 새 노트를 작성하면 짧은 중복 알림이 표시됩니다.",
-  "control.restartNotice": "레버 변경을 적용하려면 MCP 프록시를 재시작하세요. 설정은 시작할 때 한 번만 읽습니다."
+  "control.restartNotice": "레버 변경을 적용하려면 MCP 프록시를 재시작하세요. 설정은 시작할 때 한 번만 읽습니다.",
+  "control.maintEveryHoursLabel": "스캔 주기 (시간, 0 = 시작할 때만)",
+  "control.archiveAfterDaysLabel": "읽지 않은 지 (일) 지나면 보관",
+  "control.indexTrimMaxCharsLabel": "축약 대상 색인 줄의 길이 (문자 수)",
+  "control.indexWarningTokensLabel": "색인 자체가 이 기준(토큰)을 넘으면 너무 큼",
+  "control.sessionsPerDayLabel": "하루 세션 수 (활동 카운터로 알 수 없을 때)",
+  "control.runNow": "지금 실행",
+  "control.ranNow": "스캔 완료: {n}개 항목을 찾았습니다."
 }

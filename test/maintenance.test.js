@@ -189,6 +189,36 @@ test("createScheduler: a firing tick rescans and keeps dismissed items out", () 
   assert.ok(!store.read().items.some((i) => i.id === id), "dismissed item stays dismissed across a rescan");
 });
 
+test("createScheduler.setEveryHours: re-creates the periodic timer with no restart and no forced extra scan", () => {
+  const dir = buildFixture();
+  const dataDir = tmp("memglow-maint-sethours-");
+  const { config, memory } = buildContext(dir, dataDir, NOW);
+  const store = M.createMaintenanceStore({ dir: dataDir });
+  const scheduled = [];
+  const cleared = [];
+  const setIntervalFn = (fn, ms) => { scheduled.push({ fn, ms }); return scheduled.length; };
+  const clearIntervalFn = (id) => cleared.push(id);
+  const sched = M.createScheduler({ memory, config, dataDir, everyHours: 1, store, now: () => NOW, setIntervalFn, clearIntervalFn });
+  // Before start(): only remembered, the scheduler is not started by setEveryHours() itself.
+  sched.setEveryHours(5);
+  assert.strictEqual(scheduled.length, 0, "no timer created before start()");
+  sched.start();
+  assert.strictEqual(scheduled.length, 1);
+  assert.strictEqual(scheduled[0].ms, 5 * 3600 * 1000, "start() used the hours set beforehand");
+  const scansAfterStart = store.read().generatedAt;
+  // After start(): re-creates the timer at the new interval, clearing the old one, WITHOUT an
+  // extra synchronous scan (generatedAt unchanged).
+  sched.setEveryHours(2);
+  assert.deepStrictEqual(cleared, [1], "the old timer was cleared");
+  assert.strictEqual(scheduled.length, 2);
+  assert.strictEqual(scheduled[1].ms, 2 * 3600 * 1000);
+  assert.strictEqual(store.read().generatedAt, scansAfterStart, "no forced extra scan");
+  // 0 turns the repeat off entirely (clears, schedules nothing new).
+  sched.setEveryHours(0);
+  assert.deepStrictEqual(cleared, [1, 2]);
+  assert.strictEqual(scheduled.length, 2, "no third timer scheduled for 0");
+});
+
 // ------------------------------------------------------------------ HTTP endpoints
 
 function startServer(dir, dataDir) {
@@ -227,5 +257,64 @@ test("GET /api/maintenance; POST /api/maintenance/dismiss (CSRF, validation, per
 
     // Persists on disk.
     assert.ok(fs.existsSync(path.join(dataDir, M.DISMISSED_FILE)));
+  } finally { server.close(); }
+});
+
+test("POST /api/maintenance/run: same guard as /dismiss, runs the scan on demand, GET reflects it", async () => {
+  const dir = buildFixture();
+  const dataDir = tmp("memglow-maint-run-");
+  const { server, base } = await startServer(dir, dataDir);
+  try {
+    // No CSRF header: refused.
+    assert.strictEqual((await fetch(base + "/api/maintenance/run", { method: "POST" })).status, 403);
+    const r = await fetch(base + "/api/maintenance/run", { method: "POST", headers: { "X-Memglow": "1", Origin: base } });
+    assert.strictEqual(r.status, 200);
+    const result = await r.json();
+    assert.ok(Number.isFinite(result.generatedAt) && Array.isArray(result.items) && result.items.length > 0);
+    const after = await (await fetch(base + "/api/maintenance")).json();
+    assert.strictEqual(after.generatedAt, result.generatedAt, "GET /api/maintenance reflects the on-demand scan");
+  } finally { server.close(); }
+});
+
+test("PUT /api/setup { tuning: { maintenanceEveryHours } } re-creates the scheduler's timer with no restart", async () => {
+  const dir = buildFixture();
+  const dataDir = tmp("memglow-maint-tuning-");
+  const { server, base } = await startServer(dir, dataDir);
+  try {
+    server.memglowStartMaintenance(); // real deployments call this right after listen()
+    const r = await fetch(base + "/api/setup", {
+      method: "PUT", headers: { "Content-Type": "application/json", "X-Memglow": "1", Origin: base },
+      body: JSON.stringify({ tuning: { maintenanceEveryHours: 6, archiveAfterDays: 60, indexTrimMaxChars: 120, indexWarningTokens: 3000, sessionsPerDay: 9 } }),
+    });
+    assert.strictEqual(r.status, 200);
+    const j = await r.json();
+    assert.strictEqual(j.tuning.maintenanceEveryHours, 6);
+    assert.strictEqual(j.tuning.archiveAfterDays, 60);
+    assert.strictEqual(j.tuning.indexTrimMaxChars, 120);
+    assert.strictEqual(j.tuning.indexWarningTokens, 3000);
+    assert.strictEqual(j.tuning.sessionsPerDay, 9);
+    // A second GET sees the same saved values (persisted, not just echoed back).
+    const again = await (await fetch(base + "/api/setup")).json();
+    assert.strictEqual(again.tuning.maintenanceEveryHours, 6);
+    assert.strictEqual(again.tuning.archiveAfterDays, 60);
+  } finally { server.close(); }
+});
+
+test("PUT /api/setup { tuning: { maintenanceEveryHours } } is refused by MEMGLOW_MAINTENANCE_EVERY_HOURS and reported locked", async () => {
+  const dir = buildFixture();
+  const dataDir = tmp("memglow-maint-locked-");
+  const config = loadConfig({ MEMORY_DIR: dir, MEMGLOW_DATA_DIR: dataDir, MEMGLOW_MAINTENANCE_EVERY_HOURS: "3" }, os.tmpdir());
+  const memory = createMemory({ dir, config, pollMs: 500 });
+  const server = createServer(config, memory, { assistantEnv: { MEMGLOW_MAINTENANCE_EVERY_HOURS: "3" } });
+  await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const r = await fetch(base + "/api/setup", {
+      method: "PUT", headers: { "Content-Type": "application/json", "X-Memglow": "1", Origin: base },
+      body: JSON.stringify({ tuning: { maintenanceEveryHours: 6 } }),
+    });
+    const j = await r.json();
+    assert.strictEqual(j.tuning.maintenanceEveryHours, 3, "the environment variable wins");
+    assert.strictEqual(j.tuning.locked.maintenanceEveryHours, "MEMGLOW_MAINTENANCE_EVERY_HOURS");
   } finally { server.close(); }
 });

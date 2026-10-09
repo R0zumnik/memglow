@@ -608,6 +608,11 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
         try { setupStore.write(v.value); } catch (e) { console.error("[memglow] set-up not saved:", e.code || "error"); return json(res, 500, { error: "not saved" }); }
         setupLib.apply(config, baseConfig, setupStore.read(), runEnv);
         costCache = null;
+        // 0.4.7.4: a saved maintenanceEveryHours re-creates the scheduler's own timer right away
+        // (lib/maintenance.js createScheduler.setEveryHours), with no process restart; a no-op
+        // before the scheduler has actually started (maintenanceEnsureStarted — real deployments
+        // have already started it by the time any request arrives).
+        maintenanceScheduler.setEveryHours(config.maintenanceEveryHours);
         return json(res, 200, setupNow(req));
       });
     }
@@ -665,6 +670,20 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
         if (!/^(archive|split|indexTrim)-[0-9a-f]{16}$/.test(id)) return json(res, 400, { error: "bad id" });
         return json(res, 200, maintenanceStore.dismiss(id));
       });
+    }
+
+    // 0.4.7.4 (Settings → Control, "Memory maintenance"): "Run now" — the very same deterministic
+    // scan GET /api/maintenance would show after its own timer fires, just started on demand.
+    // Same guard as every other maintenance/setup write: page access rule, same-origin request
+    // with memglow's header (CSRF), rate limited. No body. Never applies anything by itself
+    // (still read-only with respect to the notes — see lib/maintenance.js's own top comment).
+    if (p === "/api/maintenance/run" && req.method === "POST") {
+      req.resume();
+      if (!viewerAllowed(req)) return unauthorized();
+      if (!sameOriginWrite(req)) return json(res, 403, { error: "forbidden" });
+      if (!maintRateOk()) { headers(res, { "Retry-After": "10" }); return json(res, 429, { error: "too many requests" }); }
+      maintenanceEnsureStarted();
+      return json(res, 200, maintenanceScheduler.runOnce());
     }
 
     // Assistant actions (only when enabled): same access rule as the page, same-origin browser request

@@ -491,5 +491,12 @@
   "control.lever.indexHint": "唯一结果是索引的搜索，会收到索引中匹配行的简短摘录。",
   "control.lever.deltaRead": "笔记变更后再次被读取时，只会收到差异内容，或一条说明自上次会话以来变化内容的简短标题。",
   "control.lever.duplicateHint": "写入标题已与现有笔记完全一致或相似的新笔记时，会收到一条简短的重复提示。",
-  "control.restartNotice": "请重启 MCP 代理以应用开关的更改：它只在启动时读取一次设置。"
+  "control.restartNotice": "请重启 MCP 代理以应用开关的更改：它只在启动时读取一次设置。",
+  "control.maintEveryHoursLabel": "扫描间隔（小时，0 表示只在启动时扫描）",
+  "control.archiveAfterDaysLabel": "未读经过（天数）后归档",
+  "control.indexTrimMaxCharsLabel": "可缩短的索引行长度（字符数）",
+  "control.indexWarningTokensLabel": "索引本身超过此阈值（令牌数）视为过大",
+  "control.sessionsPerDayLabel": "每天的会话数（当活动计数器无法判断时）",
+  "control.runNow": "立即运行",
+  "control.ranNow": "扫描完成：找到 {n} 个项目。"
 }

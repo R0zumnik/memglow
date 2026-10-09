@@ -491,5 +491,12 @@
   "control.lever.indexHint": "Une recherche dont le seul résultat est l'index reçoit un court extrait des lignes correspondantes de l'index.",
   "control.lever.deltaRead": "Une note relue après avoir changé ne reçoit que la différence, ou un court en-tête signalant ce qui a changé depuis une session passée.",
   "control.lever.duplicateHint": "Écrire une nouvelle note dont le titre correspond déjà ou ressemble à une note existante déclenche un court avertissement de doublon.",
-  "control.restartNotice": "Redémarrez le proxy MCP pour appliquer un changement de levier : il lit ses réglages une seule fois, au démarrage."
+  "control.restartNotice": "Redémarrez le proxy MCP pour appliquer un changement de levier : il lit ses réglages une seule fois, au démarrage.",
+  "control.maintEveryHoursLabel": "Analyser toutes les (heures, 0 = seulement au démarrage)",
+  "control.archiveAfterDaysLabel": "Archiver après (jours) sans lecture",
+  "control.indexTrimMaxCharsLabel": "Longueur des lignes candidates à raccourcir (caractères)",
+  "control.indexWarningTokensLabel": "L’index lui-même est trop grand au-delà de (jetons)",
+  "control.sessionsPerDayLabel": "Sessions par jour (quand les compteurs d’activité ne peuvent pas le dire)",
+  "control.runNow": "Lancer maintenant",
+  "control.ranNow": "Analyse terminée : {n} élément(s) trouvé(s)."
 }

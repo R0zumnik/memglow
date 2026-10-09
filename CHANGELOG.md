@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.7.4 — internal (not published)
+
+"Settings / control panel, step 4: maintenance tuning." The Control panel's "Memory maintenance"
+section gains five tuning fields (scan interval, archive-after days, index-trim candidate line
+length, the index's own "too large" threshold, sessions/day) and a "Run now" button.
+
+### Added
+
+- **`lib/setup.js`**: five new `tuning` fields — `maintenanceEveryHours`, `archiveAfterDays`,
+  `indexTrimMaxChars`, `indexWarningTokens`, `sessionsPerDay` — validated through the existing
+  closed `TUNING` bounds table (no new code path: `validate()` already walks it generically).
+  `baseOf()`/`envLocks()`/`effective()`/`apply()` carry them with the same env > page > file
+  priority as `largeNoteTokens` already has; `archiveAfterDays` recomputes the whole
+  `lib/archive.js` settings object (folder/summaryNote/etc. untouched, env still wins). `publicSetup()`'s
+  `tuning` gains the five values plus their `locked` flags.
+- **`lib/maintenance.js`**: `createScheduler().setEveryHours(hours)` — re-creates the periodic
+  timer at the new interval, with NO process restart and no forced extra scan; a no-op before
+  `start()` has actually run.
+- **`server.js`**: `POST /api/maintenance/run` (same guard as `/dismiss`: page access, CSRF, rate
+  limit) → `runOnce()`, so "Run now" shows exactly what the next scheduled scan would. `PUT
+  /api/setup` calls `setEveryHours()` right after applying a saved `tuning.maintenanceEveryHours`.
+- **`public/control.js`**: the "Memory maintenance" section gains its own form (the five tuning
+  fields, env-locked ones disabled) and a "Run now" button — both independent of the lever
+  switches' form, saved through the same `PUT /api/setup`/`POST /api/maintenance/run` routes.
+- i18n: 7 new `control.*` keys (5 field labels, `runNow`, `ranNow`), all 8 languages.
+
+### Tests
+
+- `test/maintenance.test.js`: `setEveryHours()` (before/after `start()`, no forced scan, 0 turns
+  the repeat off); `POST /api/maintenance/run` end to end (CSRF, GET reflects it); the five tuning
+  fields round-trip through `PUT /api/setup`/persist; `maintenanceEveryHours` locked by its env
+  variable is reported and wins over a page value.
+
 ## 0.4.7.3 — internal (not published)
 
 "Settings / control panel, step 3: lever switches." The Control panel's levers are no longer

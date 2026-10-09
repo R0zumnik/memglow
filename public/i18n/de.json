@@ -491,5 +491,12 @@
   "control.lever.indexHint": "Eine Suche, deren einziger Treffer der Index ist, erhält einen kurzen Ausschnitt der passenden Zeilen des Index.",
   "control.lever.deltaRead": "Eine nach einer Änderung erneut gelesene Notiz erhält nur den Unterschied oder einen kurzen Hinweis, was sich seit einer früheren Sitzung geändert hat.",
   "control.lever.duplicateHint": "Das Schreiben einer neuen Notiz, deren Titel bereits einer vorhandenen entspricht oder ähnelt, löst einen kurzen Duplikat-Hinweis aus.",
-  "control.restartNotice": "Starten Sie den MCP-Proxy neu, um eine Hebeländerung zu übernehmen: Er liest seine Einstellungen nur einmal, beim Start."
+  "control.restartNotice": "Starten Sie den MCP-Proxy neu, um eine Hebeländerung zu übernehmen: Er liest seine Einstellungen nur einmal, beim Start.",
+  "control.maintEveryHoursLabel": "Alle (Stunden) scannen, 0 = nur beim Start",
+  "control.archiveAfterDaysLabel": "Archivieren nach (Tagen) ohne Lesezugriff",
+  "control.indexTrimMaxCharsLabel": "Länge der zu kürzenden Indexzeilen (Zeichen)",
+  "control.indexWarningTokensLabel": "Der Index selbst ist zu groß ab (Token)",
+  "control.sessionsPerDayLabel": "Sitzungen pro Tag (wenn die Aktivitätszähler es nicht wissen können)",
+  "control.runNow": "Jetzt ausführen",
+  "control.ranNow": "Scan abgeschlossen: {n} Eintrag/Einträge gefunden."
 }
