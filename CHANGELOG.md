@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.4.7.1 — internal (not published)
+
+"Settings / control panel, step 1: single source of truth for config." Start of 0.4.7 ("the
+settings / control panel"). Today there is no UI for the 14+ MCP proxy levers nor for the memory
+server; this first step fixes the configuration defects a control panel would otherwise inherit:
+two config files that could silently disagree, three numeric defaults (`largeNoteTokens`,
+`splitChunkTokens`, `indexWarningTokens`) duplicated across four modules, and the MCP proxy never
+reading the Settings page's own saved tuning, so a lever's threshold could diverge from what the
+page showed.
+
+### Added
+
+- **`lib/defaults.js`** (new): the single source of truth for `LARGE_NOTE_TOKENS` (5000),
+  `SPLIT_CHUNK_TOKENS` (2000) and `INDEX_WARNING_TOKENS` (2000); `resolveConfigFiles({ env, cwd,
+  home, strict })`, which resolves `memglow.config.json` across its two possible locations (an
+  explicit `MEMGLOW_CONFIG` alone, else `./memglow.config.json` merged OVER
+  `~/.memglow/memglow.config.json` per top-level key, the project file winning, with a `warnings`
+  entry for any key the two files set to a genuinely different value — `strict` throws on a
+  broken EXPLICIT or PROJECT file, never on a broken home file); `resolveInt(envVal, pageVal,
+  fileVal, def, min, max)` (env > page > file > default, each candidate clamped); and
+  `readSavedTuning(dataDir)`, a read-only read of `<dataDir>/setup.json`'s `tuning` section for
+  callers (the MCP proxy, memglow's own MCP server) that do not load `lib/setup.js`'s full
+  pipeline.
+
+### Changed
+
+- **`lib/config.js`**: `loadConfig()` now reads BOTH config file locations (previously: the
+  project/explicit file only — the home file `memglow init` writes was invisible to the main
+  viewer unless `MEMGLOW_CONFIG` pointed at it), and its three numeric defaults come from
+  `lib/defaults.js`.
+- **`lib/proxy-levers.js`**: `proxyConfig()` now reads BOTH config file locations too (previously:
+  the home file only, by default — a project `./memglow.config.json` was invisible to the proxy
+  unless `MEMGLOW_CONFIG` was set). It also now reads the Settings page's saved
+  `<dataDir>/setup.json` tuning for `largeNoteTokens` (lever 1, `sizeWarning`'s threshold) and
+  `indexWarningTokens`, with the documented priority env > page > file > default — so lever 1's
+  threshold can no longer diverge from what Settings → AI settings shows. `proxyConfig()` takes an
+  optional second `cwd` argument now (defaults to `process.cwd()`, fully backward compatible).
+- **`lib/memory-rules.js`**: `lightConfig()` gets the exact same two fixes (both config locations,
+  plus the page's saved tuning for `largeNoteTokens`/`splitChunkTokens`) — the rules text's own
+  "keep notes under N tokens" line now matches Settings too. `lightConfig()` and
+  `computeRulesText()` both take an optional second `cwd` argument, backward compatible.
+- **`lib/cost.js`**: kept a pure module (no `fs`) on purpose; its own fallback constants are now
+  commented as required to equal `lib/defaults.js`'s, checked by a test.
+
+### Tests
+
+- `test/defaults.test.js` (new, 13 tests): `resolveConfigFiles` precedence (explicit alone, cwd
+  over home, home-only, neither, divergence warning, strict vs non-strict throwing), `resolveInt`
+  priority, `readSavedTuning`, the "no divergence" cross-module checks, and the end-to-end lever-1
+  / rules-text fix (a page-saved `largeNoteTokens` now actually changes what the proxy and the
+  rules text use, with env still winning over everything).
+
 ## 0.4.6 — 2026-10-09
 
 The first published version since 0.4.1. It is 0.4.5 below plus one fix. 0.4.5 was tagged but never
