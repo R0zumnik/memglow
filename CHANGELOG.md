@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.10.3 — internal (not published)
+
+Responsiveness, step 3: one index.
+
+- **The levers' note index reads the store** in all-in-one mode (`memory-server/store-memory.js`):
+  an object with the subset of lib/memory.js's API that `createNoteIndex` uses, built from the
+  notes the server has already read and parsed — no second scan of the folder by lib/memory.js.
+  Same semantics, so the levers answer byte for byte as in "proxy → memory server" (the
+  equivalence test still passes, and a new test compares the graph with a lib/memory.js scan,
+  before and after writes): the notes under the index folder, depth-first name order, slug ids
+  (first wins), lib/memory.js's own frontmatter reader, theme rules and `[[link]]` parser, 512 KB
+  limit, files the store skips (not UTF-8, too large) still listed, the "last BODY change" mtime
+  rule (fingerprints now computed only when two versions of a note are compared). Documented
+  difference: the store also skips `#recycle`, `#snapshot` and `__pycache__` folders. Used only
+  when the index folder is inside the server's root; the standalone proxy keeps its own index.
+  `createNoteIndex(cfg, { memory })` takes such a source.
+- **Lever 8 hashes the in-memory text** (`fileHash` → `textOf`, the file's exact bytes, a BOM
+  the reader dropped put back — the store now records `note.bom`); the archive summary and the
+  size after a write (`fileStat`) come from memory too. **`afterWrite`** is now a no-op refresh:
+  the writer already updated the store.
+- **`store.data()` split**: the resolution maps are built at once, the link graph (outgoing /
+  incoming edges) only by `store.graph()` on first use per version (only `build_context` needs it).
+- **Search index updated incrementally** on a small change (`updateIndex`): df counts adjusted
+  for the docs that left / arrived, the sorted vocabulary merged, total length adjusted — exactly
+  a full rebuild (tested after write / edit / move / delete); a big change still rebuilds.
+- With `deferStart` the levers' index is built during the warm-up, not by the first request.
+- Measured (265 notes, the index-reading levers on, in process): `initialize` 128 → 42 ms
+  (the first `initialize` built the levers' index by scanning and reading every file; now it is
+  derived from parsed notes, and prebuilt at startup in the CLI); first `read_note` after
+  `initialize` ≈120 → ≈6 ms with no file read; a search right after a write ≈+9 ms over a steady
+  one on 120 notes (test), was a full df/vocab rebuild.
+- Tests: `test/one-index-0410-3.test.js`.
+
 ## 0.4.10.2 — internal (not published)
 
 Responsiveness, step 2: startup.

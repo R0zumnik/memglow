@@ -38,6 +38,7 @@ const learnedAliases = require("../lib/learned-aliases");
 const negativeCacheLib = require("../lib/negative-cache");
 const deltaReadLib = require("../lib/delta-read");
 const { setupRules, createWatcher, subCallParams } = require("../mcp-proxy/memglow-mcp-proxy");
+const { createStoreMemory } = require("./store-memory");
 
 // The memory server's own write tools (memory-server/write-tools.js): after any of them succeeds,
 // the levers' note index is refreshed right away. Plus whatever the lever config calls a write.
@@ -55,11 +56,16 @@ function leverMemoryDir(root, env = process.env) {
  * Same as setupLevers() in mcp-proxy/memglow-mcp-proxy.js (public API only), plus: the note index
  * defaults to this server's notes, and it is returned (afterWrite). null when every lever is off.
  */
-function setupServerLevers({ root, env = process.env, serverName = "", log = () => {} }) {
+function setupServerLevers({ root, env = process.env, serverName = "", log = () => {}, store = null }) {
   try {
     const config = levers.proxyConfig({ ...env, MEMGLOW_MEMORY_DIR: leverMemoryDir(root, env) });
     if (!levers.anyLever(config)) return null;
-    const index = levers.createNoteIndex(config);
+    // 0.4.10.3: one index — the levers' note index reads this server's own store (already parsed
+    // notes, in-memory text) instead of scanning the same folder a second time (lib/memory.js).
+    // Only when the index folder is inside the store's root; else lib/memory.js as before.
+    let memory = null;
+    try { memory = store && config.memoryDir ? createStoreMemory({ store, memoryDir: config.memoryDir, config: config.memory }) : null; } catch { memory = null; }
+    const index = levers.createNoteIndex(config, memory ? { memory } : {});
     const savings = levers.createSavings(config);
     const aliasStore = learnedAliases.createAliasStore(config);
     const negativeCacheStore = negativeCacheLib.createNegativeCacheStore(config);
@@ -81,8 +87,8 @@ const isThenable = (x) => !!x && typeof x.then === "function";
  * `levers` / `rules` (tests): pass an engine (or null) to bypass the env-based set-up; a test
  * engine passed here should carry `index` for afterWrite (optional).
  */
-function createAllInOne({ rpc, root, env = process.env, name = "memglow-memory", source = "mcp", onReport, levers: lvIn, rules: rulesIn, log = () => {} }) {
-  const lv = lvIn === undefined ? setupServerLevers({ root, env, serverName: name, log }) : lvIn;
+function createAllInOne({ rpc, root, env = process.env, name = "memglow-memory", source = "mcp", onReport, levers: lvIn, rules: rulesIn, log = () => {}, store = null }) {
+  const lv = lvIn === undefined ? setupServerLevers({ root, env, serverName: name, log, store }) : lvIn;
   const rules = setupRules(env, rulesIn);
   // 0.4.10.0: in-process and after the answer (core.reportInProcess: setImmediate + fetch, cached
   // settings) — it used to read the config and the token and spawn a node process per call,

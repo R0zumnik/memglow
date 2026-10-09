@@ -32,13 +32,14 @@ function load() {
 }
 
 function args(argv) {
-  const o = { notes: 265, n: 40, idleS: 10, json: false, proc: true };
+  const o = { notes: 265, n: 40, idleS: 10, json: false, proc: true, leversOn: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--notes") o.notes = Math.max(20, Number(argv[++i]) || 265);
     else if (argv[i] === "--n") o.n = Math.max(5, Number(argv[++i]) || 40);
     else if (argv[i] === "--idle-s") o.idleS = Math.max(1, Number(argv[++i]) || 10);
     else if (argv[i] === "--json") o.json = true;
     else if (argv[i] === "--no-proc") o.proc = false;
+    else if (argv[i] === "--levers-on") o.leversOn = true; // the levers that read the note index, on
   }
   return o;
 }
@@ -107,7 +108,8 @@ async function inProcess(o, base, viewer) {
   const home = path.join(base, "home-a");
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(path.join(home, "token"), "t".repeat(40));
-  const env = { MEMGLOW_HOME: home, MEMGLOW_CONFIG: path.join(base, "none.json"), MEMGLOW_DATA_DIR: path.join(base, "data-a"), MEMGLOW_PROXY_LOG: "0", MEMGLOW_URL: viewer.url, MEMGLOW_TOKEN: "t".repeat(40) };
+  const env = { MEMGLOW_HOME: home, MEMGLOW_CONFIG: path.join(base, "none.json"), MEMGLOW_DATA_DIR: path.join(base, "data-a"), MEMGLOW_PROXY_LOG: "0", MEMGLOW_URL: viewer.url, MEMGLOW_TOKEN: "t".repeat(40),
+    ...(o.leversOn ? { MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_DEDUPE: "1", MEMGLOW_PROXY_DELTA_READ: "1", MEMGLOW_PROXY_DUPLICATE_HINT: "1", MEMGLOW_PROXY_SEARCH_DETAILS: "1", MEMGLOW_PROXY_INDEX_HINT: "1", MEMGLOW_PROXY_NEGATIVE_CACHE: "1" } : {}) };
   // agent-core reads these from process.env (activity reports): point them at the fake viewer.
   Object.assign(process.env, { MEMGLOW_HOME: home, MEMGLOW_URL: viewer.url, MEMGLOW_TOKEN: "t".repeat(40) });
   const out = {};

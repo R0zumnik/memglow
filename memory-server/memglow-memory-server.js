@@ -195,11 +195,13 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     ready = store.startAsync()
       .then(() => { try { startupChecks(); } catch { /* best effort */ } })
       .then(() => tools.engine.warmAsync())
+      // 0.4.10.3: the levers' note index (fed from the store) built now, not by the first request.
+      .then(() => { try { if (aio && aio.lv && aio.lv.index) aio.lv.index.allNotes(); } catch { /* lazily then */ } })
       .catch(() => { /* a request still gets the plain scan / a lazy index */ })
       .then(() => { isReady = true; });
   }
   const rawRpc = createRpc({ tools, instructions: readOnly ? INSTRUCTIONS : INSTRUCTIONS_RW });
-  const aio = allInOne ? createAllInOne({ rpc: rawRpc, root, log, ...(allInOne === true ? {} : allInOne) }) : null;
+  const aio = allInOne ? createAllInOne({ rpc: rawRpc, root, log, store, ...(allInOne === true ? {} : allInOne) }) : null;
   const inner = aio ? aio.rpc : rawRpc;
   // Until the folder is loaded and indexed, a request waits for it (deferStart only).
   const rpc = deferStart ? {
