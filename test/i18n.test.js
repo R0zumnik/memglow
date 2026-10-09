@@ -211,7 +211,7 @@ test("i18n: v0.4 texts go through keys — journal channel, organisation facts, 
     maintenance: { items: [{ id: "a" }] },
     cost: { clientTokens: { byClient: { "claude-code": { tokens: 100, calls: 2 } } } },
   }, T);
-  for (const k of ["control.sectionSavings", "control.on", "control.locked", "control.sectionMaintenance", "control.maintenanceItems:1", "control.sectionMemoryServer", "control.memoryServerOk", "control.sectionMeasures", "control.proxySeen", "control.byClientTitle"]) {
+  for (const k of ["control.sectionSavings", "control.locked", "control.sectionMaintenance", "control.maintenanceItems:1", "control.sectionMemoryServer", "control.memoryServerOk", "control.sectionMeasures", "control.proxySeen", "control.byClientTitle", "aiset.save"]) {
     assert.ok(ctrl.includes("[" + k), k);
   }
   assert.ok(ctrl.includes("sizeWarning") && ctrl.includes("dedupe"), "lever names shown verbatim, never translated");

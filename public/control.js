@@ -1,12 +1,16 @@
 /*!
  * memglow — Settings → Control panel. MIT License.
  *
- * 0.4.7.2: READ ONLY. Shows the MCP proxy's lever values (where each one comes from: an
- * environment variable, the page, memglow.config.json, or the built-in default — GET
- * /api/setup's `control.proxy`), the last memory-maintenance scan (`control.maintenance` +
- * GET /api/maintenance's item count), an optional memory server's health (`control.memoryServer`)
- * and a few measurements (GET /api/cost's `clientTokens`, per-AI-tool token totals). 0.4.7.3 adds
- * switches for the day-one and advanced levers; this step only ever reads.
+ * Shows the MCP proxy's lever values (where each one comes from: an environment variable, the
+ * page, memglow.config.json, or the built-in default — GET /api/setup's `control.proxy`), the
+ * last memory-maintenance scan (`control.maintenance` + GET /api/maintenance's item count), an
+ * optional memory server's health (`control.memoryServer`) and a few measurements (GET
+ * /api/cost's `clientTokens`, per-AI-tool token totals).
+ *
+ * 0.4.7.3: the lever checkboxes are now real switches, saved through the SAME PUT /api/setup as
+ * every other setting here (a `proxy` body part, validated server-side as a CLOSED list — see
+ * lib/setup.js validate()). An env-locked lever's checkbox is disabled ("locked by MEMGLOW_…").
+ * Levers are read once at proxy START: saving shows a banner asking for a restart.
  *
  * Never shows a secret, a disk path, a tool-mapping table or any of the memory server's own
  * start-up flags (--token, --read-write, …) — see the task's own exclusion list. Every text from
@@ -68,6 +72,9 @@ var EN_CONTROL = {
   "control.lever.indexHint": "A search whose only hit is the index gets a short excerpt of the index's own matching lines.",
   "control.lever.deltaRead": "A note re-read after it changed gets only the diff, or a short header noting what changed since a past session.",
   "control.lever.duplicateHint": "Writing a new note whose title already matches or resembles an existing one gets a short duplicate warning.",
+  "control.restartNotice": "Restart the MCP proxy to apply a lever change: it reads its settings once, at start.",
+  "setup.saving": "Saving…", "setup.saved": "Saved.", "setup.notSaved": "Not saved: {error}",
+  "aiset.save": "Save",
   "common.loading": "Loading…",
   "common.daysAgo": { one: "{n} day ago", other: "{n} days ago" },
   "common.hoursAgo": { one: "{n} hour ago", other: "{n} hours ago" },
@@ -121,28 +128,56 @@ function controlSourceText(l, T) {
   return T("control.sourceDefault");
 }
 
-/** One lever row (read-only in 0.4.7.2: a value badge, not yet a switch). */
-function controlLeverRow(l, T) {
+/**
+ * One lever row — 0.4.7.3: a real switch, `checked` from the current value, `disabled` and a
+ * "locked by MEMGLOW_…" badge for an env-locked lever (the page can never override an environment
+ * variable). `vals` (optional): what the form holds right now, for a redraw (e.g. a language
+ * change) that must not lose an unsaved toggle — `vals[key]` wins over `l.value` when present.
+ */
+function controlLeverRow(l, T, vals) {
   T = T || defaultControlT;
+  var checked = vals && Object.prototype.hasOwnProperty.call(vals, l.key) ? !!vals[l.key] : !!l.value;
   var help = T("control.lever." + l.key);
   return '<li class="mg-control__lever" data-lever="' + cEsc(l.key) + '">' +
-    '<span class="mg-control__leverhead"><code>' + cEsc(l.key) + '</code>' +
-    '<span class="mg-control__badge' + (l.value ? " mg-control__badge--on" : "") + '">' + cEsc(T(l.value ? "control.on" : "control.off")) + '</span>' +
+    '<label class="mg-control__leverhead">' +
+    '<input type="checkbox" data-lever="' + cEsc(l.key) + '"' + (checked ? " checked" : "") + (l.envLocked ? " disabled" : "") + '>' +
+    '<code>' + cEsc(l.key) + '</code>' +
     (l.envLocked ? '<span class="mg-control__lock">' + cEsc(T("control.locked", { name: l.env || "" })) + '</span>' : '<span class="mg-control__source">' + cEsc(controlSourceText(l, T)) + '</span>') +
-    '</span><p class="mg-control__help">' + cEsc(help === "control.lever." + l.key ? "" : help) + '</p></li>';
+    '</label><p class="mg-control__help">' + cEsc(help === "control.lever." + l.key ? "" : help) + '</p></li>';
 }
 
 /** The "Token savings" section: day-one levers first, the rest under a collapsible "Advanced". */
-function controlRenderLevers(proxy, T) {
+function controlRenderLevers(proxy, T, vals) {
   T = T || defaultControlT;
   var levers = (proxy && proxy.levers) || [];
+  var caps = (proxy && proxy.caps) || [];
   var day1 = levers.filter(function (l) { return l.day1; });
   var rest = levers.filter(function (l) { return !l.day1; });
-  var out = '<ul class="mg-control__levers">' + day1.map(function (l) { return controlLeverRow(l, T); }).join("") + '</ul>';
+  var out = '<ul class="mg-control__levers">' + day1.map(function (l) { return controlLeverRow(l, T, vals); }).join("") + '</ul>';
   if (rest.length) {
     out += '<details class="mg-control__advanced"><summary>' + cEsc(T("control.advanced")) + '</summary>' +
-      '<ul class="mg-control__levers">' + rest.map(function (l) { return controlLeverRow(l, T); }).join("") + '</ul></details>';
+      '<ul class="mg-control__levers">' + rest.map(function (l) { return controlLeverRow(l, T, vals); }).join("") + '</ul></details>';
   }
+  // Caps are read-only even here (edited from Settings → AI settings' "tuning", not this page).
+  if (caps.length) {
+    out += '<ul class="mg-control__caps">' + caps.map(function (c) {
+      return '<li><code>' + cEsc(c.key) + '</code> = ' + cEsc(c.value) + ' (' + cEsc(controlSourceText(c, T)) + ')</li>';
+    }).join("") + '</ul>';
+  }
+  out += '<div class="mg-setup__btns mg-control__btns"><button type="submit" class="bn-btn mg-zones__save">' + cEsc(T("aiset.save")) + '</button></div>' +
+    '<p class="mg-control__status" id="mg-control-proxy-status" role="status"></p>';
+  return out;
+}
+
+/** What the lever checkboxes hold right now → { key: boolean } (disabled/locked ones excluded —
+ * same convention as public/setup.js's setupCollectTuning: an env-locked switch is never sent). */
+function controlCollectProxy(inputs) {
+  var out = {};
+  Array.prototype.forEach.call(inputs || [], function (el) {
+    var k = el.getAttribute("data-lever");
+    if (!k || el.disabled) return;
+    out[k] = !!el.checked;
+  });
   return out;
 }
 
@@ -179,13 +214,15 @@ function controlRenderMeasures(clientTokens, proxySeen, now, T) {
   return out;
 }
 
-/** Full panel body from { setup, maintenance, cost } (GET /api/setup, /api/maintenance, /api/cost). */
-function controlRender(data, T) {
+/** Full panel body from { setup, maintenance, cost } (GET /api/setup, /api/maintenance, /api/cost).
+ * `vals` (optional): the levers form's current, possibly-unsaved state (kept across a redraw). */
+function controlRender(data, T, vals) {
   T = T || defaultControlT;
   var setup = data.setup || {};
   var c = setup.control || { proxy: { levers: [], caps: [] }, maintenance: {}, memoryServer: { configured: false }, proxySeen: null };
   var out = "";
-  out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionSavings")) + '</h3>' + controlRenderLevers(c.proxy, T) + '</section>';
+  out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionSavings")) + '</h3>' +
+    '<form id="mg-control-proxy-form">' + controlRenderLevers(c.proxy, T, vals) + '</form></section>';
   out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionMaintenance")) + '</h3>' + controlRenderMaintenance(c.maintenance, data.maintenance, Date.now(), T) + '</section>';
   out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionMemoryServer")) + '</h3>' + controlRenderMemoryServer(c.memoryServer, T) + '</section>';
   out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionMeasures")) + '</h3>' + controlRenderMeasures(data.cost && data.cost.clientTokens, c.proxySeen, Date.now(), T) + '</section>';
@@ -196,7 +233,8 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     cEsc: cEsc, EN_CONTROL: EN_CONTROL, resolveTextControl: resolveTextControl, defaultControlT: defaultControlT,
     controlAgo: controlAgo, controlSourceText: controlSourceText, controlLeverRow: controlLeverRow,
-    controlRenderLevers: controlRenderLevers, controlRenderMaintenance: controlRenderMaintenance,
+    controlRenderLevers: controlRenderLevers, controlCollectProxy: controlCollectProxy,
+    controlRenderMaintenance: controlRenderMaintenance,
     controlRenderMemoryServer: controlRenderMemoryServer, controlRenderMeasures: controlRenderMeasures,
     controlRender: controlRender,
   };
@@ -213,7 +251,9 @@ if (typeof module !== "undefined" && module.exports) {
   var open = document.getElementById("mem-control");
   var T = defaultControlT;
   var banner = { root: document.getElementById("mg-banner"), msg: document.getElementById("mg-banner-msg"), btn: document.getElementById("mg-banner-btn") };
-  var last = null; // { setup, maintenance, cost }
+  var last = null;   // { setup, maintenance, cost }
+  var typed = null;  // the proxy form's current, possibly-unsaved state (redraw-safe)
+  var restartShown = false; // the restart notice, once a save actually changed a lever
 
   function get(url) {
     return fetch(url, { credentials: "same-origin" }).then(function (r) {
@@ -225,12 +265,24 @@ if (typeof module !== "undefined" && module.exports) {
     status.textContent = text || "";
     status.className = "mg-control__status" + (bad ? " mg-control__status--bad" : "");
   }
+  function sayProxy(text, bad) {
+    var el = document.getElementById("mg-control-proxy-status");
+    if (!el) return;
+    el.textContent = text || "";
+    el.className = "mg-control__status" + (bad ? " mg-control__status--bad" : "");
+  }
+  function proxyForm() { return document.getElementById("mg-control-proxy-form"); }
+  function render() {
+    body.innerHTML = controlRender(last, T, typed);
+    if (restartShown) sayProxy(T("control.restartNotice"), false);
+  }
   function load() {
     say(T("common.loading"), false);
     return Promise.all([get("/api/setup"), get("/api/maintenance"), get("/api/cost")]).then(function (r) {
       last = { setup: r[0], maintenance: r[1], cost: r[2] };
+      typed = null;
       if (typeof mgClearBanner === "function") mgClearBanner(banner);
-      body.innerHTML = controlRender(last, T);
+      render();
       say("", false);
     }).catch(function (e) {
       say(T("error.connectionLost"), true);
@@ -244,7 +296,44 @@ if (typeof module !== "undefined" && module.exports) {
   var closeOptions = function () { var o = document.getElementById("mem-options"); if (o && o.open) o.open = false; };
   if (open) open.addEventListener("click", function () { closeOptions(); openPanel(); });
   if (close) close.addEventListener("click", function () { tile.hidden = true; });
+  // The lever form (delegated: the form is redrawn on every load()/render()).
+  body.addEventListener("submit", function (e) {
+    var form = e.target && e.target.closest ? e.target.closest("#mg-control-proxy-form") : null;
+    if (!form) return;
+    e.preventDefault();
+    typed = controlCollectProxy(form.querySelectorAll("input[data-lever]"));
+    sayProxy(T("setup.saving"), false);
+    fetch("/api/setup", {
+      method: "PUT", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-Memglow": "1" },
+      body: JSON.stringify({ proxy: typed }),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) { var e2 = new Error(String(r.status)); e2.mgStatus = r.status; e2.body = j; throw e2; }
+        return j;
+      });
+    }).then(function (j) {
+      last.setup = j;
+      typed = null;
+      restartShown = true;
+      render();
+    }).catch(function (err) {
+      sayProxy(T("setup.notSaved", { error: (err && err.body && err.body.error) || (err && err.mgStatus ? "HTTP " + err.mgStatus : T("error.connectionLost")) }), true);
+      if (typeof mgBannerKind === "function" && typeof mgErrorBanner === "function" && mgBannerKind(err) === "auth") mgErrorBanner(banner, "auth", T);
+    });
+  });
+  // A toggle, before saving: keep it (redraw-safe) without losing the rest of the form's state.
+  body.addEventListener("change", function (e) {
+    var t = e.target;
+    if (!t || !t.getAttribute || !t.getAttribute("data-lever")) return;
+    var form = proxyForm();
+    if (form) typed = controlCollectProxy(form.querySelectorAll("input[data-lever]"));
+  });
   document.addEventListener("memglow:language", function () {
-    if (!tile.hidden && last) body.innerHTML = controlRender(last, T);
+    if (!tile.hidden && last) {
+      var form = proxyForm();
+      if (form) typed = controlCollectProxy(form.querySelectorAll("input[data-lever]"));
+      render();
+    }
   });
 })();

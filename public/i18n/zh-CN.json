@@ -490,5 +490,6 @@
   "control.lever.negativeCache": "上次没有找到有用结果的搜索，只要记忆内容自那时起未变化，就会收到一条简短提醒。",
   "control.lever.indexHint": "唯一结果是索引的搜索，会收到索引中匹配行的简短摘录。",
   "control.lever.deltaRead": "笔记变更后再次被读取时，只会收到差异内容，或一条说明自上次会话以来变化内容的简短标题。",
-  "control.lever.duplicateHint": "写入标题已与现有笔记完全一致或相似的新笔记时，会收到一条简短的重复提示。"
+  "control.lever.duplicateHint": "写入标题已与现有笔记完全一致或相似的新笔记时，会收到一条简短的重复提示。",
+  "control.restartNotice": "请重启 MCP 代理以应用开关的更改：它只在启动时读取一次设置。"
 }

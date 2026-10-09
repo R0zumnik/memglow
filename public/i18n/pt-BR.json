@@ -490,5 +490,6 @@
   "control.lever.negativeCache": "Uma busca que não encontrou nada útil da última vez recebe um breve lembrete, enquanto a memória não tiver mudado desde então.",
   "control.lever.indexHint": "Uma busca cujo único resultado é o índice recebe um breve trecho das linhas correspondentes do próprio índice.",
   "control.lever.deltaRead": "Uma nota relida após ser alterada recebe apenas a diferença, ou um breve cabeçalho indicando o que mudou desde uma sessão anterior.",
-  "control.lever.duplicateHint": "Escrever uma nova nota cujo título já corresponde ou se parece com uma existente gera um breve aviso de duplicidade."
+  "control.lever.duplicateHint": "Escrever uma nova nota cujo título já corresponde ou se parece com uma existente gera um breve aviso de duplicidade.",
+  "control.restartNotice": "Reinicie o proxy MCP para aplicar uma mudança de chave: ele lê suas configurações apenas uma vez, ao iniciar."
 }

@@ -490,5 +490,6 @@
   "control.lever.negativeCache": "Eine Suche, die letztes Mal nichts Nützliches fand, erhält einen kurzen Hinweis, solange sich der Speicher seitdem nicht geändert hat.",
   "control.lever.indexHint": "Eine Suche, deren einziger Treffer der Index ist, erhält einen kurzen Ausschnitt der passenden Zeilen des Index.",
   "control.lever.deltaRead": "Eine nach einer Änderung erneut gelesene Notiz erhält nur den Unterschied oder einen kurzen Hinweis, was sich seit einer früheren Sitzung geändert hat.",
-  "control.lever.duplicateHint": "Das Schreiben einer neuen Notiz, deren Titel bereits einer vorhandenen entspricht oder ähnelt, löst einen kurzen Duplikat-Hinweis aus."
+  "control.lever.duplicateHint": "Das Schreiben einer neuen Notiz, deren Titel bereits einer vorhandenen entspricht oder ähnelt, löst einen kurzen Duplikat-Hinweis aus.",
+  "control.restartNotice": "Starten Sie den MCP-Proxy neu, um eine Hebeländerung zu übernehmen: Er liest seine Einstellungen nur einmal, beim Start."
 }

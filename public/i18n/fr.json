@@ -490,5 +490,6 @@
   "control.lever.negativeCache": "Une recherche qui n'a rien donné d'utile la dernière fois reçoit un court rappel, tant que la mémoire n'a pas changé depuis.",
   "control.lever.indexHint": "Une recherche dont le seul résultat est l'index reçoit un court extrait des lignes correspondantes de l'index.",
   "control.lever.deltaRead": "Une note relue après avoir changé ne reçoit que la différence, ou un court en-tête signalant ce qui a changé depuis une session passée.",
-  "control.lever.duplicateHint": "Écrire une nouvelle note dont le titre correspond déjà ou ressemble à une note existante déclenche un court avertissement de doublon."
+  "control.lever.duplicateHint": "Écrire une nouvelle note dont le titre correspond déjà ou ressemble à une note existante déclenche un court avertissement de doublon.",
+  "control.restartNotice": "Redémarrez le proxy MCP pour appliquer un changement de levier : il lit ses réglages une seule fois, au démarrage."
 }

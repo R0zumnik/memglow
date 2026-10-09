@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.7.3 — internal (not published)
+
+"Settings / control panel, step 3: lever switches." The Control panel's levers are no longer
+read-only: a checkbox per lever, day-one levers first (sizeWarning, multiQuery, aliases,
+learnAliases, indexWarning), the rest under "Advanced", each with its one-line help text. An
+env-locked lever's checkbox is disabled, with a "locked by MEMGLOW_PROXY_…" badge. Saving shows a
+banner: levers are read once at proxy start, so a change needs a restart to take effect.
+
+### Added
+
+- **`lib/setup.js`**: a new `proxy` body part in `validate()` — a CLOSED list, exactly
+  `lib/proxy-levers.js`'s `LEVER_META` keys (`PROXY_LEVER_KEYS`, kept automatically in sync: a new
+  lever added there is automatically save-able here, no second list), each value a strict
+  boolean; anything else (a tool-mapping table, a cap, a disk path, a token, an unknown key) is
+  refused with `unknown-field`/`bad-value`/`secret-field`, never silently dropped. `reread()` and
+  `createSetupStore.write()` carry the new section through like every other one. Saved as a WHOLE
+  (no deep merge across calls, same as `tuning`/`assistant.providers`) — the page always sends
+  every lever it currently renders.
+- **`public/control.js`**: the lever rows are now checkboxes, saved through `PUT /api/setup`
+  (the exact same route, CSRF guard and rate limit as every other Settings write); a restart
+  banner after a successful save; the two integer caps (largeNoteTokens, indexWarningTokens) are
+  now also shown (read-only — they stay editable from AI settings' "tuning", not duplicated here).
+- i18n: `control.restartNotice`, plus three already-shipped keys (`setup.saving`/`setup.saved`/
+  `setup.notSaved`, `aiset.save`) reused for the save flow — all 8 languages.
+
+### Tests
+
+- `test/setup.test.js`: saving a lever round-trips and persists; the whole-object save semantics
+  (a lever not resent reverts, like `tuning`); an env-locked lever's page value is accepted but
+  never used (the environment still wins); a CSRF-refused write never saves. **Security**: a
+  dedicated test sends every excluded shape (tool-mapping tables, per-lever caps, disk paths, a
+  token-named field, wrong types, an unknown key alongside a valid one) and asserts every single
+  one is refused (400), then confirms the full, legitimate closed list saves together in one call.
+
 ## 0.4.7.2 — internal (not published)
 
 "Settings / control panel, step 2: read-only control panel." A new Settings → Control tile shows,

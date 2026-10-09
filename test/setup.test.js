@@ -398,6 +398,89 @@ test("setup: control.proxy reflects an env-set lever as locked, and a page-saved
   } finally { await t.stop(); }
 });
 
+test("setup: PUT /api/setup { proxy } saves a lever switch, round-trips, and takes priority over memglow.config.json", async () => {
+  const t = await start();
+  try {
+    const r1 = await t.call("/api/setup", { method: "PUT", body: { proxy: { dedupe: true, toc: true } } });
+    assert.strictEqual(r1.status, 200);
+    const dedupe1 = r1.json.control.proxy.levers.find((l) => l.key === "dedupe");
+    assert.deepStrictEqual(dedupe1, { key: "dedupe", value: true, source: "page", envLocked: false, day1: false });
+    // A second GET sees the same saved state (persisted, not just echoed back).
+    const r2 = await t.call("/api/setup");
+    assert.strictEqual(r2.json.control.proxy.levers.find((l) => l.key === "dedupe").value, true);
+    assert.strictEqual(r2.json.control.proxy.levers.find((l) => l.key === "toc").value, true);
+    // Turning it back off is a real, saved change. Like `tuning`/`assistant.providers`, `proxy`
+    // is saved as a WHOLE (no deep merge across calls — lib/setup.js createSetupStore.write()'s
+    // top-level `{...cur, ...update}`): the page always sends every lever it currently renders
+    // (public/control.js collects the whole form, not just the one that changed), so a lever
+    // simply not sent this time is NOT "kept" — it reverts to env/file/default, same as `tuning`.
+    const r3 = await t.call("/api/setup", { method: "PUT", body: { proxy: { dedupe: false, toc: true } } });
+    assert.strictEqual(r3.json.control.proxy.levers.find((l) => l.key === "dedupe").value, false);
+    assert.strictEqual(r3.json.control.proxy.levers.find((l) => l.key === "toc").value, true);
+    const r4 = await t.call("/api/setup", { method: "PUT", body: { proxy: { dedupe: false } } });
+    assert.strictEqual(r4.json.control.proxy.levers.find((l) => l.key === "toc").value, false, "toc was not resent: it is back to its default, not \"kept\" (whole-object save)");
+  } finally { await t.stop(); }
+});
+
+test("setup: an env-locked lever is refused from the page even when the page agrees with the environment", async () => {
+  const t = await start({ MEMGLOW_PROXY_DEDUPE: "0" });
+  try {
+    // The server does not specially refuse an env-locked lever's value (the UI disables it and
+    // never sends it); but if a client sent it anyway, the saved value is simply never read back
+    // over the environment — proxyConfig() always lets env win, so nothing breaks either way.
+    const r = await t.call("/api/setup", { method: "PUT", body: { proxy: { dedupe: true } } });
+    assert.strictEqual(r.status, 200);
+    const dedupe = r.json.control.proxy.levers.find((l) => l.key === "dedupe");
+    assert.strictEqual(dedupe.value, false, "the environment variable still wins");
+    assert.strictEqual(dedupe.source, "env");
+    assert.strictEqual(dedupe.envLocked, true);
+  } finally { await t.stop(); }
+});
+
+test("setup: security — proxy is a CLOSED list (tool mappings, caps and unknown keys are all refused), never a secret path", async () => {
+  const t = await start();
+  try {
+    for (const body of [
+      { proxy: { unsupportedTools: { "basic-memory": {} } } },
+      { proxy: { readTools: ["read_note"] } },
+      { proxy: { searchTools: ["search"] } },
+      { proxy: { writeTools: ["write_note"] } },
+      { proxy: { alwaysLoadedExemptClients: ["x"] } },
+      { proxy: { largeNoteTokens: 9999 } },   // a cap: belongs to `tuning`, not `proxy`
+      { proxy: { archiveHintMax: 1 } },
+      { proxy: { memoryDir: "/etc" } },
+      { proxy: { dataDir: "/etc" } },
+      { proxy: { token: "x".repeat(40) } },
+      { proxy: { sizeWarning: "on" } },        // wrong type
+      { proxy: { sizeWarning: 1 } },           // wrong type
+      { proxy: { sizeWarning: null, evil: true } }, // unknown field alongside a valid one
+    ]) {
+      const r = await t.call("/api/setup", { method: "PUT", body });
+      assert.strictEqual(r.status, 400, JSON.stringify(body));
+      assert.ok(["unknown-field", "bad-value", "secret-field"].includes(r.json.error), JSON.stringify(body) + " -> " + JSON.stringify(r.json));
+    }
+    // Every real lever key is still accepted together, in one call (closed list, not a blocklist).
+    const allTrue = {};
+    for (const l of require("../lib/proxy-levers").LEVER_META) allTrue[l.key] = true;
+    const ok = await t.call("/api/setup", { method: "PUT", body: { proxy: allTrue } });
+    assert.strictEqual(ok.status, 200);
+    for (const l of require("../lib/proxy-levers").LEVER_META) {
+      assert.strictEqual(ok.json.control.proxy.levers.find((x) => x.key === l.key).value, true, l.key);
+    }
+  } finally { await t.stop(); }
+});
+
+test("setup: PUT /api/setup { proxy } obeys the same CSRF/rate-limit/body-size guard as every other setup write", async () => {
+  const t = await start();
+  try {
+    // No X-Memglow header, no Origin: same-origin guard refuses it (403), nothing saved.
+    const r = await t.call("/api/setup", { method: "PUT", body: { proxy: { dedupe: true } }, headers: { "x-memglow": "", origin: "" } });
+    assert.strictEqual(r.status, 403);
+    const after = await t.call("/api/setup");
+    assert.strictEqual(after.json.control.proxy.levers.find((l) => l.key === "dedupe").value, false, "the CSRF-refused write never saved");
+  } finally { await t.stop(); }
+});
+
 test("setup page: renders every step and AI settings, escapes server text, collects strictly", () => {
   const T = (k, p) => "[" + k + "]" + (p ? JSON.stringify(p) : "");
   const s = {
