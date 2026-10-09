@@ -21,11 +21,15 @@ const cp = require("child_process");
 // Count every child process started in this process (activity reports used to spawn one per call).
 let spawned = 0;
 const realSpawn = cp.spawn;
-cp.spawn = function (...a) { spawned++; return realSpawn.apply(this, a); };
+function countSpawns() { cp.spawn = function (...a) { spawned++; return realSpawn.apply(this, a); }; }
 
 const ROOT_DIR = path.join(__dirname, "..");
-const { createMemoryServer } = require("../memory-server/memglow-memory-server");
-const { createHttpServer } = require("../memory-server/http");
+// Loaded by main() AFTER countSpawns(): modules that keep a reference to child_process.spawn.
+let createMemoryServer, createHttpServer;
+function load() {
+  ({ createMemoryServer } = require("../memory-server/memglow-memory-server"));
+  ({ createHttpServer } = require("../memory-server/http"));
+}
 
 function args(argv) {
   const o = { notes: 265, n: 40, idleS: 10, json: false, proc: true };
@@ -219,6 +223,8 @@ async function realProcess(o, base, extra) {
 }
 
 async function main() {
+  countSpawns();
+  load();
   const o = args(process.argv.slice(2));
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-resp-bench-"));
   makeKb(path.join(base, "src"), o.notes);
@@ -240,4 +246,6 @@ async function main() {
   setTimeout(() => process.exit(0), 200).unref();
 }
 
-main().catch((e) => { process.stderr.write(String(e && e.stack || e) + "\n"); process.exit(1); });
+if (require.main === module) main().catch((e) => { process.stderr.write(String(e && e.stack || e) + "\n"); process.exit(1); });
+
+module.exports = { makeKb };

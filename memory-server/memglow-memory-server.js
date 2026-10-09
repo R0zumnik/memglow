@@ -139,6 +139,10 @@ function parseArgs(argv, env = process.env) {
  * { env, name, source, onReport, levers, rules } = the proxy's levers, rules and activity
  * reporting applied in process (memory-server/all-in-one.js) — then `rpc` is that wrapped
  * dispatcher and `rawRpc` the server's own.
+ * `deferStart` (0.4.10.2, the CLI): return at once and load the notes folder and build the
+ * search index in setImmediate chunks (`ready` resolves when done); a request arriving before
+ * that waits for it (never fails, never sees a half-loaded folder). Without it everything is
+ * loaded before this returns, as before (`ready` is already resolved).
  */
 /**
  * The fsync mode in effect and where it comes from: --fsync-mode / --no-fsync, else
@@ -162,7 +166,7 @@ function resolveFsyncMode(o, env = process.env) {
 }
 
 function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 3000, watch = true, maxFileBytes, log = () => {},
-  fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne }) {
+  fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne, deferStart = false }) {
   let tools = null, warmTimer = null;
   // The search index is rebuilt lazily by the next search anyway; warming it after a change is
   // coalesced (a burst of writes costs one rebuild, not one per write).
@@ -171,30 +175,54 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     warmTimer = setImmediate(() => { warmTimer = null; try { tools.warm(); } catch { /* next search rebuilds */ } });
   };
   const store = createStore({ root, project, pollMs, watch, log, ...(maxFileBytes ? { maxFileBytes } : {}), onChange });
-  store.start();
   const writer = readOnly ? null : createWriter({ store, fsync, fsyncMode, fileMode, onWrite, onWriteDelayMs, log, hooks: writerHooks, ...(maxFileBytes ? { maxFileBytes } : {}), ...(chownToParent != null ? { chownToParent } : {}) });
-  if (writer) {
+  const startupChecks = () => {
+    if (!writer) return;
     try { const w = ownershipWarning(require("fs").statSync(root)); if (w) log(w); } catch { /* no root: nothing to warn about */ }
     writer.cleanupTemps(cleanupTempsMinAgeMs);
     const twins = sameFileTwins(store.notes());
     const col = store.collisions();
     if (twins.length || col.length) log(`memglow memory server: ${twins.length + col.length} note(s) present under several paths or permalinks (an interrupted move?) — see basic_memory_diagnostics`);
-  }
+  };
   tools = createTools({ store, project, readOnly, writer, serveFiles, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
-  tools.warm();
+  let ready, isReady = !deferStart;
+  if (!deferStart) {
+    store.start();
+    startupChecks();
+    tools.warm();
+    ready = Promise.resolve();
+  } else {
+    ready = store.startAsync()
+      .then(() => { try { startupChecks(); } catch { /* best effort */ } })
+      .then(() => tools.engine.warmAsync())
+      .catch(() => { /* a request still gets the plain scan / a lazy index */ })
+      .then(() => { isReady = true; });
+  }
   const rawRpc = createRpc({ tools, instructions: readOnly ? INSTRUCTIONS : INSTRUCTIONS_RW });
   const aio = allInOne ? createAllInOne({ rpc: rawRpc, root, log, ...(allInOne === true ? {} : allInOne) }) : null;
-  const rpc = aio ? aio.rpc : rawRpc;
-  return { store, tools, rpc, rawRpc, aio, writer, close: () => { if (warmTimer) { clearImmediate(warmTimer); warmTimer = null; } store.stop(); if (writer) writer.flushHook(); if (aio) aio.close(); } };
+  const inner = aio ? aio.rpc : rawRpc;
+  // Until the folder is loaded and indexed, a request waits for it (deferStart only).
+  const rpc = deferStart ? {
+    serverInfo: inner.serverInfo,
+    handle: (m, ctx) => (isReady ? inner.handle(m, ctx) : ready.then(() => inner.handle(m, ctx))),
+    handleAny: (m, ctx) => (isReady ? inner.handleAny(m, ctx) : ready.then(() => inner.handleAny(m, ctx))),
+  } : inner;
+  return { store, tools, rpc, rawRpc, aio, writer, ready, isReady: () => isReady, close: () => { if (warmTimer) { clearImmediate(warmTimer); warmTimer = null; } store.stop(); if (writer) writer.flushHook(); if (aio) aio.close(); } };
 }
 
-function runStdio(rpc, input = process.stdin, output = process.stdout, onEnd = () => process.exit(0)) {
+function runStdio(rpc, input = process.stdin, output = process.stdout, onEnd = () => process.exit(0), ready = null) {
   let buf = "";
   let pending = 0, ended = false;
-  const finish = () => { if (ended && !pending) output.write("", () => onEnd()); };
+  // 0.4.10.2: until the notes folder is loaded (`ready`), lines are only buffered — then handled
+  // in arrival order, so the answers keep the order they always had.
+  let isReady = !ready;
+  const finish = () => { if (isReady && ended && !pending) output.write("", () => onEnd()); };
   input.setEncoding("utf8");
-  input.on("data", (chunk) => {
+  if (ready) ready.then(() => { isReady = true; onData(""); finish(); }, () => { isReady = true; onData(""); finish(); });
+  input.on("data", (chunk) => onData(chunk));
+  function onData(chunk) {
     buf += chunk;
+    if (!isReady) return;
     let i;
     while ((i = buf.indexOf("\n")) >= 0) {
       const line = buf.slice(0, i).trim();
@@ -216,7 +244,7 @@ function runStdio(rpc, input = process.stdin, output = process.stdout, onEnd = (
       emit(out);
     }
     if (buf.length > 20 * 1024 * 1024) buf = "";
-  });
+  }
   // Exit only once every answer (pending writes included) has been written and flushed: a write's
   // callback runs after the data is handed to the OS, in order, so the empty write's callback
   // comes after all of them.
@@ -239,16 +267,20 @@ function main(argv = process.argv.slice(2), env = process.env) {
   const root = path.resolve(o.root);
   const t0 = Date.now();
   const fsyncInfo = resolveFsyncMode(o, env);
+  // 0.4.10.2: the port opens at once; the notes folder is loaded and indexed in the background
+  // (requests meanwhile wait for it, they never fail).
   const srv = createMemoryServer({ root, project: o.project, readOnly: o.readOnly, pollMs: o.pollMs, watch: o.watch, log,
     fsync: o.fsync, fsyncMode: fsyncInfo.mode, fileMode: o.fileMode, serveFiles: o.serveFiles, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
-    allInOne: o.levers ? { env, name: o.name || "memglow-memory", source: o.source } : false });
-  const st = srv.store.stats();
+    allInOne: o.levers ? { env, name: o.name || "memglow-memory", source: o.source } : false, deferStart: true });
   if (fsyncInfo.warning) log(fsyncInfo.warning);
-  log(`memglow memory server ${SERVER_VERSION}: ${st.notes} notes indexed from ${root} in ${Date.now() - t0} ms (project "${o.project}", ${o.readOnly ? "read-only" : "read-write, fsync " + fsyncInfo.mode + (fsyncInfo.source !== "default" ? " (" + fsyncInfo.source + ")" : "")}${st.watching ? ", watching" : ""})`);
-  if (srv.aio) {
-    const c = srv.aio.lv && srv.aio.lv.config;
-    log(`memglow memory server: all-in-one — levers ${c ? "on (notes index: " + (c.memoryDir || "none") + ", data: " + c.dataDir + ")" : "all off"}, memory rules ${srv.aio.rules ? "on" : "off"}, activity channel "memory-server"`);
-  }
+  srv.ready.then(() => {
+    const st = srv.store.stats();
+    log(`memglow memory server ${SERVER_VERSION}: ${st.notes} notes indexed from ${root} in ${Date.now() - t0} ms (project "${o.project}", ${o.readOnly ? "read-only" : "read-write, fsync " + fsyncInfo.mode + (fsyncInfo.source !== "default" ? " (" + fsyncInfo.source + ")" : "")}${st.watching ? ", watching" : ""})`);
+    if (srv.aio) {
+      const c = srv.aio.lv && srv.aio.lv.config;
+      log(`memglow memory server: all-in-one — levers ${c ? "on (notes index: " + (c.memoryDir || "none") + ", data: " + c.dataDir + ")" : "all off"}, memory rules ${srv.aio.rules ? "on" : "off"}, activity channel "memory-server"`);
+    }
+  });
   if (o.listen) {
     const m = /^(?:\[?([^\]]*)\]?:)?(\d+)$/.exec(o.listen.trim());
     if (!m) { process.stderr.write(`memglow-memory-server: bad --listen "${o.listen}" (expected HOST:PORT)\n`); return 2; }
@@ -276,7 +308,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
     const idle = srv.writer ? srv.writer.idle() : Promise.resolve();
     const cap = new Promise((ok) => { const t = setTimeout(ok, 10000); if (t.unref) t.unref(); });
     Promise.race([idle, cap]).finally(() => { srv.close(); process.exit(0); });
-  });
+  }, srv.ready);
   return null;
 }
 

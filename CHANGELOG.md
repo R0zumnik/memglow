@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.4.10.2 — internal (not published)
+
+Responsiveness, step 2: startup.
+
+- **The port opens before the warm-up.** `createMemoryServer({ deferStart: true })` (what the CLI
+  now uses) returns at once: `store.startAsync()` lists and stats the folder asynchronously, then
+  reads and parses the notes in `setImmediate` chunks of 16; `engine.warmAsync()` then builds the
+  index entries in chunks and assembles the index. `srv.ready` resolves when both are done. A
+  request arriving before that waits for `ready` (HTTP and stdio both already handle a promised
+  answer) — it never fails and never sees a half-loaded folder; any direct read of the store
+  before the chunked load ends gets the plain synchronous scan, which the load then gives way to.
+  `GET /healthz` answers at once. Tests and other callers keep the old synchronous behaviour.
+  stdio: lines that arrive before `ready` are buffered and handled in arrival order once it
+  resolves, so answers keep their usual order. The CLI now logs "listening" before "N notes
+  indexed" (`test/memory-server-http.test.js` waits for both).
+- **Each note body is tokenised once** (`lib/store/search.js` `tokeniseBody`): the body is
+  folded in one call, split into lines (fold never adds or removes a line break), each line
+  matched once; the body's index terms, its phrase text and the per-line snippet term sets all
+  come from that pass (they were three separate passes: `terms(body)`, `phraseText(...body)`,
+  `terms(line)` per line). Warm-up of 265 notes ≈640 → ≈425 ms (same machine, same corpus).
+- **Ranking is unchanged**, proven by `test/search-ranking.test.js`: the top-10 of 215 queries
+  (the existing search tests' queries plus generated ones) over the memory-server fixture, a
+  400-note synthetic corpus and edge notes (NFD accents, ligatures, Greek, CRLF, emoji, a lone
+  combining mark) — same notes, order, kind and match snippet, scores equal to 1e-9 — against a
+  snapshot taken with the 0.4.10.1 code (`test/fixtures/ranking-golden.json`), both with the
+  synchronous index and after `warmAsync()`.
+- **`fold()`: NOT rewritten, on purpose.** A whole-string NFD + strip-marks version with exactly
+  today's output was written and proven equal (on accented French text and on every code point
+  up to U+2FFFF — it needs a few explicit rules: a mark or surrogate already in the input → a
+  space, the ligature table applied before NFD, 5 BMP characters whose decomposition is ASCII
+  punctuation → a space). Measured, it is SLOWER on V8 than the current cached per-character
+  fold (16.6 vs 7.3 ms per 200 k characters of accented text; the `\p{M}` passes dominate), so
+  the current `fold()` stays. The reference and the equality proof are kept in
+  `test/search-ranking.test.js` (a future rewrite has its oracle). The real saving is folding
+  each body once instead of per line (above).
+- Measured (real process, 265 notes, levers on): spawn → first `initialize` answer 1239 →
+  965 ms (that answer waits for `ready`; the port itself is open within node's boot time).
+- Tests: `test/startup-0410-2.test.js` (requests before ready wait and match a fully loaded
+  server, the event loop keeps turning during the load, the CLI's `/healthz` and a search answer
+  while/after it loads), `test/search-ranking.test.js`.
+
 ## 0.4.10.1 — internal (not published)
 
 Responsiveness, step 1: `--fsync-mode sync|deferred|none` for the memory server's writes.

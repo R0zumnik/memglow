@@ -231,7 +231,8 @@ test("CLI --listen: serves /mcp; --help; bad option", async () => {
     let err = "";
     child.stderr.on("data", (c) => { err += c; });
     assert.ok(await waitFor(() => /listening on http:\/\/127\.0\.0\.1:(\d+)\/mcp/.test(err), 15000), err);
-    assert.match(err, /10 notes indexed/);
+    // 0.4.10.2: the port opens first, the "indexed" line follows once the folder is loaded.
+    assert.ok(await waitFor(() => /10 notes indexed/.test(err), 15000), err);
     const url = /listening on (http:\/\/\S+)/.exec(err)[1];
     const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_memory_projects", arguments: {} } }) });
     assert.match((await r.json()).result.content[0].text, /^Available projects:\n- main \(local\)/);
