@@ -499,5 +499,6 @@
   "control.sessionsPerDayLabel": "1日あたりのセッション数（活動カウンターで判断できない場合）",
   "control.runNow": "今すぐ実行",
   "control.ranNow": "スキャン完了: {n} 件の改善点が見つかりました。",
-  "control.byLeverTitle": "レバー別（7日間）"
+  "control.byLeverTitle": "レバー別（7日間）",
+  "control.resetToDefault": "既定値に戻す"
 }

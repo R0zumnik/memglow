@@ -226,6 +226,31 @@ test("i18n: v0.4 texts go through keys — journal channel, organisation facts, 
   assert.ok(ctrl.includes("sizeWarning") && ctrl.includes("dedupe") && ctrl.includes("largeNoteTokens"), "lever/cap names shown verbatim, never translated");
 });
 
+test("control.js: controlCollectProxy diffs against the effective value (minor 2, 0.4.7.6) — only a REAL change is ever sent", () => {
+  var el = function (key, checked, disabled) {
+    return { getAttribute: function (n) { return n === "data-lever" ? key : null; }, checked: checked, disabled: !!disabled };
+  };
+  var inputs = [el("sizeWarning", true), el("dedupe", true), el("toc", false), el("alreadyLoaded", true, true)];
+  var effective = { sizeWarning: true, dedupe: false, toc: false, alreadyLoaded: false };
+  // sizeWarning: unchanged (true==true) -> excluded. dedupe: true vs effective false -> included.
+  // toc: false==false -> excluded. alreadyLoaded: disabled (env-locked) -> excluded regardless.
+  assert.deepStrictEqual(controlPage.controlCollectProxy(inputs, effective), { dedupe: true });
+  // Without `effectiveByKey` (back-compat): every non-disabled checkbox is included, as before.
+  assert.deepStrictEqual(controlPage.controlCollectProxy(inputs), { sizeWarning: true, dedupe: true, toc: false });
+  // Nothing changed at all -> an empty diff, not "every lever re-pinned as page".
+  assert.deepStrictEqual(controlPage.controlCollectProxy([el("sizeWarning", true), el("dedupe", false)], { sizeWarning: true, dedupe: false }), {});
+});
+
+test("control.js: a non-default, non-locked lever gets a \"reset to default\" control; a default or env-locked one does not (minor 2, 0.4.7.6)", () => {
+  var row = controlPage.controlLeverRow({ key: "dedupe", value: true, source: "page", envLocked: false, day1: false }, defaultT());
+  assert.match(row, /data-reset-lever="dedupe"/);
+  var def = controlPage.controlLeverRow({ key: "sizeWarning", value: true, source: "default", envLocked: false, day1: true }, defaultT());
+  assert.ok(!def.includes("data-reset-lever"), "nothing to reset: already the default");
+  var locked = controlPage.controlLeverRow({ key: "multiQuery", value: false, source: "env", envLocked: true, env: "MEMGLOW_PROXY_MULTI_QUERY", day1: true }, defaultT());
+  assert.ok(!locked.includes("data-reset-lever"), "env-locked: nothing saved here to reset");
+  function defaultT() { return function (k, p) { return "[" + k + (p && typeof p.n === "number" ? ":" + p.n : "") + "]"; }; }
+});
+
 // ---- numbers and dates in the page language (Intl) ----
 
 test("i18n: numbers and dates follow the language (Intl), English as the fallback", () => {

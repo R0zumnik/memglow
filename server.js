@@ -29,7 +29,7 @@ const memoryRules = require("./lib/memory-rules");
 const hubSpoke = require("./lib/hub-spoke");
 const { createFindTime } = require("./lib/find-time");
 const { createEngineSpeed, cleanDuration } = require("./lib/engine-speed");
-const { readClientSavings } = require("./lib/proxy-levers");
+const { readClientSavings, proxyConfig } = require("./lib/proxy-levers");
 
 const PUBLIC = path.join(__dirname, "public");
 // Interface languages shipped (public/i18n/<code>.json); must match lib/view.js SETTINGS.language
@@ -116,6 +116,20 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
   setupStore = setupStore || setupLib.createSetupStore({ dir: dataDir });
   usage = usage || setupLib.createUsage({ dir: dataDir });
   setupLib.apply(config, baseConfig, setupStore.read(), runEnv);
+  // Minor 4 (0.4.7.6): the viewer's own dataDir and what the MCP proxy would resolve for THIS
+  // SAME environment can legitimately differ now (0.4.7.6 M1's trust boundary: the proxy never
+  // reads a cwd memglow.config.json, the viewer does) — logged once, in the SERVER LOG ONLY
+  // (never sent to the browser, never in any API response): Control-panel figures (savings,
+  // aliases) read from the PROXY's own dataDir, so a silent mismatch would otherwise look like
+  // "nothing is happening" with no clue why.
+  (() => {
+    try {
+      const proxyDataDir = proxyConfig(runEnv, config.cwd || process.cwd()).dataDir;
+      if (proxyDataDir && config.dataDir && path.resolve(proxyDataDir) !== path.resolve(config.dataDir)) {
+        console.warn(`memglow: this viewer's data folder (${config.dataDir}) differs from where the MCP proxy, run with this same environment, would keep its own (${proxyDataDir}). Settings → Control's savings/aliases figures read the PROXY's folder — set MEMGLOW_DATA_DIR to an absolute path shared by both if they should match.`);
+      }
+    } catch { /* informative only: never block start-up over this */ }
+  })();
   let testWindow = 0, testsInWindow = 0;
   function testRateOk() {
     const now = Date.now();
@@ -465,12 +479,39 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       done(body);
     });
   }
-  const setupNow = (req, memoryServer) => setupLib.publicSetup({
-    config, saved: setupStore.read(), env: runEnv, dataDir, memglowHome, req, usage,
-    maintenanceGeneratedAt: maintenanceStore.read().generatedAt, memoryServer, proxySeen,
-  });
-  /** Settings → Control's optional memory-server health check (0.4.7.2): short timeout, never throws. */
-  const memoryServerNow = () => setupLib.memoryServerStatus({ url: runEnv.MEMGLOW_MEMORY_URL, fetchImpl }).catch(() => ({ configured: false }));
+  /** Never throws (see try/catch below): a bad publicSetup() call must never crash a request. */
+  const setupNow = (req, memoryServer) => {
+    try {
+      return setupLib.publicSetup({
+        config, saved: setupStore.read(), env: runEnv, dataDir, memglowHome, req, usage,
+        maintenanceGeneratedAt: maintenanceStore.read().generatedAt, memoryServer, proxySeen,
+      });
+    } catch (e) { console.error("[memglow] /api/setup: publicSetup failed:", e.message); return { error: "not available" }; }
+  };
+  // Minor 5 (0.4.7.6): the memory-server health check (`/healthz`, lib/setup.js
+  // memoryServerStatus) used to run fresh on EVERY GET /api/setup, up to its own 2 s timeout —
+  // blocking the request on a slow or absent memory server every single time the Control panel
+  // (or anything else) asks. Now a 30 s cache: memoryServerNow() always returns IMMEDIATELY
+  // (the last known answer, `{ configured: false }` before the very first refresh), and kicks
+  // off a background refresh — at most one in flight at a time — whenever that answer is stale.
+  // The refresh's own promise is independent per call and both branches are handled (never an
+  // unhandled rejection).
+  const MEMORY_SERVER_CACHE_MS = 30000;
+  let memoryServerCache = { configured: false };
+  let memoryServerCacheAt = 0;
+  let memoryServerRefreshing = false;
+  function refreshMemoryServerInBackground() {
+    if (memoryServerRefreshing) return;
+    memoryServerRefreshing = true;
+    setupLib.memoryServerStatus({ url: runEnv.MEMGLOW_MEMORY_URL, fetchImpl })
+      .then((ms) => { memoryServerCache = ms; })
+      .catch(() => { memoryServerCache = { configured: false }; })
+      .finally(() => { memoryServerCacheAt = Date.now(); memoryServerRefreshing = false; });
+  }
+  function memoryServerNow() {
+    if (Date.now() - memoryServerCacheAt > MEMORY_SERVER_CACHE_MS) refreshMemoryServerInBackground();
+    return memoryServerCache;
+  }
   /** Hosts a key may be sent to, per provider, with the settings in effect now. */
   const destinations = () => Object.fromEntries(setupLib.PROVIDER_IDS.map((id) => {
     const row = setupLib.publicSetup({ config, saved: {}, env: runEnv, dataDir, memglowHome, req: null }).assistant.providers.find((x) => x.id === id);
@@ -621,7 +662,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
         // before the scheduler has actually started (maintenanceEnsureStarted — real deployments
         // have already started it by the time any request arrives).
         maintenanceScheduler.setEveryHours(config.maintenanceEveryHours);
-        return json(res, 200, setupNow(req));
+        return json(res, 200, setupNow(req, memoryServerNow()));
       });
     }
     // A secret (API key, Claude Code subscription token): its own route, its own rules. Saving one
@@ -690,8 +731,13 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       if (!viewerAllowed(req)) return unauthorized();
       if (!sameOriginWrite(req)) return json(res, 403, { error: "forbidden" });
       if (!maintRateOk()) { headers(res, { "Retry-After": "10" }); return json(res, 429, { error: "too many requests" }); }
+      // Minor 6 (0.4.7.6): maintenanceEnsureStarted() itself already runs one scan (start()'s own
+      // runOnce()) the FIRST time it is ever called — calling runOnce() again right after would
+      // scan twice for one click. Only ask for a second scan when the scheduler was ALREADY
+      // running before this request.
+      const alreadyStarted = maintStarted;
       maintenanceEnsureStarted();
-      return json(res, 200, maintenanceScheduler.runOnce());
+      return json(res, 200, alreadyStarted ? maintenanceScheduler.runOnce() : maintenanceStore.read());
     }
 
     // Assistant actions (only when enabled): same access rule as the page, same-origin browser request
@@ -782,7 +828,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       return json(res, 200, { ...z, themes: zonesLib.overview(config, memory.costNotes(), z.labels) });
     }
     if (p === "/api/view") return json(res, 200, view.publicView(views.read()));
-    if (p === "/api/setup") { memoryServerNow().then((ms) => json(res, 200, setupNow(req, ms))); return; }
+    if (p === "/api/setup") return json(res, 200, setupNow(req, memoryServerNow()));
     if (p.startsWith("/api/note/")) {
       const n = memory.note(decodeURIComponent(p.slice("/api/note/".length)), { withBody: config.showBodies });
       return n ? json(res, 200, n) : json(res, 404, { error: "not found" });

@@ -499,5 +499,6 @@
   "control.sessionsPerDayLabel": "Sessões por dia (quando os contadores de atividade não conseguem saber)",
   "control.runNow": "Executar agora",
   "control.ranNow": "Análise concluída: {n} item(ns) encontrado(s).",
-  "control.byLeverTitle": "Por chave (7 dias)"
+  "control.byLeverTitle": "Por chave (7 dias)",
+  "control.resetToDefault": "Redefinir para o padrão"
 }

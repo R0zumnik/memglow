@@ -366,6 +366,40 @@ test("setup: memoryServerStatus — not configured, unreachable, and a fake /hea
   } finally { fake.close(); }
 });
 
+test("setup: GET /api/setup never blocks on a slow /healthz, caches the memory-server status for the window, refreshes in the background (0.4.7.6, minor 5)", async () => {
+  let hits = 0;
+  let delayMs = 1500; // close to (but under) memoryServerStatus's own 2 s timeout
+  const fake = http.createServer((req, res) => {
+    hits++;
+    setTimeout(() => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, name: "x", version: "1.0", notes: 7, readOnly: true, tokenRequired: false }));
+    }, delayMs);
+  });
+  await new Promise((ok) => fake.listen(0, "127.0.0.1", ok));
+  const t = await start({ MEMGLOW_MEMORY_URL: `http://127.0.0.1:${fake.address().port}/mcp` });
+  try {
+    const t0 = Date.now();
+    const r1 = await t.call("/api/setup");
+    const ms = Date.now() - t0;
+    assert.ok(ms < 500, `GET /api/setup must never wait on /healthz (took ${ms} ms)`);
+    assert.deepStrictEqual(r1.json.control.memoryServer, { configured: false }, "nothing cached yet on the very first request");
+    // Give the background fetch (kicked off by that first request) time to land.
+    let after = null;
+    for (let i = 0; i < 40 && hits < 1; i++) await new Promise((ok) => setTimeout(ok, 50));
+    for (let i = 0; i < 40; i++) {
+      after = await t.call("/api/setup");
+      if (after.json.control.memoryServer.ok) break;
+      await new Promise((ok) => setTimeout(ok, 100));
+    }
+    assert.deepStrictEqual(after.json.control.memoryServer, { configured: true, ok: true, readOnly: true, tokenRequired: false, version: "1.0", notes: 7 });
+    const hitsAfterFirstRefresh = hits;
+    // Within the cache window, several more requests never hit /healthz again.
+    await t.call("/api/setup"); await t.call("/api/setup"); await t.call("/api/setup");
+    assert.strictEqual(hits, hitsAfterFirstRefresh, "cached: no new /healthz request within the window");
+  } finally { await t.stop(); fake.close(); }
+});
+
 test("setup: GET /api/setup exposes control.proxy (lever sources), control.maintenance.generatedAt and control.memoryServer", async () => {
   const t = await start();
   try {
@@ -376,7 +410,7 @@ test("setup: GET /api/setup exposes control.proxy (lever sources), control.maint
     assert.strictEqual(c.maintenance.generatedAt, null, "no maintenance scan ran yet in this test server");
     assert.deepStrictEqual(c.memoryServer, { configured: false }, "MEMGLOW_MEMORY_URL not set");
     const sizeWarning = c.proxy.levers.find((l) => l.key === "sizeWarning");
-    assert.deepStrictEqual(sizeWarning, { key: "sizeWarning", value: true, source: "default", envLocked: false, day1: true });
+    assert.deepStrictEqual(sizeWarning, { key: "sizeWarning", value: true, source: "default", envLocked: false, env: "MEMGLOW_PROXY_SIZE_WARNING", day1: true });
     const largeNoteTokens = c.proxy.caps.find((x) => x.key === "largeNoteTokens");
     assert.strictEqual(largeNoteTokens.value, 5000);
     assert.strictEqual(largeNoteTokens.source, "default");
@@ -396,7 +430,7 @@ test("setup: control.proxy reflects an env-set lever as locked, and a page-saved
     await t.call("/api/setup", { method: "PUT", body: { tuning: { largeNoteTokens: 4242 } } });
     const r = await t.call("/api/setup");
     const multiQuery = r.json.control.proxy.levers.find((l) => l.key === "multiQuery");
-    assert.deepStrictEqual(multiQuery, { key: "multiQuery", value: false, source: "env", envLocked: true, day1: true });
+    assert.deepStrictEqual(multiQuery, { key: "multiQuery", value: false, source: "env", envLocked: true, env: "MEMGLOW_PROXY_MULTI_QUERY", day1: true });
     const largeNoteTokens = r.json.control.proxy.caps.find((x) => x.key === "largeNoteTokens");
     assert.strictEqual(largeNoteTokens.value, 4242);
     assert.strictEqual(largeNoteTokens.source, "page");
@@ -409,21 +443,54 @@ test("setup: PUT /api/setup { proxy } saves a lever switch, round-trips, and tak
     const r1 = await t.call("/api/setup", { method: "PUT", body: { proxy: { dedupe: true, toc: true } } });
     assert.strictEqual(r1.status, 200);
     const dedupe1 = r1.json.control.proxy.levers.find((l) => l.key === "dedupe");
-    assert.deepStrictEqual(dedupe1, { key: "dedupe", value: true, source: "page", envLocked: false, day1: false });
+    assert.deepStrictEqual(dedupe1, { key: "dedupe", value: true, source: "page", envLocked: false, env: "MEMGLOW_PROXY_DEDUPE", day1: false });
     // A second GET sees the same saved state (persisted, not just echoed back).
     const r2 = await t.call("/api/setup");
     assert.strictEqual(r2.json.control.proxy.levers.find((l) => l.key === "dedupe").value, true);
     assert.strictEqual(r2.json.control.proxy.levers.find((l) => l.key === "toc").value, true);
-    // Turning it back off is a real, saved change. Like `tuning`/`assistant.providers`, `proxy`
-    // is saved as a WHOLE (no deep merge across calls — lib/setup.js createSetupStore.write()'s
-    // top-level `{...cur, ...update}`): the page always sends every lever it currently renders
-    // (public/control.js collects the whole form, not just the one that changed), so a lever
-    // simply not sent this time is NOT "kept" — it reverts to env/file/default, same as `tuning`.
-    const r3 = await t.call("/api/setup", { method: "PUT", body: { proxy: { dedupe: false, toc: true } } });
+    // Turning it back off is a real, saved change.
+    const r3 = await t.call("/api/setup", { method: "PUT", body: { proxy: { dedupe: false } } });
     assert.strictEqual(r3.json.control.proxy.levers.find((l) => l.key === "dedupe").value, false);
-    assert.strictEqual(r3.json.control.proxy.levers.find((l) => l.key === "toc").value, true);
-    const r4 = await t.call("/api/setup", { method: "PUT", body: { proxy: { dedupe: false } } });
-    assert.strictEqual(r4.json.control.proxy.levers.find((l) => l.key === "toc").value, false, "toc was not resent: it is back to its default, not \"kept\" (whole-object save)");
+    // 0.4.7.6 (M1): `proxy` MERGES per key now (not a whole-object replace) — `toc` was not
+    // resent in that last call but is NOT lost: the Control panel's levers form and the AI
+    // settings' tuning form must never erase each other's keys just by each sending only its own.
+    assert.strictEqual(r3.json.control.proxy.levers.find((l) => l.key === "toc").value, true, "a key not resent is kept, never reverted, under the new per-key merge");
+  } finally { await t.stop(); }
+});
+
+test("setup: PUT /api/setup { proxy: { key: null } } resets that one lever to its default, without touching any other saved lever (0.4.7.6, M1)", async () => {
+  const t = await start();
+  try {
+    await t.call("/api/setup", { method: "PUT", body: { proxy: { dedupe: true, toc: true } } });
+    const r = await t.call("/api/setup", { method: "PUT", body: { proxy: { dedupe: null } } });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.json.control.proxy.levers.find((l) => l.key === "dedupe").value, false, "null resets to the default");
+    assert.strictEqual(r.json.control.proxy.levers.find((l) => l.key === "dedupe").source, "default");
+    assert.strictEqual(r.json.control.proxy.levers.find((l) => l.key === "toc").value, true, "toc, not touched by this call, is untouched");
+  } finally { await t.stop(); }
+});
+
+test("setup: two independent panels each saving their OWN tuning keys never erase the other's (0.4.7.6, M1) — the bug the reviewer found", async () => {
+  const t = await start();
+  try {
+    // Panel A (Control, "Memory maintenance") saves its own fields.
+    await t.call("/api/setup", { method: "PUT", body: { tuning: { maintenanceEveryHours: 6, archiveAfterDays: 60 } } });
+    // Panel B (AI settings' own tuning fieldset) saves ITS fields, in a later, independent call —
+    // the exact scenario control.js ~L393 and setup.js's own save button each trigger.
+    const r = await t.call("/api/setup", { method: "PUT", body: { tuning: { largeNoteTokens: 7000, splitChunkTokens: 1500 } } });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.json.tuning.largeNoteTokens, 7000);
+    assert.strictEqual(r.json.tuning.splitChunkTokens, 1500);
+    assert.strictEqual(r.json.tuning.maintenanceEveryHours, 6, "panel B's save did not erase panel A's earlier values");
+    assert.strictEqual(r.json.tuning.archiveAfterDays, 60);
+    // And the other direction: panel A saving again does not erase panel B's values either.
+    const r2 = await t.call("/api/setup", { method: "PUT", body: { tuning: { indexWarningTokens: 4000 } } });
+    assert.strictEqual(r2.json.tuning.largeNoteTokens, 7000, "panel A's save did not erase panel B's earlier values");
+    assert.strictEqual(r2.json.tuning.indexWarningTokens, 4000);
+    // A null entry resets exactly that one tuning field to its default.
+    const r3 = await t.call("/api/setup", { method: "PUT", body: { tuning: { largeNoteTokens: null } } });
+    assert.strictEqual(r3.json.tuning.largeNoteTokens, 5000, "reset to the built-in default");
+    assert.strictEqual(r3.json.tuning.splitChunkTokens, 1500, "unrelated field untouched by the reset");
   } finally { await t.stop(); }
 });
 

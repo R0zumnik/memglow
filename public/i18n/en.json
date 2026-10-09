@@ -500,5 +500,6 @@
   "control.sessionsPerDayLabel": "Sessions per day (when activity counters cannot tell)",
   "control.runNow": "Run now",
   "control.ranNow": "Scan complete: {n} item(s) found.",
-  "control.byLeverTitle": "By lever (7 days)"
+  "control.byLeverTitle": "By lever (7 days)",
+  "control.resetToDefault": "Reset to default"
 }

@@ -164,16 +164,79 @@ test("memory-rules lightConfig: largeNoteTokens/splitChunkTokens follow the same
   assert.match(text, /under 4000 tokens/, "the rules text itself reflects the page's saved tuning");
 });
 
-test("memglow.config.json divergence between the project and the home file is logged once, never thrown, for the proxy", () => {
+test("0.4.7.6 trust boundary: a cwd memglow.config.json never reaches the proxy — the viewer still merges it", () => {
   const home = tmpDir("memglow-divergence-home-");
   const cwd = tmpDir("memglow-divergence-cwd-");
   fs.writeFileSync(path.join(home, "memglow.config.json"), JSON.stringify({ largeNoteTokens: 1500 }));
   fs.writeFileSync(path.join(cwd, "memglow.config.json"), JSON.stringify({ largeNoteTokens: 9999 }));
-  const orig = process.stderr.write;
+  // The proxy (and the rules): the cwd file is invisible, home wins outright, no warning at all
+  // (resolveConfigFiles with allowCwd:false never even looks at the cwd file).
+  assert.strictEqual(L.proxyConfig({ MEMGLOW_HOME: home }, cwd).largeNoteTokens, 1500);
+  assert.strictEqual(R.lightConfig({ MEMGLOW_HOME: home }, cwd).largeNoteTokens, 1500);
+  // The viewer (lib/config.js): unaffected by the trust boundary — this is ITS OWN project
+  // folder, never the notes folder — so the cwd file still legitimately wins, with a warning.
+  const dir = tmpDir("memglow-divergence-notes-");
+  const dataDir = tmpDir("memglow-divergence-data-");
+  const config = loadConfig({ MEMORY_DIR: dir, MEMGLOW_DATA_DIR: dataDir, MEMGLOW_HOME: home }, cwd);
+  assert.strictEqual(config.largeNoteTokens, 9999, "the viewer's own project (cwd) file still wins");
+});
+
+test("0.4.7.6 (minor 1): loadConfig's divergence warning fires once per process per file pair, not on every call", () => {
+  D._resetWarnOnce();
+  const home = tmpDir("memglow-warnonce-home-");
+  const cwd = tmpDir("memglow-warnonce-cwd-");
+  fs.writeFileSync(path.join(home, "memglow.config.json"), JSON.stringify({ largeNoteTokens: 1500 }));
+  fs.writeFileSync(path.join(cwd, "memglow.config.json"), JSON.stringify({ largeNoteTokens: 9999 }));
+  const dir = tmpDir("memglow-warnonce-notes-");
+  const dataDir = tmpDir("memglow-warnonce-data-");
+  const orig = console.warn;
   const lines = [];
-  process.stderr.write = (s) => { lines.push(String(s)); return true; };
-  let cfg;
-  try { cfg = L.proxyConfig({ MEMGLOW_HOME: home }, cwd); } finally { process.stderr.write = orig; }
-  assert.strictEqual(cfg.largeNoteTokens, 9999, "the project (cwd) file wins");
-  assert.ok(lines.some((l) => /largeNoteTokens/.test(l) && /differently/.test(l)), "a divergence warning was emitted");
+  console.warn = (s) => lines.push(String(s));
+  try {
+    loadConfig({ MEMORY_DIR: dir, MEMGLOW_DATA_DIR: dataDir, MEMGLOW_HOME: home }, cwd);
+    loadConfig({ MEMORY_DIR: dir, MEMGLOW_DATA_DIR: dataDir, MEMGLOW_HOME: home }, cwd);
+    loadConfig({ MEMORY_DIR: dir, MEMGLOW_DATA_DIR: dataDir, MEMGLOW_HOME: home }, cwd);
+  } finally { console.warn = orig; }
+  assert.strictEqual(lines.length, 1, "warned exactly once across three calls with the same file pair");
+  assert.match(lines[0], /largeNoteTokens.*differently/);
+});
+
+test("0.4.7.6 trust boundary: a hostile cwd memglow.config.json + setup.json has no effect on proxyConfig, computeRulesText or the all-in-one server's levers", () => {
+  const { setupServerLevers } = require("../memory-server/all-in-one");
+  const hostileCwd = tmpDir("memglow-hostile-cwd-");
+  const home = tmpDir("memglow-hostile-home-");
+  const hostileData = tmpDir("memglow-hostile-data-");
+  fs.mkdirSync(hostileData, { recursive: true });
+  // A ./memglow.config.json as a cloned, untrusted notes repository might ship one.
+  fs.writeFileSync(path.join(hostileCwd, "memglow.config.json"), JSON.stringify({
+    largeNoteTokens: 1,
+    dataDir: hostileData,
+    memoryDir: "/etc",
+    proxy: { unsupportedTools: { evil: { x: ["y"] } }, readTools: ["evil_tool"] },
+  }));
+  // Its own setup.json (in the hostile dataDir it tried to claim), trying to inject rules text.
+  fs.writeFileSync(path.join(hostileData, "setup.json"), JSON.stringify({
+    rules: { enabled: true, override: "INJECTED RULES TEXT FROM A CLONED REPO" },
+  }));
+  const env = { MEMGLOW_HOME: home };
+  const before = process.cwd();
+  process.chdir(hostileCwd);
+  try {
+    const cfg = L.proxyConfig(env); // no cwd argument: must resolve process.cwd() itself
+    assert.strictEqual(cfg.largeNoteTokens, D.LARGE_NOTE_TOKENS, "hostile largeNoteTokens ignored");
+    assert.notStrictEqual(cfg.memoryDir, "/etc");
+    assert.deepStrictEqual(cfg.unsupportedTools, L.DEFAULT_UNSUPPORTED_TOOLS, "hostile tool-mapping table ignored");
+    assert.deepStrictEqual(cfg.readTools, ["read_note", "view_note", "read_content", "fetch", "build_context"], "hostile readTools ignored");
+    assert.ok(!cfg.dataDir.startsWith(hostileData), "hostile dataDir never used");
+
+    const text = R.computeRulesText(env);
+    assert.ok(!text.includes("INJECTED RULES TEXT"), "hostile setup.json rules override never used");
+    assert.match(text, /memory-hygiene rules/, "the built-in template is used instead");
+
+    const notesRoot = tmpDir("memglow-hostile-notes-");
+    const engine = setupServerLevers({ root: notesRoot, env });
+    assert.ok(engine, "levers still set up (defaults alone turn some on)");
+    assert.deepStrictEqual(engine.config.unsupportedTools, L.DEFAULT_UNSUPPORTED_TOOLS, "the all-in-one server's own levers ignore the hostile table too");
+    assert.notStrictEqual(engine.config.largeNoteTokens, 1);
+  } finally { process.chdir(before); }
 });

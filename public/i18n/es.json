@@ -499,5 +499,6 @@
   "control.sessionsPerDayLabel": "Sesiones por día (cuando los contadores de actividad no pueden saberlo)",
   "control.runNow": "Ejecutar ahora",
   "control.ranNow": "Análisis completo: {n} elemento(s) encontrado(s).",
-  "control.byLeverTitle": "Por interruptor (7 días)"
+  "control.byLeverTitle": "Por interruptor (7 días)",
+  "control.resetToDefault": "Restablecer el valor predeterminado"
 }

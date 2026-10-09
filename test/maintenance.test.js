@@ -219,6 +219,46 @@ test("createScheduler.setEveryHours: re-creates the periodic timer with no resta
   assert.strictEqual(scheduled.length, 2, "no third timer scheduled for 0");
 });
 
+test("createScheduler: a huge everyHours (bypassing the UI's own bound, e.g. via the environment) is clamped to Node's own timer maximum, never overflows to a runaway timer", () => {
+  const dir = buildFixture();
+  const dataDir = tmp("memglow-maint-overflow-");
+  const { config, memory } = buildContext(dir, dataDir, NOW);
+  const store = M.createMaintenanceStore({ dir: dataDir });
+  const scheduled = [];
+  const setIntervalFn = (fn, ms) => { scheduled.push({ fn, ms }); return scheduled.length; };
+  // 1,000,000 hours * 3600 * 1000 = 3.6e12 ms, far beyond 2^31-1 (≈596.5 h): the RAW product
+  // would wrap/clamp in Node's own timer internals to effectively "fire immediately, repeatedly".
+  const sched = M.createScheduler({ memory, config, dataDir, everyHours: 1000000, store, now: () => NOW, setIntervalFn, clearIntervalFn: () => {} });
+  sched.start();
+  assert.strictEqual(scheduled.length, 1);
+  assert.strictEqual(scheduled[0].ms, M.MAX_TIMEOUT_MS, "clamped to 2^31-1 ms, never a larger (overflow-prone) value");
+  assert.ok(scheduled[0].ms <= 2147483647 && scheduled[0].ms > 3600 * 1000, "the clamp keeps the real wait well over an hour, never near-zero");
+  // setEveryHours() with an equally huge value is clamped the same way.
+  sched.setEveryHours(999999999);
+  assert.strictEqual(scheduled[1].ms, M.MAX_TIMEOUT_MS);
+});
+
+test("createScheduler: with a huge everyHours, the injected timer fires at most once across a simulated hour (never 417 times/second)", () => {
+  const dir = buildFixture();
+  const dataDir = tmp("memglow-maint-overflow2-");
+  const { config, memory } = buildContext(dir, dataDir, NOW);
+  const store = M.createMaintenanceStore({ dir: dataDir });
+  let fireCount = 0;
+  // A fake "real" clock: the injected setIntervalFn only actually calls `fn` once the clamped
+  // `ms` has elapsed on a simulated timeline advanced by hand, one hour at a time.
+  let elapsed = 0;
+  let pending = null;
+  const setIntervalFn = (fn, ms) => { pending = { fn: () => { fireCount++; fn(); }, ms, due: elapsed + ms }; return 1; };
+  const sched = M.createScheduler({ memory, config, dataDir, everyHours: 1000000, store, now: () => NOW, setIntervalFn, clearIntervalFn: () => {} });
+  sched.start();
+  fireCount = 0; // the start-up scan does not count: only the TIMER firing matters here
+  for (let h = 0; h < 3600; h++) { // simulate one real hour, one simulated second at a time
+    elapsed += 1000;
+    if (pending && elapsed >= pending.due) { pending.fn(); pending = { ...pending, due: pending.due + pending.ms }; }
+  }
+  assert.strictEqual(fireCount, 0, "a ~2^31ms-away timer never fires within one simulated hour");
+});
+
 // ------------------------------------------------------------------ HTTP endpoints
 
 function startServer(dir, dataDir) {
@@ -276,6 +316,28 @@ test("POST /api/maintenance/run: same guard as /dismiss, runs the scan on demand
   } finally { server.close(); }
 });
 
+test("Minor 6 (0.4.7.6): the FIRST POST /api/maintenance/run scans exactly once, not twice (ensureStarted + runOnce)", async () => {
+  const dir = buildFixture();
+  const dataDir = tmp("memglow-maint-norun2x-");
+  const { server, base } = await startServer(dir, dataDir);
+  const orig = console.log;
+  const lines = [];
+  console.log = (...a) => lines.push(a.join(" "));
+  try {
+    // Nothing (no GET /api/maintenance, no server.memglowStartMaintenance()) has started the
+    // scheduler yet: this is exactly the "first click" case the bug was in.
+    const r = await fetch(base + "/api/maintenance/run", { method: "POST", headers: { "X-Memglow": "1", Origin: base } });
+    assert.strictEqual(r.status, 200);
+    const scans = lines.filter((l) => /\[memglow\] maintenance scan:/.test(l));
+    assert.strictEqual(scans.length, 1, "exactly one scan logged for the first Run now, not two");
+    // A SECOND click, now that the scheduler is already running, scans exactly once more.
+    lines.length = 0;
+    const r2 = await fetch(base + "/api/maintenance/run", { method: "POST", headers: { "X-Memglow": "1", Origin: base } });
+    assert.strictEqual(r2.status, 200);
+    assert.strictEqual(lines.filter((l) => /\[memglow\] maintenance scan:/.test(l)).length, 1);
+  } finally { console.log = orig; server.close(); }
+});
+
 test("PUT /api/setup { tuning: { maintenanceEveryHours } } re-creates the scheduler's timer with no restart", async () => {
   const dir = buildFixture();
   const dataDir = tmp("memglow-maint-tuning-");
@@ -297,6 +359,30 @@ test("PUT /api/setup { tuning: { maintenanceEveryHours } } re-creates the schedu
     const again = await (await fetch(base + "/api/setup")).json();
     assert.strictEqual(again.tuning.maintenanceEveryHours, 6);
     assert.strictEqual(again.tuning.archiveAfterDays, 60);
+  } finally { server.close(); }
+});
+
+test("PUT /api/setup { tuning: { maintenanceEveryHours } } is capped at 168 h (CRITICAL, 0.4.7.6): 169 refused, 168 accepted", async () => {
+  const dir = buildFixture();
+  const dataDir = tmp("memglow-maint-cap-");
+  const { server, base } = await startServer(dir, dataDir);
+  try {
+    const tooBig = await fetch(base + "/api/setup", {
+      method: "PUT", headers: { "Content-Type": "application/json", "X-Memglow": "1", Origin: base },
+      body: JSON.stringify({ tuning: { maintenanceEveryHours: 169 } }),
+    });
+    assert.strictEqual(tooBig.status, 400);
+    const oldBound = await fetch(base + "/api/setup", {
+      method: "PUT", headers: { "Content-Type": "application/json", "X-Memglow": "1", Origin: base },
+      body: JSON.stringify({ tuning: { maintenanceEveryHours: 8784 } }), // the pre-0.4.7.6 bound (24*366)
+    });
+    assert.strictEqual(oldBound.status, 400, "the old, overflow-prone bound is refused now");
+    const ok = await fetch(base + "/api/setup", {
+      method: "PUT", headers: { "Content-Type": "application/json", "X-Memglow": "1", Origin: base },
+      body: JSON.stringify({ tuning: { maintenanceEveryHours: 168 } }),
+    });
+    assert.strictEqual(ok.status, 200);
+    assert.strictEqual((await ok.json()).tuning.maintenanceEveryHours, 168);
   } finally { server.close(); }
 });
 

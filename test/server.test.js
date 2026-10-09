@@ -24,6 +24,35 @@ function start(env) {
 }
 const basic = (p) => "Basic " + Buffer.from("memglow:" + p).toString("base64");
 
+test("minor 4 (0.4.7.6): a viewer/proxy dataDir mismatch is logged once, server log only, never sent to the browser", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-mismatch-proj-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-mismatch-home-"));
+  const notesDir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-mismatch-notes-"));
+  fs.writeFileSync(path.join(notesDir, "a.md"), "# A\n");
+  // The viewer's OWN project folder (never the notes folder) sets a relative dataDir — the 0.4.7.6
+  // trust boundary means the proxy, started with this same environment, never sees this cwd file
+  // at all, so it resolves dataDir to the (different) home folder instead.
+  fs.writeFileSync(path.join(projectDir, "memglow.config.json"), JSON.stringify({ dataDir: "./viewer-only-data" }));
+  const env = { MEMORY_DIR: notesDir, MEMGLOW_HOME: home };
+  const config = loadConfig(env, projectDir);
+  assert.ok(config.dataDir.includes("viewer-only-data"), "sanity: the viewer did pick up its own cwd file");
+  const memory = createMemory({ dir: notesDir, config, pollMs: 500 });
+  const logs = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => logs.push(a.join(" "));
+  let server;
+  try {
+    server = createServer(config, memory, { assistantEnv: env });
+    await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const setupJson = await (await fetch(base + "/api/setup")).text();
+    const costJson = await (await fetch(base + "/api/cost")).text();
+    assert.ok(logs.some((l) => l.includes("viewer-only-data") && l.includes("differs")), "the mismatch was logged server-side");
+    assert.ok(!setupJson.includes(config.dataDir) && !setupJson.includes("viewer-only-data"), "never in the GET /api/setup response");
+    assert.ok(!costJson.includes(config.dataDir) && !costJson.includes("viewer-only-data"), "never in the GET /api/cost response either");
+  } finally { console.warn = origWarn; if (server) server.close(); }
+});
+
 test("viewer: page, config JSON, graph, note, static files", async () => {
   const { server, base } = await start({});
   try {

@@ -1728,12 +1728,15 @@ test("proxyControl: default / file / env sources, envLocked, day1 flag, and the 
   // Default everywhere.
   const def = L.proxyControl({ MEMGLOW_HOME: fx.home }, fx.root);
   const sizeWarning = def.levers.find((x) => x.key === "sizeWarning");
-  assert.deepStrictEqual(sizeWarning, { key: "sizeWarning", value: true, source: "default", envLocked: false, day1: true });
+  assert.deepStrictEqual(sizeWarning, { key: "sizeWarning", value: true, source: "default", envLocked: false, env: "MEMGLOW_PROXY_SIZE_WARNING", day1: true });
   const dedupe = def.levers.find((x) => x.key === "dedupe");
-  assert.deepStrictEqual(dedupe, { key: "dedupe", value: false, source: "default", envLocked: false, day1: false });
+  assert.deepStrictEqual(dedupe, { key: "dedupe", value: false, source: "default", envLocked: false, env: "MEMGLOW_PROXY_DEDUPE", day1: false });
   const largeNoteTokens = def.caps.find((x) => x.key === "largeNoteTokens");
   assert.strictEqual(largeNoteTokens.value, 5000);
   assert.strictEqual(largeNoteTokens.source, "default");
+  // Minor 3 (0.4.7.6): every lever/cap carries its own env var NAME, not just whether it's locked.
+  assert.strictEqual(largeNoteTokens.env, "MEMGLOW_LARGE_NOTE_TOKENS");
+  assert.strictEqual(def.caps.find((x) => x.key === "indexWarningTokens").env, "", "no env var exists for this cap");
 
   // File (memglow.config.json): proxy.dedupe + largeNoteTokens.
   fs.writeFileSync(path.join(fx.home, "memglow.config.json"), JSON.stringify({ largeNoteTokens: 3000, proxy: { dedupe: true } }));
@@ -1745,7 +1748,7 @@ test("proxyControl: default / file / env sources, envLocked, day1 flag, and the 
   // Env wins over the file, and locks the lever.
   const env = L.proxyControl({ MEMGLOW_HOME: fx.home, MEMGLOW_PROXY_DEDUPE: "0", MEMGLOW_LARGE_NOTE_TOKENS: "9000" }, fx.root);
   const dedupeEnv = env.levers.find((x) => x.key === "dedupe");
-  assert.deepStrictEqual(dedupeEnv, { key: "dedupe", value: false, source: "env", envLocked: true, day1: false });
+  assert.deepStrictEqual(dedupeEnv, { key: "dedupe", value: false, source: "env", envLocked: true, env: "MEMGLOW_PROXY_DEDUPE", day1: false });
   const largeEnv = env.caps.find((x) => x.key === "largeNoteTokens");
   assert.strictEqual(largeEnv.value, 9000);
   assert.strictEqual(largeEnv.source, "env");

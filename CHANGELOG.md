@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.4.7.6 — internal (not published)
+
+Fix round on the 0.4.7 settings / control panel, after a cold review confirmed 2 critical, 2
+major and 7 minor issues. All fixed, each with a regression test.
+
+### Critical
+
+- **A `maintenanceEveryHours` above ≈596.5 h overflowed Node's timer and fired hundreds of times
+  a second.** `lib/setup.js`/`lib/config.js`/`public/control.js` now cap the bound at 168 h (one
+  week); `lib/maintenance.js`'s `createScheduler` also clamps the actual ms it ever hands to
+  `setIntervalFn` to `2^31-1` defensively, for any value that reaches it another way (e.g. the
+  environment variable, which bypasses the UI's own bound).
+
+### Major
+
+- **`tuning`/`proxy` were saved as whole-object replaces**: two independent panels (Control's
+  levers, Control's maintenance tuning, AI settings' own tuning) each sending only their own keys
+  silently erased whatever the OTHER had just saved. `lib/setup.js` `createSetupStore.write()` now
+  MERGES `tuning` and `proxy` per key; `validate()` keeps an explicit `null` (previously dropped)
+  so a key can still be reset to its default without disturbing any other key.
+- **Trust boundary**: `./memglow.config.json` (the notes folder's own, possibly untrusted, cwd
+  file) controlled the MCP proxy, the memory rules and the all-in-one memory server since 0.4.7.1
+  — able to set `dataDir`/`memoryDir`, replace the tool-mapping tables, or inject text into
+  `initialize.instructions` via the rules. `lib/defaults.js` `resolveConfigFiles()` gains
+  `allowCwd` (default true); `lib/proxy-levers.js proxyConfig()`/`lib/memory-rules.js
+  lightConfig()` (and transitively the all-in-one server) now pass `allowCwd: false` — only an
+  explicit `MEMGLOW_CONFIG` or `~/.memglow/memglow.config.json` is ever read by those three, same
+  as before 0.4.7.1. The viewer (`lib/config.js`) is unaffected: its own project folder, never the
+  notes folder.
+
+### Minor
+
+1. The config-divergence warning now logs at most once per process per (cwd file, home file) pair
+   (`lib/defaults.js` `warnOnce`), not on every `GET`/`PUT /api/setup`.
+2. Saving levers no longer pins all 16 as `source: "page"`: `public/control.js`
+   `controlCollectProxy()` diffs against the effective value and sends only real changes; each
+   non-default, non-locked lever gets a "Reset to default" control (sends `null`).
+3. `lib/proxy-levers.js` `proxyControl()` now returns each lever/cap's own `env` var name, so the
+   "Locked by …" badge has something after it.
+4. A relative `memoryDir`/`dataDir` could resolve against two different base directories (the
+   viewer always used cwd; the proxy/rules used the config file's own directory). `lib/defaults.js`
+   `resolveBase()` is now the one shared rule, used by all three; `server.js` additionally detects
+   and logs (server log only, never in any API response) a genuine viewer/proxy `dataDir` mismatch.
+5. `GET /api/setup` no longer waits up to 2 s on `/healthz` on every request: `server.js` caches
+   the memory-server status for 30 s and refreshes it in the background (one refresh in flight at
+   a time); `setupNow()` itself is now wrapped in a try/catch (no unhandled rejection / crash).
+6. The first "Run now" scanned twice (`maintenanceEnsureStarted()`'s own start-up scan, then an
+   unconditional `runOnce()`): `server.js` now only asks for a second scan when the scheduler was
+   already running before that request.
+7. `GET /healthz` (`memory-server/http.js`) now answers only `ok`/`version`/`notes` to an
+   unauthenticated caller when the server has a token configured; `readOnly`/`tokenRequired` (and
+   `name`/`indexVersion`/`lastScanAt`) require the right Bearer token — or nothing at all when the
+   server has no token configured, matching `lib/setup.js` `memoryServerStatus()`'s own shape.
+
 ## 0.4.7.5 — internal (not published)
 
 "Settings / control panel, step 5: proxy present + per-lever savings." The Control panel's

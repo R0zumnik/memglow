@@ -118,6 +118,39 @@ test("HTTP: Accept text/event-stream only → one SSE event; batches; errors; GE
   } finally { s.done(); }
 });
 
+test("HTTP /healthz: minor 7 (0.4.7.6) — with a token configured, an UNAUTHENTICATED caller only sees ok/version/notes; the right Bearer token (or no token configured at all) sees the full shape", async () => {
+  const kb = makeKb();
+  const srv = createMemoryServer({ root: kb.root, watch: false, pollMs: 0 });
+  const server = createHttpServer({ rpc: srv.rpc, store: srv.store, token: "s3cret", readOnly: true });
+  await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
+  const url = `http://127.0.0.1:${server.address().port}/healthz`;
+  try {
+    const anon = await (await fetch(url)).json();
+    assert.deepStrictEqual(Object.keys(anon).sort(), ["notes", "ok", "version"], "no readOnly/tokenRequired/name/indexVersion/lastScanAt without the token");
+    assert.strictEqual(anon.ok, true);
+    assert.strictEqual(typeof anon.notes, "number");
+    const authed = await (await fetch(url, { headers: { authorization: "Bearer s3cret" } })).json();
+    assert.deepStrictEqual(Object.keys(authed).sort(), ["indexVersion", "lastScanAt", "name", "notes", "ok", "readOnly", "tokenRequired", "version"], "the full shape, with the right token");
+    assert.strictEqual(authed.readOnly, true);
+    assert.strictEqual(authed.tokenRequired, true);
+    assert.strictEqual(authed.notes, anon.notes);
+    const wrongToken = await (await fetch(url, { headers: { authorization: "Bearer nope" } })).json();
+    assert.deepStrictEqual(Object.keys(wrongToken).sort(), ["notes", "ok", "version"], "a WRONG token is treated as unauthenticated, not trusted");
+  } finally { server.close(); srv.close(); kb.cleanup(); }
+  // No token configured at all: nothing to gate, the full shape unauthenticated (matches
+  // lib/setup.js memoryServerStatus()'s own expectations when the server has no secret at all).
+  const kb2 = makeKb();
+  const srv2 = createMemoryServer({ root: kb2.root, watch: false, pollMs: 0 });
+  const server2 = createHttpServer({ rpc: srv2.rpc, store: srv2.store, readOnly: false });
+  await new Promise((ok) => server2.listen(0, "127.0.0.1", ok));
+  try {
+    const open = await (await fetch(`http://127.0.0.1:${server2.address().port}/healthz`)).json();
+    assert.deepStrictEqual(Object.keys(open).sort(), ["indexVersion", "lastScanAt", "name", "notes", "ok", "readOnly", "tokenRequired", "version"]);
+    assert.strictEqual(open.readOnly, false);
+    assert.strictEqual(open.tokenRequired, false);
+  } finally { server2.close(); srv2.close(); kb2.cleanup(); }
+});
+
 test("concurrency: 20 parallel searches all complete, even while another client's upload is stalled mid-body", async () => {
   const s = await start();
   try {

@@ -128,21 +128,30 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
       return send(res, 403, { jsonrpc: "2.0", id: null, error: { code: -32000, message: `Forbidden: Origin ${String(origin).slice(0, 200)} is not allowed` } });
     }
     const p = url.pathname.replace(/\/+$/, "") || "/";
+    // 0.4.7.6 (minor 7): whether THIS request is authenticated, computed once and reused below —
+    // GET /healthz stays reachable without a token (so a load balancer / the control panel can
+    // always tell "is it up"), but an UNAUTHENTICATED caller, when a token IS configured, only
+    // ever sees `ok`/`version`/`notes`: `readOnly`/`tokenRequired` (booleans, never the token
+    // itself) are informative enough about this server's OWN setup that they wait for the same
+    // Bearer token every other request already needs. No token configured at all → nothing to
+    // gate, the full answer is shown either way (matches lib/setup.js memoryServerStatus()'s own
+    // shape, which reads exactly these fields).
+    const authed = !token || (() => {
+      const m = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || ""));
+      return !!m && sameToken(m[1].trim(), token);
+    })();
     if (p === "/healthz" && req.method === "GET") {
       const s = store ? store.stats() : {};
-      // readOnly and tokenRequired are BOOLEANS only — never the token itself, never any other
-      // start-up flag (0.4.7.2 control panel: "memory-server status", read-only, never secrets).
+      const base = { ok: true, version: rpc.serverInfo.version, notes: s.notes };
+      if (!authed) return send(res, 200, base);
       return send(res, 200, {
-        ok: true, name: rpc.serverInfo.name, version: rpc.serverInfo.version, notes: s.notes,
+        ...base, name: rpc.serverInfo.name,
         indexVersion: s.version, lastScanAt: s.lastScanAt ? new Date(s.lastScanAt).toISOString() : null,
         readOnly: !!readOnly, tokenRequired: !!token,
       });
     }
-    if (token) {
-      const m = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || ""));
-      if (!m || !sameToken(m[1].trim(), token)) {
-        return send(res, 401, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "Unauthorized: a valid Authorization: Bearer token is required" } }, { "www-authenticate": "Bearer" });
-      }
+    if (!authed) {
+      return send(res, 401, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "Unauthorized: a valid Authorization: Bearer token is required" } }, { "www-authenticate": "Bearer" });
     }
     if (p !== mcpPath && !(p === "/" && mcpPath === "/")) {
       return send(res, 404, { jsonrpc: "2.0", id: null, error: { code: -32000, message: `Not found: ${url.pathname} (the MCP endpoint is ${mcpPath})` } });

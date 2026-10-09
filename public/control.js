@@ -74,6 +74,7 @@ var EN_CONTROL = {
   "control.lever.deltaRead": "A note re-read after it changed gets only the diff, or a short header noting what changed since a past session.",
   "control.lever.duplicateHint": "Writing a new note whose title already matches or resembles an existing one gets a short duplicate warning.",
   "control.restartNotice": "Restart the MCP proxy to apply a lever change: it reads its settings once, at start.",
+  "control.resetToDefault": "Reset to default",
   "control.maintEveryHoursLabel": "Scan every (hours, 0 = only at start)",
   "control.archiveAfterDaysLabel": "Archive after not read for (days)",
   "control.indexTrimMaxCharsLabel": "Index-trim candidate line length (characters)",
@@ -146,11 +147,17 @@ function controlLeverRow(l, T, vals) {
   T = T || defaultControlT;
   var checked = vals && Object.prototype.hasOwnProperty.call(vals, l.key) ? !!vals[l.key] : !!l.value;
   var help = T("control.lever." + l.key);
+  // Minor 2 (0.4.7.6): a "reset to default" control, shown only when there IS something to reset
+  // (not already the default) and not env-locked (an environment variable can never be reset
+  // from the page anyway — there is nothing saved here to remove).
+  var reset = !l.envLocked && l.source !== "default"
+    ? '<button type="button" class="bn-btn bn-btn--quiet mg-control__reset" data-reset-lever="' + cEsc(l.key) + '">' + cEsc(T("control.resetToDefault")) + '</button>' : "";
   return '<li class="mg-control__lever" data-lever="' + cEsc(l.key) + '">' +
     '<label class="mg-control__leverhead">' +
     '<input type="checkbox" data-lever="' + cEsc(l.key) + '"' + (checked ? " checked" : "") + (l.envLocked ? " disabled" : "") + '>' +
     '<code>' + cEsc(l.key) + '</code>' +
     (l.envLocked ? '<span class="mg-control__lock">' + cEsc(T("control.locked", { name: l.env || "" })) + '</span>' : '<span class="mg-control__source">' + cEsc(controlSourceText(l, T)) + '</span>') +
+    reset +
     '</label><p class="mg-control__help">' + cEsc(help === "control.lever." + l.key ? "" : help) + '</p></li>';
 }
 
@@ -179,19 +186,32 @@ function controlRenderLevers(proxy, T, vals) {
 
 /** What the lever checkboxes hold right now → { key: boolean } (disabled/locked ones excluded —
  * same convention as public/setup.js's setupCollectTuning: an env-locked switch is never sent). */
-function controlCollectProxy(inputs) {
+/**
+ * What the lever checkboxes hold right now → { key: boolean }. Minor 2 (0.4.7.6): when
+ * `effectiveByKey` ({ key: current effective boolean }, e.g. built from GET /api/setup's
+ * `control.proxy.levers`) is given, only keys whose checkbox DIFFERS from that effective value
+ * are included — saving must never pin all 16 levers as `source: "page"` just because the form
+ * always renders all of them; only an actual change is sent (and stored — see
+ * lib/setup.js createSetupStore.write()'s per-key merge, 0.4.7.6 M1). Without `effectiveByKey`
+ * (older callers, direct tests), every checkbox is included, as before.
+ */
+function controlCollectProxy(inputs, effectiveByKey) {
   var out = {};
   Array.prototype.forEach.call(inputs || [], function (el) {
     var k = el.getAttribute("data-lever");
     if (!k || el.disabled) return;
-    out[k] = !!el.checked;
+    var v = !!el.checked;
+    if (effectiveByKey && Object.prototype.hasOwnProperty.call(effectiveByKey, k) && effectiveByKey[k] === v) return;
+    out[k] = v;
   });
   return out;
 }
 
 // 0.4.7.4: the "tuning" fields this section edits, [key, i18n label key, min, max].
 var MAINT_TUNING_FIELDS = [
-  ["maintenanceEveryHours", "control.maintEveryHoursLabel", 0, 24 * 366],
+  // Capped at 168 h (one week) — CRITICAL, 0.4.7.6: above 2^31-1 ms, Node clamps the delay to
+  // 1 ms (a runaway timer); see lib/setup.js TUNING and lib/maintenance.js's own defensive clamp.
+  ["maintenanceEveryHours", "control.maintEveryHoursLabel", 0, 168],
   ["archiveAfterDays", "control.archiveAfterDaysLabel", 7, 3650],
   ["indexTrimMaxChars", "control.indexTrimMaxCharsLabel", 30, 1000],
   ["indexWarningTokens", "control.indexWarningTokensLabel", 100, 1000000],
@@ -347,6 +367,13 @@ if (typeof module !== "undefined" && module.exports) {
     sayAt(id, T("setup.notSaved", { error: (err && err.body && err.body.error) || (err && err.mgStatus ? "HTTP " + err.mgStatus : T("error.connectionLost")) }), true);
     if (typeof mgBannerKind === "function" && typeof mgErrorBanner === "function" && mgBannerKind(err) === "auth") mgErrorBanner(banner, "auth", T);
   }
+  /** { key: effective boolean } from the last GET /api/setup's control.proxy.levers — minor 2. */
+  function effectiveProxyByKey() {
+    var out = {};
+    var levers = (last && last.setup && last.setup.control && last.setup.control.proxy && last.setup.control.proxy.levers) || [];
+    levers.forEach(function (l) { out[l.key] = !!l.value; });
+    return out;
+  }
   function proxyForm() { return document.getElementById("mg-control-proxy-form"); }
   function maintForm() { return document.getElementById("mg-control-maint-form"); }
   function keepProxyTyped() { var f = proxyForm(); if (f) typed.proxy = controlCollectProxy(f.querySelectorAll("input[data-lever]")); }
@@ -382,9 +409,13 @@ if (typeof module !== "undefined" && module.exports) {
     if (!proxy && !maint) return;
     e.preventDefault();
     if (proxy) {
-      typed.proxy = controlCollectProxy(proxy.querySelectorAll("input[data-lever]"));
+      // Minor 2 (0.4.7.6): only the levers actually toggled away from their effective value are
+      // sent — saving must never pin every lever as "saved here" just because the form renders
+      // all 16 of them.
+      var diff = controlCollectProxy(proxy.querySelectorAll("input[data-lever]"), effectiveProxyByKey());
+      if (!Object.keys(diff).length) { sayAt("mg-control-proxy-status", T("setup.saved"), false); return; }
       sayAt("mg-control-proxy-status", T("setup.saving"), false);
-      put({ proxy: typed.proxy }).then(function (j) {
+      put({ proxy: diff }).then(function (j) {
         last.setup = j;
         typed.proxy = null;
         restartShown = true;
@@ -402,6 +433,19 @@ if (typeof module !== "undefined" && module.exports) {
     }
   });
   body.addEventListener("click", function (e) {
+    var resetBtn = e.target && e.target.closest ? e.target.closest("button[data-reset-lever]") : null;
+    if (resetBtn) {
+      var key = resetBtn.getAttribute("data-reset-lever");
+      sayAt("mg-control-proxy-status", T("setup.saving"), false);
+      var body2 = {}; body2[key] = null;
+      put({ proxy: body2 }).then(function (j) {
+        last.setup = j;
+        typed.proxy = null;
+        restartShown = true;
+        render();
+      }).catch(function (err) { failAt("mg-control-proxy-status", err); });
+      return;
+    }
     var btn = e.target && e.target.closest ? e.target.closest("#mg-control-run-now") : null;
     if (!btn) return;
     keepMaintTyped();

@@ -499,5 +499,6 @@
   "control.sessionsPerDayLabel": "每天的会话数（当活动计数器无法判断时）",
   "control.runNow": "立即运行",
   "control.ranNow": "扫描完成：找到 {n} 个项目。",
-  "control.byLeverTitle": "按开关划分（7天）"
+  "control.byLeverTitle": "按开关划分（7天）",
+  "control.resetToDefault": "恢复默认值"
 }

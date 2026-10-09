@@ -499,5 +499,6 @@
   "control.sessionsPerDayLabel": "Sitzungen pro Tag (wenn die Aktivitätszähler es nicht wissen können)",
   "control.runNow": "Jetzt ausführen",
   "control.ranNow": "Scan abgeschlossen: {n} Eintrag/Einträge gefunden.",
-  "control.byLeverTitle": "Nach Hebel (7 Tage)"
+  "control.byLeverTitle": "Nach Hebel (7 Tage)",
+  "control.resetToDefault": "Auf Standard zurücksetzen"
 }
