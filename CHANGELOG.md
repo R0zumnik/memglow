@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.4.10.5 — internal (not published)
+
+Responsiveness, step 5: structured hand-off, posting lists.
+
+- **Structured hand-off** (`lib/search-meta.js`). A `search_notes` text result built by the
+  in-process server carries, out of band (a WeakMap keyed by the result object — never
+  serialised, never sent to a client; kept on the 2026-07-28 copy with `resultType`), the blocks
+  its text is made of — exactly what `hitChunksOf()` would cut — with each block's note references
+  as the levers' own parsers (`permalinksIn`, `idsInText`) find them, and a `pure` flag (no
+  reference but each hit's own permalink line: no path, file name, `permalink:` or `memory:` in
+  a title, a snippet or the query).
+  - multiQuery (all-in-one): the merge takes each phrasing's blocks and references from that
+    metadata — no re-splitting, no regex scan of the phrasings' texts — through the SAME merge
+    code (so the output cannot differ), and the merged text is assembled once; the merged result
+    gets its own metadata.
+  - The levers' "which notes does this search name" (`resultIds`: searchDetails, archiveHint,
+    aliases / learnAliases, negativeCache, indexHint; and the multiQuery alias step) reads the
+    hits' permalinks from the metadata when the result is pure — exactly what scanning the text
+    and its structuredContent copy gives (proved by test) — else scans the text as before.
+  - The standalone proxy has no such metadata: the text parsing stays its path.
+  - Not done literally: each phrasing's own text is still assembled by `search_notes` (a cheap
+    join; phrasing 1's text is what a failed merge falls back to) — it is just never re-parsed.
+- **Posting lists** in `lib/store/search.js`: every index term → the docs holding it (kept
+  incrementally with df/vocab); a text query scores only the union of its positive terms' and
+  their prefix expansions' docs (exactly the docs that can score; filter-only, NOT-only and
+  stop-word-only-phrase queries still scan all). Plus, with identical arithmetic: each doc's
+  field-weighted term frequencies summed once at index time (the per-query loop over 7 fields
+  is gone), idf cached per index version, the length normalisation computed once per doc and
+  index, and snippets that visit only the lines holding a query term (a per-note term → lines map,
+  prefix range by binary search) instead of testing every line. The 215-query ranking snapshot
+  (`test/search-ranking.test.js`) still matches exactly, scores and snippets included.
+- Measured, raw `engine.search` (no transport): realistic corpus (265 notes cut from this
+  repository's docs, 3 k distinct words) ≈1.4–2.3 → ≈0.8–1.1 ms per 2-word query; the dense
+  synthetic corpus (60-word vocabulary, every note matches) ≈3.5 → ≈2.2 ms (2 noisy cores).
+- All-in-one output still byte-identical to "proxy → memory server" (equivalence test).
+- Tests: `test/structured-0410-5.test.js` (metadata blocks = `hitChunksOf`, references = the
+  parsers', a pure result names nothing else even in its JSON copy, `resultIds` and multiQuery
+  merges identical with and without metadata, posting lists consistent with df).
+
 ## 0.4.10.4 — internal (not published)
 
 Responsiveness, step 4: freshness under a second at ~0 % CPU.

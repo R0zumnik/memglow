@@ -1,4 +1,5 @@
 "use strict";
+const searchMeta = require("../lib/search-meta");
 /**
  * memglow memory server — JSON-RPC 2.0 dispatcher, transport-agnostic: `handle(msg, ctx)` returns
  * the response object, or null for a notification / a message that needs no answer. Used by the
@@ -38,7 +39,8 @@ function createRpc({ tools, name = "memglow-memory", version = SERVER_VERSION, i
   const capabilities = { tools: { listChanged: false }, resources: {}, prompts: {} };
 
   function ok(id, result, modern) {
-    return { jsonrpc: "2.0", id, result: modern ? { ...result, resultType: "complete" } : result };
+    // 0.4.10.5: a copied result keeps its out-of-band search metadata (lib/search-meta.js).
+    return { jsonrpc: "2.0", id, result: modern ? searchMeta.copy(result, { ...result, resultType: "complete" }) : result };
   }
   function err(id, code, message, data) {
     const e = { code, message };

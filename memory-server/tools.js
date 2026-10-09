@@ -18,6 +18,18 @@ const { TOOLS, WRITE_TOOLS, UNSUPPORTED_TOOLS } = require("./schemas");
 const { createWriteTools, ArgError } = require("./write-tools");
 const { WriteError } = require("./writer");
 const { EditError } = require("../lib/store/note-edit");
+const searchMeta = require("../lib/search-meta");
+const { idsInText } = require("../lib/agent-core");
+
+// 0.4.10.5: a title / snippet / query that could hold a note reference of its own (a path, a
+// file name, a "permalink:" or memory:// text) — the levers' parsers would find more than the
+// hit's own permalink line in it.
+const REF_LIKE = /[\/]|\.md\b|permalink|memory:/i;
+// A permalink both parsers capture whole: path segments, ending on a word character.
+const OWN_PERMALINK = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)+$/;
+const OWN_END = /[A-Za-z0-9_]$/;
+/** One text block's references, as the levers' own parsers see them. */
+const refsOf = (text) => ({ perm: searchMeta.permalinksIn(text), ids: idsInText(text) });
 
 const SERVER_VERSION = "0.4.5.2";
 const MAX_QUERY_CHARS = 2000;
@@ -140,15 +152,30 @@ function createTools({ store, project = store.project, readOnly = true, startedA
       return textResult(`No results found for '${query}' in project '${project}'${where}. Try broader or different words, or call recent_activity(project="${project}") to see what changed lately.`);
     }
     const lines = [query ? `# Search Results: ${query}` : "# Search Results", `*project: ${project}*`, ""];
+    // 0.4.10.5: the blocks this text is made of, with their note references, handed to the
+    // levers out of band (lib/search-meta.js) — they never re-split or re-scan this text.
+    const head = lines[0] + "\n" + lines[1];
+    let pure = !REF_LIKE.test(query) && !REF_LIKE.test(project);
+    const chunks = [{ text: head, ...(pure ? { perm: [], ids: [] } : refsOf(head)) }];
     for (const h of r.results) {
       const j = hitJson(h);
-      lines.push(`### ${j.title}`, `- permalink: ${j.permalink}`, `- external_id: ${j.external_id}`, `- score: ${h.score.toFixed(4)}`);
-      if (h.match) lines.push(`- match: ${h.match.replace(/\s+/g, " ").slice(0, 200)}`);
-      lines.push("");
+      const blk = [`### ${j.title}`, `- permalink: ${j.permalink}`, `- external_id: ${j.external_id}`, `- score: ${h.score.toFixed(4)}`];
+      if (h.match) blk.push(`- match: ${h.match.replace(/\s+/g, " ").slice(0, 200)}`);
+      lines.push(...blk, "");
+      const text = blk.join("\n").trim();
+      // "own": the block's only reference is its permalink line, read whole by both parsers.
+      const own = !REF_LIKE.test(j.title) && !REF_LIKE.test(h.match || "") && OWN_PERMALINK.test(j.permalink) && OWN_END.test(j.permalink) && j.permalink.length <= 200;
+      if (!own) pure = false;
+      chunks.push({ text, ...(own ? { perm: [j.permalink], ids: [j.permalink] } : refsOf(text)) });
     }
     const c = r.results.length;
-    lines.push("---", `*${c} result${c === 1 ? "" : "s"} | page ${r.page}, page_size ${r.page_size}${r.has_more ? " | more available" : ""}*`);
-    return textResult(lines.join("\n"));
+    const foot = `*${c} result${c === 1 ? "" : "s"} | page ${r.page}, page_size ${r.page_size}${r.has_more ? " | more available" : ""}*`;
+    lines.push("---", foot);
+    chunks.push({ text: "---\n" + foot, perm: [], ids: [] });
+    const out = textResult(lines.join("\n"));
+    // Only when the blocks are exactly what the levers' splitter would cut (no blank line inside).
+    if (chunks.every((x) => !/\n\s*\n/.test(x.text) && x.text === x.text.trim())) searchMeta.set(out, { pure, chunks });
+    return out;
   }
 
   // ---- read_note / view_note / read_content / fetch ----
