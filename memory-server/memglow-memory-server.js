@@ -22,6 +22,7 @@ const { createTools, SERVER_VERSION, sameFileTwins } = require("./tools");
 const { createRpc, INSTRUCTIONS, INSTRUCTIONS_RW } = require("./rpc");
 const { createWriter, ownershipWarning } = require("./writer");
 const { createHttpServer } = require("./http");
+const { createAllInOne } = require("./all-in-one");
 
 const HELP = `memglow memory server ${SERVER_VERSION} (preview)
 
@@ -54,6 +55,13 @@ options:
                   without one, as MCP clients send them, are accepted). Env MEMGLOW_MEMORY_ALLOW_ORIGIN
   --token T       require "Authorization: Bearer T" on every HTTP request (GET /healthz excepted).
                   Env MEMGLOW_MEMORY_TOKEN (preferred: keeps it out of the process list)
+  --levers        all-in-one mode: apply the memglow MCP proxy's levers, memory rules and
+                  activity reporting in this process (no separate memglow-mcp-proxy needed).
+                  Env MEMGLOW_MEMORY_LEVERS=1. Lever switches: MEMGLOW_PROXY_* / memglow.config.json
+                  "proxy", as for the proxy; data in MEMGLOW_DATA_DIR
+  --name NAME     with --levers: the server name the levers and activity reports use
+                  (default: memglow-memory)
+  --source S      with --levers: the activity source label (default: mcp)
   --quiet         no log on stderr
 `;
 
@@ -61,7 +69,8 @@ function parseArgs(argv, env = process.env) {
   const o = { root: env.MEMGLOW_MEMORY_ROOT || "", project: env.MEMGLOW_MEMORY_PROJECT || "main", listen: "", stdio: false, readOnly: true, pollMs: 3000, watch: true, quiet: false,
     readWrite: /^(1|true|yes|on)$/i.test(String(env.MEMGLOW_MEMORY_READ_WRITE || "")), forceReadOnly: false, fileMode: null, onWrite: env.MEMGLOW_MEMORY_ON_WRITE || "", onWriteDelayMs: 10000,
     overwriteDefault: false, kebabFilenames: false, updatePermalinksOnMove: false, fsync: true,
-    allowOrigins: String(env.MEMGLOW_MEMORY_ALLOW_ORIGIN || "").split(",").map((x) => x.trim()).filter(Boolean), token: env.MEMGLOW_MEMORY_TOKEN || "" };
+    allowOrigins: String(env.MEMGLOW_MEMORY_ALLOW_ORIGIN || "").split(",").map((x) => x.trim()).filter(Boolean), token: env.MEMGLOW_MEMORY_TOKEN || "",
+    levers: /^(1|true|yes|on)$/i.test(String(env.MEMGLOW_MEMORY_LEVERS || "")), name: "", source: "mcp" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--root") o.root = argv[++i] || "";
@@ -86,6 +95,11 @@ function parseArgs(argv, env = process.env) {
     else if (a === "--no-watch") o.watch = false;
     else if (a === "--allow-origin") o.allowOrigins.push(...String(argv[++i] || "").split(",").map((x) => x.trim()).filter(Boolean));
     else if (a === "--token") o.token = argv[++i] || "";
+    else if (a === "--levers") o.levers = true;
+    else if (a === "--name") o.name = argv[++i] || "";
+    else if (a.startsWith("--name=")) o.name = a.slice(7);
+    else if (a === "--source") o.source = argv[++i] || "mcp";
+    else if (a.startsWith("--source=")) o.source = a.slice(9);
     else if (a === "--quiet" || a === "-q") o.quiet = true;
     else if (a === "-h" || a === "--help") o.help = true;
     else o.unknown = (o.unknown || []).concat(a);
@@ -103,9 +117,13 @@ function parseArgs(argv, env = process.env) {
 /**
  * Builds store + (writer) + tools + rpc for a root (used by the CLI and by tests). Writes are
  * enabled only with readOnly: false. `writerHooks` (tests): fault injection in the writer.
+ * `allInOne` (0.4.8.1, --levers): false/undefined = the plain server, exactly as before; true or
+ * { env, name, source, onReport, levers, rules } = the proxy's levers, rules and activity
+ * reporting applied in process (memory-server/all-in-one.js) — then `rpc` is that wrapped
+ * dispatcher and `rawRpc` the server's own.
  */
 function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 3000, watch = true, maxFileBytes, log = () => {},
-  fsync = true, cleanupTempsMinAgeMs = 60000, fileMode = null, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent }) {
+  fsync = true, cleanupTempsMinAgeMs = 60000, fileMode = null, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne }) {
   let tools = null, warmTimer = null;
   // The search index is rebuilt lazily by the next search anyway; warming it after a change is
   // coalesced (a burst of writes costs one rebuild, not one per write).
@@ -125,8 +143,10 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
   }
   tools = createTools({ store, project, readOnly, writer, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
   tools.warm();
-  const rpc = createRpc({ tools, instructions: readOnly ? INSTRUCTIONS : INSTRUCTIONS_RW });
-  return { store, tools, rpc, writer, close: () => { if (warmTimer) { clearImmediate(warmTimer); warmTimer = null; } store.stop(); if (writer) writer.flushHook(); } };
+  const rawRpc = createRpc({ tools, instructions: readOnly ? INSTRUCTIONS : INSTRUCTIONS_RW });
+  const aio = allInOne ? createAllInOne({ rpc: rawRpc, root, log, ...(allInOne === true ? {} : allInOne) }) : null;
+  const rpc = aio ? aio.rpc : rawRpc;
+  return { store, tools, rpc, rawRpc, aio, writer, close: () => { if (warmTimer) { clearImmediate(warmTimer); warmTimer = null; } store.stop(); if (writer) writer.flushHook(); if (aio) aio.close(); } };
 }
 
 function runStdio(rpc, input = process.stdin, output = process.stdout, onEnd = () => process.exit(0)) {
@@ -177,9 +197,14 @@ function main(argv = process.argv.slice(2), env = process.env) {
   const root = path.resolve(o.root);
   const t0 = Date.now();
   const srv = createMemoryServer({ root, project: o.project, readOnly: o.readOnly, pollMs: o.pollMs, watch: o.watch, log,
-    fsync: o.fsync, fileMode: o.fileMode, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove });
+    fsync: o.fsync, fileMode: o.fileMode, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
+    allInOne: o.levers ? { env, name: o.name || "memglow-memory", source: o.source } : false });
   const st = srv.store.stats();
   log(`memglow memory server ${SERVER_VERSION}: ${st.notes} notes indexed from ${root} in ${Date.now() - t0} ms (project "${o.project}", ${o.readOnly ? "read-only" : "read-write"}${st.watching ? ", watching" : ""})`);
+  if (srv.aio) {
+    const c = srv.aio.lv && srv.aio.lv.config;
+    log(`memglow memory server: all-in-one — levers ${c ? "on (notes index: " + (c.memoryDir || "none") + ", data: " + c.dataDir + ")" : "all off"}, memory rules ${srv.aio.rules ? "on" : "off"}, activity channel "memory-server"`);
+  }
   if (o.listen) {
     const m = /^(?:\[?([^\]]*)\]?:)?(\d+)$/.exec(o.listen.trim());
     if (!m) { process.stderr.write(`memglow-memory-server: bad --listen "${o.listen}" (expected HOST:PORT)\n`); return 2; }

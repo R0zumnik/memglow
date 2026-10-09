@@ -941,6 +941,63 @@ measured this way — your own notes, query mix and hardware will differ.
 - `bench/compat.js` compares it with another server call by call (latency, identical reads,
   search overlap, text shape); `bench/memory-server-speed.js` measures it on a notes folder.
 
+<a id="all-in-one"></a>
+### All-in-one: one container
+
+With **`--levers`** (or `MEMGLOW_MEMORY_LEVERS=1`) the memory server applies the
+[MCP proxy](#mcp-proxy)'s levers **itself**, in the same process: one process, one container, one
+port, instead of "memglow-mcp-proxy → memory server". The answers are the same, byte for byte, as
+through the proxy (a test replays one session through both set-ups and compares them).
+
+- **Same settings as the proxy**: the `MEMGLOW_PROXY_*` variables, the `"proxy"` section of
+  `memglow.config.json` (`MEMGLOW_CONFIG`), and memglow's data folder `MEMGLOW_DATA_DIR` for the
+  token savings, learned aliases, negative cache and delta-read ledgers. `--name` plays the
+  proxy's `--name` role (the `unsupportedTools` table and the activity reports; default
+  `memglow-memory`), `--source` its `--source`.
+- **Memory rules** (`MEMGLOW_RULES`, Settings → Memory rules) are appended to the `initialize`
+  instructions, once per session, as the proxy does.
+- **multiQuery** (`memglow_queries`) calls the server's own search once per phrasing, in process
+  (no HTTP sub-calls), then merges as the proxy does.
+- **Note index for the levers**: `<root>/memory` when that folder exists, else `--root` —
+  unless `MEMGLOW_MEMORY_DIR` is set. It is refreshed right after each of the server's own writes.
+- **Activity** reaches the memglow viewer as with the proxy (`MEMGLOW_URL`, `MEMGLOW_TOKEN`,
+  `MEMGLOW_MACHINE`), with the channel `memory-server` instead of `mcp-proxy`.
+- **Sessions**: one per `Mcp-Session-Id` (the `initialize` that opens it included); a stateless
+  MCP 2026-07-28 client gets one per connection; stdio: one per process.
+- Without `--levers` the server behaves exactly as before. Do not also put the proxy in front of
+  an all-in-one server: the levers would run twice.
+
+**One container** (NAS example: notes folder owned by 1045:100, port 8765, memglow checked out
+in `/volume1/docker/memglow`):
+
+```bash
+docker run -d --name memglow-memory --restart unless-stopped \
+  --user 1045:100 -p 8765:8765 \
+  -v /volume1/docker/memglow:/app:ro \
+  -v /volume1/homes/me/KB:/kb \
+  -v /volume1/docker/memglow-data:/data \
+  -e MEMGLOW_DATA_DIR=/data -e MEMGLOW_HOME=/data \
+  -e MEMGLOW_URL=http://192.168.1.2:4747 -e MEMGLOW_TOKEN=... -e MEMGLOW_MACHINE=nas \
+  -w /app node:22-alpine \
+  node memory-server/memglow-memory-server.js --root /kb --listen 0.0.0.0:8765 --read-write --levers --quiet
+```
+
+Add `-e MEMGLOW_MEMORY_TOKEN=...` to require a bearer token, `-e MEMGLOW_PROXY_…=1` (or a
+`memglow.config.json` in `/data`) to turn levers on or off. The KB volume is read-write
+(`--read-write`); drop both for a read-only server.
+
+**Migrating from the two containers** (`memglow-proxy` on 8765 → `memglow-memory` on 8766):
+
+1. Stop both: `docker stop memglow-proxy memglow-memory` (rename or remove them so the name is
+   free: `docker rename memglow-memory memglow-memory-old`, `docker rename memglow-proxy memglow-proxy-old`).
+2. Start the one container above, with the **same data folder** the proxy used
+   (`MEMGLOW_DATA_DIR`, so savings, aliases and ledgers carry on) and the **same port, 8765**:
+   clients keep `http://<nas>:8765/mcp` and change nothing.
+3. Check: `curl http://<nas>:8765/healthz`, then one search from a client.
+4. **Rollback**: `docker stop memglow-memory && docker rm memglow-memory`, then
+   `docker start memglow-memory-old memglow-proxy-old` (renamed back if you like) — the notes
+   and the data folder are the same, nothing to restore.
+
 <a id="your-notes"></a>
 ## 📝 Your notes
 

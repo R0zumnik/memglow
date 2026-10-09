@@ -827,7 +827,7 @@ var SOURCE_LABELS = {
 // "hook", "MCP proxy" and "API" are technical names, the same in every language; "file" and "demo"
 // are words, translated (CHANNEL_TRANSLATED_KEYS, English in CHANNEL_LABELS for reference).
 var CHANNEL_LABELS = {
-  hook: "hook", "mcp-proxy": "MCP proxy", file: "file", api: "API", demo: "demo"
+  hook: "hook", "mcp-proxy": "MCP proxy", "memory-server": "memory server", file: "file", api: "API", demo: "demo"
 };
 var CHANNEL_TRANSLATED_KEYS = { file: "journal.channelFile", demo: "journal.channelDemo" };
 function formatJournalLine(o, names, T) {

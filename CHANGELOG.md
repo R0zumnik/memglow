@@ -205,6 +205,39 @@ page showed.
   priority, `readSavedTuning`, the "no divergence" cross-module checks, and the end-to-end lever-1
   / rules-text fix (a page-saved `largeNoteTokens` now actually changes what the proxy and the
   rules text use, with env still winning over everything).
+## 0.4.8.1 — internal (not published)
+
+**Memory server "all-in-one": one process, one container, one port.**
+
+- `memglow memory-server --levers` (env `MEMGLOW_MEMORY_LEVERS=1`) applies the MCP proxy's levers,
+  memglow's memory rules and the proxy's activity reporting **inside** the memory server
+  (`memory-server/all-in-one.js`), around its own JSON-RPC dispatch: before dispatch the levers'
+  `clientMessage` (strips `memglow_*` arguments, records pending calls), after it `serverMessage`
+  (stubs, warnings, hints, dedupe…). Same settings as the proxy (`MEMGLOW_PROXY_*`,
+  `memglow.config.json` → `"proxy"`, `MEMGLOW_DATA_DIR`), built through the levers' public API
+  only. `--name` / `--source` as for the proxy (default name `memglow-memory`).
+- multiQuery (`memglow_queries`) calls the server's own search once per phrasing, in process,
+  then merges with the proxy's merge code.
+- The levers' note index points at `<root>/memory` (or the root) unless `MEMGLOW_MEMORY_DIR` is
+  set, and is rescanned right after the server's own writes (also `move_note` / `delete_note`).
+- Activity reports use a new channel, `memory-server` (accepted by the viewer's `/api/activity`
+  and shown as "memory server" in the journal).
+- Sessions: the `Mcp-Session-Id`, including for the `initialize` that opens the session (its
+  clientInfo and the "once per session" memory rules land in that session); stateless 2026-07-28
+  calls get one session per connection. Unlike the HTTP proxy, which keys every request without a
+  session id (every `initialize`, every stateless call) as one shared "default" session — so,
+  through the proxy, only the first client after a restart gets the memory rules.
+- Equivalence test (`test/memory-server-all-in-one.test.js`): one scripted session (initialize,
+  tools/list, search with `memglow_queries`, reads → dedupe / alreadyLoaded / sizeWarning, writes →
+  duplicateHint + sizeWarning, edit, read → delta, recent_activity, a stateless call, a batch)
+  replayed through "proxy → memory server" and through "memory server --levers": identical
+  response bodies and activity reports.
+- `bench/all-in-one-speed.js`: latency of both set-ups side by side (200 notes, in one process,
+  medians): search ≈5 ms vs ≈8 ms through the proxy, multiQuery ≈10 vs ≈19 ms, read ≈2.4 vs ≈4.7 ms,
+  write ≈31 vs ≈33 ms (the write itself dominates).
+- README: "All-in-one: one container" — a `docker run` for one container on port 8765, and the
+  migration from the two containers (and the rollback).
+- Without `--levers` nothing changes.
 
 ## 0.4.6 — 2026-10-09
 
