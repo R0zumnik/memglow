@@ -20,7 +20,8 @@ const path = require("path");
 const { createStore } = require("../lib/store/store");
 const { createTools, SERVER_VERSION, sameFileTwins } = require("./tools");
 const { createRpc, INSTRUCTIONS, INSTRUCTIONS_RW } = require("./rpc");
-const { createWriter, ownershipWarning } = require("./writer");
+const { createWriter, ownershipWarning, FSYNC_MODES } = require("./writer");
+const defaultsLib = require("../lib/defaults");
 const { createHttpServer } = require("./http");
 const { createAllInOne } = require("./all-in-one");
 
@@ -49,8 +50,13 @@ options:
                   regular file under the root, as before 0.4.9.1. Env MEMGLOW_MEMORY_SERVE_FILES
   --kebab-filenames  file names of new notes in kebab-case (default: the title as is)
   --update-permalinks-on-move  a moved note's permalink follows its new path (default: kept)
-  --no-fsync      do not fsync written files (still atomic; faster on slow disks, but a power
-                  cut may lose the last writes)
+  --fsync-mode sync|deferred|none  durability of writes (default: sync). sync: fsync the file
+                  and its folder before answering. deferred: answer right after the atomic rename,
+                  fsync just after in the background (a power cut within ~1-3 s of a write can lose
+                  that write, never tear a file; safe with a UPS). none: no fsync. Env
+                  MEMGLOW_MEMORY_FSYNC, or "memoryServer": { "fsyncMode": … } in memglow.config.json
+                  (MEMGLOW_CONFIG or ~/.memglow only, never the current folder)
+  --no-fsync      same as --fsync-mode none
   --poll-ms N     periodic rescan, in ms (default 3000; 0 = file watching only)
   --no-watch      do not use fs.watch (periodic rescan only)
   --allow-origin O  accept browser requests from this Origin (repeatable or comma-separated;
@@ -93,7 +99,11 @@ function parseArgs(argv, env = process.env) {
     else if (a === "--on-write-delay-ms") o.onWriteDelayMs = Math.max(10000, Number(argv[++i]) || 0);
     else if (a === "--overwrite-default") o.overwriteDefault = true;
     else if (a === "--kebab-filenames") o.kebabFilenames = true;
-    else if (a === "--no-fsync") o.fsync = false;
+    else if (a === "--no-fsync") { o.fsync = false; o.fsyncMode = "none"; }
+    else if (a === "--fsync-mode" || a.startsWith("--fsync-mode=")) {
+      const v = String(a === "--fsync-mode" ? argv[++i] || "" : a.slice(13)).toLowerCase();
+      if (FSYNC_MODES.includes(v)) o.fsyncMode = v; else o.badFsyncMode = v;
+    }
     else if (a === "--update-permalinks-on-move") o.updatePermalinksOnMove = true;
     else if (a === "--poll-ms") o.pollMs = Math.max(0, Number(argv[++i]) || 0);
     else if (a === "--no-watch") o.watch = false;
@@ -130,8 +140,29 @@ function parseArgs(argv, env = process.env) {
  * reporting applied in process (memory-server/all-in-one.js) — then `rpc` is that wrapped
  * dispatcher and `rawRpc` the server's own.
  */
+/**
+ * The fsync mode in effect and where it comes from: --fsync-mode / --no-fsync, else
+ * MEMGLOW_MEMORY_FSYNC, else memglow.config.json "memoryServer.fsyncMode" (MEMGLOW_CONFIG or
+ * ~/.memglow/memglow.config.json — never a ./memglow.config.json in the current folder, the
+ * 0.4.7.6 trust boundary), else "sync". → { mode, source, warning? }
+ */
+function resolveFsyncMode(o, env = process.env) {
+  if (o.fsyncMode) return { mode: o.fsyncMode, source: o.fsync === false && o.fsyncMode === "none" ? "--no-fsync" : "--fsync-mode" };
+  const e = String(env.MEMGLOW_MEMORY_FSYNC || "").trim().toLowerCase();
+  if (e) {
+    if (FSYNC_MODES.includes(e)) return { mode: e, source: "MEMGLOW_MEMORY_FSYNC" };
+    return { mode: "sync", source: "default", warning: `memglow memory server: ignoring MEMGLOW_MEMORY_FSYNC="${e.slice(0, 40)}" (expected sync, deferred or none)` };
+  }
+  let cfg = {};
+  try { cfg = defaultsLib.resolveConfigFiles({ env, allowCwd: false }).config || {}; } catch { cfg = {}; }
+  const ms = cfg && typeof cfg.memoryServer === "object" && cfg.memoryServer ? cfg.memoryServer : {};
+  const c = typeof ms.fsyncMode === "string" ? ms.fsyncMode.trim().toLowerCase() : "";
+  if (c && FSYNC_MODES.includes(c)) return { mode: c, source: "memglow.config.json" };
+  return { mode: "sync", source: "default" };
+}
+
 function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 3000, watch = true, maxFileBytes, log = () => {},
-  fsync = true, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne }) {
+  fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne }) {
   let tools = null, warmTimer = null;
   // The search index is rebuilt lazily by the next search anyway; warming it after a change is
   // coalesced (a burst of writes costs one rebuild, not one per write).
@@ -141,7 +172,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
   };
   const store = createStore({ root, project, pollMs, watch, log, ...(maxFileBytes ? { maxFileBytes } : {}), onChange });
   store.start();
-  const writer = readOnly ? null : createWriter({ store, fsync, fileMode, onWrite, onWriteDelayMs, log, hooks: writerHooks, ...(maxFileBytes ? { maxFileBytes } : {}), ...(chownToParent != null ? { chownToParent } : {}) });
+  const writer = readOnly ? null : createWriter({ store, fsync, fsyncMode, fileMode, onWrite, onWriteDelayMs, log, hooks: writerHooks, ...(maxFileBytes ? { maxFileBytes } : {}), ...(chownToParent != null ? { chownToParent } : {}) });
   if (writer) {
     try { const w = ownershipWarning(require("fs").statSync(root)); if (w) log(w); } catch { /* no root: nothing to warn about */ }
     writer.cleanupTemps(cleanupTempsMinAgeMs);
@@ -202,15 +233,18 @@ function main(argv = process.argv.slice(2), env = process.env) {
   process.on("uncaughtException", (e) => { try { process.stderr.write("memglow memory server: unexpected error (kept running): " + (e && e.stack || e) + "\n"); } catch { /* ignore */ } });
   process.on("unhandledRejection", (e) => { try { process.stderr.write("memglow memory server: unhandled rejection (kept running): " + (e && e.stack || e) + "\n"); } catch { /* ignore */ } });
   if (o.unknown) { process.stderr.write(`memglow-memory-server: unknown option(s): ${o.unknown.join(" ")}\n\n${HELP}`); return 2; }
+  if (o.badFsyncMode != null) { process.stderr.write(`memglow-memory-server: bad --fsync-mode "${o.badFsyncMode}" (expected sync, deferred or none)\n`); return 2; }
   if (o.badServeFiles != null) { process.stderr.write(`memglow-memory-server: bad --serve-files "${o.badServeFiles}" (expected text or any)\n`); return 2; }
   if (o.badFileMode != null) { process.stderr.write(`memglow-memory-server: bad --file-mode "${o.badFileMode}" (expected an octal mode such as 0664)\n`); return 2; }
   const root = path.resolve(o.root);
   const t0 = Date.now();
+  const fsyncInfo = resolveFsyncMode(o, env);
   const srv = createMemoryServer({ root, project: o.project, readOnly: o.readOnly, pollMs: o.pollMs, watch: o.watch, log,
-    fsync: o.fsync, fileMode: o.fileMode, serveFiles: o.serveFiles, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
+    fsync: o.fsync, fsyncMode: fsyncInfo.mode, fileMode: o.fileMode, serveFiles: o.serveFiles, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
     allInOne: o.levers ? { env, name: o.name || "memglow-memory", source: o.source } : false });
   const st = srv.store.stats();
-  log(`memglow memory server ${SERVER_VERSION}: ${st.notes} notes indexed from ${root} in ${Date.now() - t0} ms (project "${o.project}", ${o.readOnly ? "read-only" : "read-write"}${st.watching ? ", watching" : ""})`);
+  if (fsyncInfo.warning) log(fsyncInfo.warning);
+  log(`memglow memory server ${SERVER_VERSION}: ${st.notes} notes indexed from ${root} in ${Date.now() - t0} ms (project "${o.project}", ${o.readOnly ? "read-only" : "read-write, fsync " + fsyncInfo.mode + (fsyncInfo.source !== "default" ? " (" + fsyncInfo.source + ")" : "")}${st.watching ? ", watching" : ""})`);
   if (srv.aio) {
     const c = srv.aio.lv && srv.aio.lv.config;
     log(`memglow memory server: all-in-one — levers ${c ? "on (notes index: " + (c.memoryDir || "none") + ", data: " + c.dataDir + ")" : "all off"}, memory rules ${srv.aio.rules ? "on" : "off"}, activity channel "memory-server"`);
@@ -219,11 +253,12 @@ function main(argv = process.argv.slice(2), env = process.env) {
     const m = /^(?:\[?([^\]]*)\]?:)?(\d+)$/.exec(o.listen.trim());
     if (!m) { process.stderr.write(`memglow-memory-server: bad --listen "${o.listen}" (expected HOST:PORT)\n`); return 2; }
     const host = m[1] || "127.0.0.1", port = Number(m[2]);
-    const server = createHttpServer({ rpc: srv.rpc, store: srv.store, log, allowOrigins: o.allowOrigins, token: o.token, readOnly: o.readOnly });
+    const server = createHttpServer({ rpc: srv.rpc, store: srv.store, log, allowOrigins: o.allowOrigins, token: o.token, readOnly: o.readOnly, fsyncMode: srv.writer ? srv.writer.fsyncMode : null });
     server.once("error", (e) => { process.stderr.write(`memglow-memory-server: cannot listen on ${host}:${port}: ${e.message}\n`); srv.close(); process.exit(1); });
     server.listen(port, host, () => log(`memglow memory server: listening on http://${host}:${server.address().port}/mcp`));
-    // Writes in progress finish first (at most 10 s), so a stop never leaves a half-done edit
-    // (an interrupted one would leave the old file anyway: writes are atomic).
+    // Writes in progress — and, with --fsync-mode deferred, their pending fsyncs — finish first
+    // (at most 10 s), so a stop never leaves a half-done edit (an interrupted one would leave the
+    // old file anyway: writes are atomic).
     let stopping = false;
     const stop = () => {
       if (stopping) return;
@@ -236,10 +271,15 @@ function main(argv = process.argv.slice(2), env = process.env) {
     process.on("SIGINT", stop); process.on("SIGTERM", stop);
     return null;
   }
-  runStdio(srv.rpc, process.stdin, process.stdout, () => { srv.close(); process.exit(0); });
+  // stdin closed: pending writes AND their deferred fsyncs finish first (at most 10 s).
+  runStdio(srv.rpc, process.stdin, process.stdout, () => {
+    const idle = srv.writer ? srv.writer.idle() : Promise.resolve();
+    const cap = new Promise((ok) => { const t = setTimeout(ok, 10000); if (t.unref) t.unref(); });
+    Promise.race([idle, cap]).finally(() => { srv.close(); process.exit(0); });
+  });
   return null;
 }
 
 if (require.main === module) { const code = main(); if (code != null) process.exitCode = code; }
 
-module.exports = { main, parseArgs, createMemoryServer, runStdio, HELP };
+module.exports = { main, parseArgs, createMemoryServer, runStdio, resolveFsyncMode, HELP };

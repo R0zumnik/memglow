@@ -862,7 +862,7 @@ memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000 --read-write \
 `--allow-origin` (a browser-style `Origin` header is refused unless listed — MCP/CLI clients send
 none and are accepted either way), `--on-write CMD` (a debounced hook run after writes, e.g. a
 git snapshot), `--file-mode` (force the mode of files it writes, instead of keeping the existing
-one), `--no-fsync` (skip the fsync in the atomic write, for very slow disks), `--kebab-filenames`
+one), `--fsync-mode sync|deferred|none` (see **Write durability** below; `--no-fsync` = `none`), `--kebab-filenames`
 (write new notes as `kebab-case.md` instead of basic-memory's as-is title — useful since
 memglow's own note index only resolves slugged file names).
 
@@ -916,6 +916,23 @@ measured this way — your own notes, query mix and hardware will differ.
   new files and folders take the owner of the folder they are created in (a container running as
   root keeps the share's owner, e.g. 1045:100 on a Synology). Names differing only by Unicode normalisation (NFD
   from a Mac over SMB) reuse the existing folder or file instead of creating a twin.
+- **Write durability — `--fsync-mode`** (0.4.10.1; env `MEMGLOW_MEMORY_FSYNC`, or
+  `"memoryServer": { "fsyncMode": "deferred" }` in `memglow.config.json` — read only from
+  `MEMGLOW_CONFIG` or `~/.memglow/`, never from the current folder). Every mode writes atomically
+  (temporary file + rename): a reader, or a crash/`kill -9` of the server, always finds the old or
+  the new version of a note, never a mix.
+  - `sync` (**the default**): the file and its folder are fsync'd before the write is answered —
+    nothing answered is ever lost, even to a power cut. Slow on some disks: an fsync on a busy
+    btrfs volume can take a second or more.
+  - `deferred`: answered right after the rename; the file and folder fsyncs run just after, in
+    the background (shutdown and `idle()` wait for them). **Trade-off**: a power cut (or a kernel
+    crash) within ~1–3 s of a write can lose that last write — the note is then still its
+    previous version (or, for a note just created, missing or empty) — but a file is never torn.
+    Safe with a UPS. Measured on a temp folder: write p50 ≈8 ms instead of ≈2.4 s.
+  - `none`: no fsync at all (still atomic); the OS writes the data back on its own schedule
+    (typically within 30 s).
+  The settings panel shows the active mode as a read-only badge under "Memory server" (when
+  that server's full status is visible to it); it cannot be changed from the page.
 - **File names**: the title as is, like basic-memory (`--kebab-filenames` for kebab-case). memglow's
   own note index (viewer, proxy levers) only knows notes whose file name is a slug, so with
   free-form titles prefer `--kebab-filenames`.

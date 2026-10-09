@@ -471,6 +471,7 @@
   "control.memoryServerReadWrite": "lesen/schreiben",
   "control.memoryServerTokenYes": "Token erforderlich",
   "control.memoryServerTokenNo": "kein Token erforderlich",
+  "control.memoryServerFsync": "Schreiben: fsync {mode}",
   "control.measuresEmpty": "Noch keine Messungen.",
   "control.byClientTitle": "Nach KI-Tool (7 Tage)",
   "control.proxySeen": "MCP-Proxy zuletzt gesehen {ago} ({ms} ms)",

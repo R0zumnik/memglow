@@ -8,8 +8,11 @@
  *  - Confinement: every path is relative to the root, without ".", ".." or dot-segments; the
  *    deepest existing folder on the way (symlinks resolved) must be inside the root's real path.
  *  - Atomic write: a temporary dot-file in the same folder, written, fsync'd, renamed over the
- *    target, then the folder fsync'd (`fsync: false` skips both fsyncs: still atomic, but a power
- *    cut may lose the last writes — for very slow disks). A failure at any step removes the temporary file and leaves
+ *    target, then the folder fsync'd. `fsyncMode` (0.4.10.1): "sync" (default, the above),
+ *    "deferred" (answer right after the rename; the file and folder fsyncs run just after, in the
+ *    background, and idle() waits for them — a power cut within a second or so of a write can
+ *    lose that write, a reader or a crash of this process never sees a torn file), "none" (no
+ *    fsync at all; `fsync: false` is the old spelling of it). A failure at any step removes the temporary file and leaves
  *    the previous version intact. A new note is linked into place (never replaces a file that
  *    appeared in the meantime).
  *  - Mode and owner: an existing file keeps its mode (or `fileMode` when given); when running as
@@ -50,12 +53,48 @@ const isRoot = () => typeof process.getuid === "function" && process.getuid() ==
 // usually world-readable). The group still comes from the folder (setgid / chown as root).
 const NEW_FILE_MODE = 0o660;
 
-function createWriter({ store, fsync = true, fileMode = null, newFileMode = NEW_FILE_MODE, maxFileBytes = 4 * 1024 * 1024, onWrite = "", onWriteDelayMs = 10000, log = () => {}, hooks = {}, chownToParent = isRoot() }) {
+const FSYNC_MODES = ["sync", "deferred", "none"];
+
+function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, newFileMode = NEW_FILE_MODE, maxFileBytes = 4 * 1024 * 1024, onWrite = "", onWriteDelayMs = 10000, log = () => {}, hooks = {}, chownToParent = isRoot() }) {
   const root = store.root;
   const realRoot = () => store.realRoot();
   let tail = Promise.resolve();
   let depth = 0;
-  const counters = { writes: 0, failed: 0, lastWriteAt: 0 };
+  const mode = FSYNC_MODES.includes(fsyncMode) ? fsyncMode : fsync ? "sync" : "none";
+  const counters = { writes: 0, failed: 0, lastWriteAt: 0, deferredSyncs: 0 };
+
+  // ---- deferred fsyncs (fsyncMode "deferred") ----
+  // Paths (files, then folders) waiting for their fsync. One background flusher at a time; a
+  // path queued twice is synced once. idle() waits for all of it (shutdown).
+  const pendingSync = new Map(); // abs path → true for a folder
+  let flushing = null;
+  function deferSync(p, isDir) {
+    pendingSync.set(p, !!isDir || pendingSync.get(p) === true);
+    startFlush();
+  }
+  function startFlush() {
+    if (flushing || !pendingSync.size) return;
+    flushing = flushLoop().finally(() => { flushing = null; startFlush(); });
+  }
+  async function syncPath(p) {
+    let fh = null;
+    try {
+      if (hooks.beforeDeferredSync) await hooks.beforeDeferredSync(p);
+      fh = await fsp.open(p, "r");
+      await fh.sync();
+      counters.deferredSyncs++;
+    } catch { /* gone (moved, deleted) or not supported: best effort */ }
+    finally { if (fh) await fh.close().catch(() => {}); }
+  }
+  async function flushLoop() {
+    await new Promise((ok) => setImmediate(ok)); // after the answer has been written
+    while (pendingSync.size) {
+      const batch = [...pendingSync.entries()];
+      pendingSync.clear();
+      for (const [p, isDir] of batch) if (!isDir) await syncPath(p);
+      for (const [p, isDir] of batch) if (isDir) await syncPath(p);
+    }
+  }
 
   /** Runs `fn` alone (after every write queued before it). Returns its promise. */
   function run(fn) {
@@ -166,7 +205,8 @@ function createWriter({ store, fsync = true, fileMode = null, newFileMode = NEW_
   }
 
   async function fsyncDir(dir) {
-    if (!fsync) return;
+    if (mode === "none") return;
+    if (mode === "deferred") { deferSync(dir, true); return; }
     let fh = null;
     try { fh = await fsp.open(dir, "r"); await fh.sync(); } catch { /* not supported everywhere: best effort */ }
     finally { if (fh) await fh.close().catch(() => {}); }
@@ -206,7 +246,7 @@ function createWriter({ store, fsync = true, fileMode = null, newFileMode = NEW_
         } catch (e) { log(`memglow memory server: chown ${abs}: ${e.message}`); }
       }
       if (!prev) await groupWriteLikeParent(abs, fh);
-      if (fsync) await fh.sync();
+      if (mode === "sync") await fh.sync();
       await fh.close(); fh = null;
       if (hooks.beforeRename) await hooks.beforeRename(tmp, abs);
       if (prev) {
@@ -230,6 +270,7 @@ function createWriter({ store, fsync = true, fileMode = null, newFileMode = NEW_
       await fsp.unlink(tmp).catch(() => {});
       throw e;
     }
+    if (mode === "deferred") deferSync(abs, false);
     await fsyncDir(dir);
     return fsp.stat(abs);
   }
@@ -389,10 +430,22 @@ function createWriter({ store, fsync = true, fileMode = null, newFileMode = NEW_
   return {
     run, cleanRel, canonicalRel, cleanupTemps, backupToTrash, target, checkAncestors, mkdirs, readText, writeAtomic, moveNoClobber, trashFolder, toTrash, wrote,
     flushHook, fail: () => { counters.failed++; },
-    /** Resolves when every write queued so far is done (shutdown). */
-    idle: () => tail,
-    stats: () => ({ ...counters, queued: depth, onWrite: !!onWrite }),
+    /**
+     * Resolves when every write queued so far is done AND every deferred fsync they scheduled
+     * has run (shutdown).
+     */
+    idle: async () => {
+      for (;;) {
+        const t = tail;
+        await t;
+        if (flushing) { await flushing.catch(() => {}); continue; }
+        if (pendingSync.size) { startFlush(); continue; }
+        if (t === tail) return;
+      }
+    },
+    fsyncMode: mode,
+    stats: () => ({ ...counters, queued: depth, onWrite: !!onWrite, fsyncMode: mode, pendingSyncs: pendingSync.size + (flushing ? 1 : 0) }),
   };
 }
 
-module.exports = { createWriter, WriteError, ownershipWarning, TEMP_RE, NEW_FILE_MODE };
+module.exports = { createWriter, WriteError, ownershipWarning, TEMP_RE, NEW_FILE_MODE, FSYNC_MODES };

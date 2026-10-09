@@ -471,6 +471,7 @@
   "control.memoryServerReadWrite": "読み書き可能",
   "control.memoryServerTokenYes": "トークンが必要",
   "control.memoryServerTokenNo": "トークンは不要",
+  "control.memoryServerFsync": "書き込み: fsync {mode}",
   "control.measuresEmpty": "まだ測定値がありません。",
   "control.byClientTitle": "AI ツール別（7日間）",
   "control.proxySeen": "MCP プロキシの最終確認: {ago}（{ms} ms）",

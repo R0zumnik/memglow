@@ -81,7 +81,7 @@ function sessionKeyFor(req, sid, payload, propose) {
   return connKey(req.socket);
 }
 
-function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, allowOrigins = [], token = "", readOnly = true }) {
+function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, allowOrigins = [], token = "", readOnly = true, fsyncMode = null }) {
   const origins = new Set((allowOrigins || []).map((o) => String(o).trim().replace(/\/+$/, "").toLowerCase()).filter(Boolean));
   const sessions = new Map(); // id → { version, lastSeen }
 
@@ -148,6 +148,7 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
         ...base, name: rpc.serverInfo.name,
         indexVersion: s.version, lastScanAt: s.lastScanAt ? new Date(s.lastScanAt).toISOString() : null,
         readOnly: !!readOnly, tokenRequired: !!token,
+        ...(fsyncMode ? { fsyncMode } : {}),
       });
     }
     if (!authed) {

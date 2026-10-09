@@ -471,6 +471,7 @@
   "control.memoryServerReadWrite": "lecture-écriture",
   "control.memoryServerTokenYes": "jeton requis",
   "control.memoryServerTokenNo": "aucun jeton requis",
+  "control.memoryServerFsync": "écritures : fsync {mode}",
   "control.measuresEmpty": "Aucune mesure pour l'instant.",
   "control.byClientTitle": "Par outil IA (7 jours)",
   "control.proxySeen": "Proxy MCP vu {ago} ({ms} ms)",

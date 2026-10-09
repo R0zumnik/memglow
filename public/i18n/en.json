@@ -472,6 +472,7 @@
   "control.memoryServerReadWrite": "read-write",
   "control.memoryServerTokenYes": "token required",
   "control.memoryServerTokenNo": "no token required",
+  "control.memoryServerFsync": "writes: fsync {mode}",
   "control.measuresEmpty": "No measurements yet.",
   "control.byClientTitle": "By AI tool (7 days)",
   "control.proxySeen": "MCP proxy last seen {ago} ({ms} ms)",

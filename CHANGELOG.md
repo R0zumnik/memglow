@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.10.1 — internal (not published)
+
+Responsiveness, step 1: `--fsync-mode sync|deferred|none` for the memory server's writes.
+
+- `memory-server/writer.js`: `fsyncMode`. **`sync` stays the public default** (the file and its
+  folder fsync'd before the answer, as before). `deferred`: the write is answered right after the
+  atomic rename; the file and folder fsyncs are queued to the writer's background flusher (one at
+  a time, a path queued twice synced once, files before folders); `idle()` — used by the HTTP
+  shutdown path, and now by the stdio exit path too — waits for every pending fsync; the
+  `.trash` backup copy is not fsync'd. `none`: no fsync (`--no-fsync` is its old spelling).
+- Settings: `--fsync-mode`, env `MEMGLOW_MEMORY_FSYNC`, or `memoryServer.fsyncMode` in
+  `memglow.config.json` read ONLY from `MEMGLOW_CONFIG` or `~/.memglow/` (never the current
+  folder, the 0.4.7.6 trust boundary); flag > env > file > `sync`. Logged at startup with its
+  source.
+- The mode is shown READ-ONLY: `GET /healthz` adds `fsyncMode` to the full (authorised) answer;
+  `lib/setup.js` `memoryServerStatus()` passes it on when present; the Control panel's "Memory
+  server" / "Serveur de mémoire" line shows a badge (`control.memoryServerFsync`, 8 languages).
+  Nothing on the page can set it.
+- README: the trade-off spelled out (deferred: a power cut within ~1–3 s of a write can lose that
+  write, never tear a file; safe with a UPS).
+- Tests (`test/fsync-mode.test.js`): mode resolution and precedence (cwd file ignored);
+  `idle()` waits for gated pending fsyncs; sync/none never leave one pending; healthz shows the
+  mode only when authorised; the badge is not a control; `kill -9` during a stream of deferred
+  writes leaves every file exactly one whole version; deferred p50 < 50 ms on a temp folder.
+- Measured on this machine's temp folder: write p50 sync ≈2.4 s → deferred ≈7.6 ms (none ≈5 ms).
+
 ## 0.4.10.0 — internal (not published)
 
 Responsiveness, step 0: the activity report is off the request path.

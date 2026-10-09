@@ -52,6 +52,7 @@ var EN_CONTROL = {
   "control.memoryServerReadWrite": "read-write",
   "control.memoryServerTokenYes": "token required",
   "control.memoryServerTokenNo": "no token required",
+  "control.memoryServerFsync": "writes: fsync {mode}",
   "control.measuresEmpty": "No measurements yet.",
   "control.byClientTitle": "By AI tool (7 days)",
   "control.byLeverTitle": "By lever (7 days)",
@@ -266,7 +267,11 @@ function controlRenderMemoryServer(ms, T) {
   if (!ms.ok) return '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.memoryServerError", { error: ms.error || "?" })) + '</p>';
   var mode = T(ms.readOnly === false ? "control.memoryServerReadWrite" : "control.memoryServerReadOnly");
   var tok = T(ms.tokenRequired ? "control.memoryServerTokenYes" : "control.memoryServerTokenNo");
-  return '<p class="mg-control__line">' + cEsc(T("control.memoryServerOk", { mode: mode, notes: ms.notes != null ? ms.notes : "?", version: ms.version || "?" })) + ' · ' + cEsc(tok) + '</p>';
+  // 0.4.10.1: the server's fsync mode, a read-only badge (set on the server's command line or
+  // environment only — never from this page).
+  var fsb = ms.fsyncMode === "sync" || ms.fsyncMode === "deferred" || ms.fsyncMode === "none"
+    ? ' <span class="mg-control__badge" data-fsync-mode="' + cEsc(ms.fsyncMode) + '">' + cEsc(T("control.memoryServerFsync", { mode: ms.fsyncMode })) + '</span>' : "";
+  return '<p class="mg-control__line">' + cEsc(T("control.memoryServerOk", { mode: mode, notes: ms.notes != null ? ms.notes : "?", version: ms.version || "?" })) + ' · ' + cEsc(tok) + fsb + "</p>";
 }
 
 /** The "Measures" section: per-AI-tool tokens relayed (GET /api/cost's clientTokens) + the proxy-seen badge. */
