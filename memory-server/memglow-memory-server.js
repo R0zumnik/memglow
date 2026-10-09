@@ -57,8 +57,10 @@ options:
                   MEMGLOW_MEMORY_FSYNC, or "memoryServer": { "fsyncMode": … } in memglow.config.json
                   (MEMGLOW_CONFIG or ~/.memglow only, never the current folder)
   --no-fsync      same as --fsync-mode none
-  --poll-ms N     periodic rescan, in ms (default 3000; 0 = file watching only)
-  --no-watch      do not use fs.watch (periodic rescan only)
+  --poll-ms N     fallback periodic rescan, in ms (default 3000; 0 = file watching only)
+  --no-watch      do not watch the note folders (periodic rescan only). Not needed any more for a
+                  .git snapshot folder: since 0.4.10.4 only the note folders themselves are
+                  watched, non-recursively (never .git, .trash, @eaDir, node_modules, dot-folders)
   --allow-origin O  accept browser requests from this Origin (repeatable or comma-separated;
                   default: none — any request carrying an Origin header is refused, requests
                   without one, as MCP clients send them, are accepted). Env MEMGLOW_MEMORY_ALLOW_ORIGIN

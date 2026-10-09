@@ -830,7 +830,11 @@ with `- permalink:` lines, `# Context:`, `## Recent Activity:` …), so existing
 and the [MCP proxy](#mcp-proxy) in front of it keep working unchanged. Your Markdown files stay
 the source of truth throughout — this server reads and writes the same notes folder basic-memory
 does, in the same layout, nothing in a database. Notes are indexed in memory and refreshed on
-every file change (`fs.watch` plus a cheap rescan every 3 s), searches are lexical (BM25-style;
+every file change (one non-recursive `fs.watch` per note folder — never `.git`, `.trash` or any
+dot-folder, so a git snapshot costs nothing; a change is visible in well under a second — plus a
+cheap fallback rescan every `--poll-ms`, 3 s by default). `--no-watch` (rescan only) is no longer
+needed to keep a `.git` folder in the notes root quiet: it was, before 0.4.10.4, when the watch was
+recursive. Searches are lexical (BM25-style;
 accents folded, English + French stop-words, title boost, `"phrases"`, `AND`/`OR`/`NOT`/`-word`,
 `prefix*`, `tag:x`) and answer in milliseconds, many requests at once. Zero dependencies.
 

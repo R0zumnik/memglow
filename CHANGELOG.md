@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.10.4 — internal (not published)
+
+Responsiveness, step 4: freshness under a second at ~0 % CPU.
+
+- `lib/store/store.js`: the recursive `fs.watch` on the root (which also woke up for every object
+  a git snapshot wrote in `.git` — the reason production runs `--no-watch`) is replaced by one
+  NON-recursive watch on the root and on each note folder the listing finds; dot-folders
+  (`.git`, `.trash`), `@eaDir`, `#recycle`, `#snapshot`, `node_modules`, `__pycache__` are never
+  listed, hence never watched. The watched set is re-armed after every listing (a folder created,
+  removed or renamed).
+- An event naming a `.md` file → only that file is (l)stat'ed and applied, asynchronously, after a
+  25 ms debounce gathering a burst; dot-files (the writer's temp files) are ignored; an event
+  about anything else (a folder) or without a name → an asynchronous rescan; more than 1000
+  pending files → one rescan. `fresh()` never scans synchronously any more on a read (only the
+  very first read of a store whose initial load has not finished).
+- The fallback poll stays (`--poll-ms`, default 3000). Watching stays the default; `--no-watch`
+  opts out. **`--no-watch` is no longer needed in production** (README, `--help`).
+- `store.stats()` adds `watchedFolders`, `fullScans`, `eventApplies`, `events`.
+- Tests (`test/watch-0410-4.test.js`): one watcher per note folder, never `.git` / `.trash` /
+  `node_modules`; 200 writes inside `.git` → 0 rescans, 0 event applies; an edited note visible
+  in ≈0.1 s through the event (no rescan), a new note, a delete, a new folder (then watched
+  itself); the writer's own writes not re-read; `--no-watch` → no watcher.
+
 ## 0.4.10.3 — internal (not published)
 
 Responsiveness, step 3: one index.
