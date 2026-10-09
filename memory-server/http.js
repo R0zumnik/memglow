@@ -50,6 +50,37 @@ function sameToken(a, b) {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 
+// Per-connection keys for stateless (MCP 2026-07-28) requests: one TCP connection, one key.
+const connKeys = new WeakMap();
+let connN = 0;
+function connKey(socket) {
+  if (!socket) return "conn:none";
+  let k = connKeys.get(socket);
+  if (!k) { k = "conn:" + (++connN); connKeys.set(socket, k); }
+  return k;
+}
+
+/** True for an `initialize` that opens a legacy session (rpc.js: an unknown version falls back to legacy). */
+function opensSession(m) {
+  if (!m || typeof m !== "object" || m.method !== "initialize" || m.id === undefined) return false;
+  const v = m.params && typeof m.params.protocolVersion === "string" ? m.params.protocolVersion : null;
+  return !(v && SUPPORTED_VERSIONS.includes(v) && v >= "2026-");
+}
+
+/**
+ * The session key the all-in-one layer (memory-server/all-in-one.js) uses for this request —
+ * ignored by the plain server: for an `initialize` that opens a session, the id that session is
+ * about to get (a re-initialize under a known id gets a NEW id: its key follows); else the
+ * Mcp-Session-Id when one is sent; else (a stateless request) one key per TCP connection —
+ * never a single key shared by every client. "sid:" prefix: a client-chosen session id can never
+ * collide with a connection key.
+ */
+function sessionKeyFor(req, sid, payload, propose) {
+  if ((Array.isArray(payload) ? payload : [payload]).some(opensSession)) return "sid:" + propose();
+  if (sid) return "sid:" + sid;
+  return connKey(req.socket);
+}
+
 function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, allowOrigins = [], token = "" }) {
   const origins = new Set((allowOrigins || []).map((o) => String(o).trim().replace(/\/+$/, "").toLowerCase()).filter(Boolean));
   const sessions = new Map(); // id → { version, lastSeen }
@@ -157,12 +188,17 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
       const sess = sid ? sessions.get(sid) : null;
       if (sess) sess.lastSeen = Date.now();
       let newSession = null;
+      // The id a legacy `initialize` will hand out, chosen up front so the all-in-one layer
+      // (memory-server/all-in-one.js) can key that very request under the session it opens.
+      let proposed = null;
+      const propose = () => proposed || (proposed = sid && !sess ? sid : crypto.randomBytes(16).toString("hex"));
       const ctx = {
         headerVersion: req.headers["mcp-protocol-version"] ? String(req.headers["mcp-protocol-version"]) : null,
         sessionVersion: sess ? sess.version : null,
+        sessionKey: sessionKeyFor(req, sid, payload, propose),
         onInitialize: (version) => {
           if (version >= "2026-") return; // per-request mode: no session
-          newSession = sid && !sess ? sid : crypto.randomBytes(16).toString("hex");
+          newSession = propose();
           rememberSession(newSession, version);
         },
       };
@@ -189,4 +225,4 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
   return server;
 }
 
-module.exports = { createHttpServer, wantsSseOnly };
+module.exports = { createHttpServer, wantsSseOnly, sessionKeyFor };

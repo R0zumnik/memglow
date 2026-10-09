@@ -23,7 +23,8 @@ usage:
   memglow init [options]         configure memglow and the hooks of your AI tools
   memglow uninstall [options]    remove the hooks and MCP wrappings added by init
   memglow memory-server [opts]   MCP memory server over your notes (preview; read-only unless --read-write):
-                                 --root DIR --listen HOST:PORT | --stdio  (see --help)
+                                 --root DIR --listen HOST:PORT | --stdio  (see --help);
+                                 --levers: all-in-one, the MCP proxy's levers built in
 
 init options:
   --yes, -y           non-interactive: accept every proposal
