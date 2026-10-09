@@ -19,11 +19,13 @@ test("normalizedKey: order-independent, sorted and joined; non-array -> empty st
   assert.strictEqual(NC.normalizedKey(null), "");
 });
 
-test("memoryFingerprint: note count + latest mtime; missing/non-numeric mtime treated as 0", () => {
-  assert.strictEqual(NC.memoryFingerprint([{ mtime: 10 }, { mtime: 30 }, { mtime: 20 }]), "3:30");
-  assert.strictEqual(NC.memoryFingerprint([]), "0:0");
-  assert.strictEqual(NC.memoryFingerprint([{}, { mtime: "x" }]), "2:0");
-  assert.strictEqual(NC.memoryFingerprint(null), "0:0");
+test("memoryFingerprint: note count + size sum + latest and summed mtime; missing/non-numeric fields treated as 0", () => {
+  assert.strictEqual(NC.memoryFingerprint([{ mtime: 10 }, { mtime: 30 }, { mtime: 20 }]), "3:0:30:60");
+  assert.strictEqual(NC.memoryFingerprint([]), "0:0:0:0");
+  assert.strictEqual(NC.memoryFingerprint([{}, { mtime: "x" }]), "2:0:0:0");
+  assert.strictEqual(NC.memoryFingerprint(null), "0:0:0:0");
+  // 0.4.6: a write in the same millisecond (fast CI machine) keeps every mtime but changes the size.
+  assert.notStrictEqual(NC.memoryFingerprint([{ mtime: 10, tokens: 5 }]), NC.memoryFingerprint([{ mtime: 10, tokens: 7 }]), "same mtime, size changed");
   // A new note bumps the count even if its mtime isn't the largest; a changed note's later
   // mtime bumps the fingerprint even if the count stays the same — both are "invalidate on write".
   const before = NC.memoryFingerprint([{ mtime: 10 }, { mtime: 20 }]);

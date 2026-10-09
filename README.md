@@ -1005,7 +1005,7 @@ docker run -d --name memglow -p 127.0.0.1:4747:4747 \
   -v /path/to/notes:/memory:ro \
   -v memglow-data:/data \
   -e MEMGLOW_TOKEN=$(cat ~/.memglow/token) \
-  ghcr.io/r0zumnik/memglow:0.4.5
+  ghcr.io/r0zumnik/memglow:0.4.6
 ```
 
 `/data` keeps the Memory cost counts (note ids and numbers only) and the saved view (settings,
@@ -1014,7 +1014,7 @@ layout, camera) across restarts.
 Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
 then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
 
-Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.4.5`.
+Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.4.6`.
 
 The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
 container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.

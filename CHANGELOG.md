@@ -1,8 +1,22 @@
 # Changelog
 
+## 0.4.6 — 2026-10-09
+
+The first published version since 0.4.1. It is 0.4.5 below plus one fix. 0.4.5 was tagged but never
+reached npm, because its release run failed on the test that this version fixes.
+
+### Fixed
+
+- **MCP proxy, lever 11 (`negativeCache`): a write in the same millisecond as the previous change
+  could go unnoticed.** The "has the memory changed" fingerprint used only the note count and the
+  latest modification time. On a fast machine, an append landing in the same millisecond left both
+  unchanged, so a stale "this search finds nothing" verdict could survive the write. The
+  fingerprint now also includes the sum of note sizes and of modification times. This was found by
+  the GitHub Actions release run of 0.4.5 (1 failing test out of 631).
+
 ## 0.4.5 — 2026-10-09
 
-**Release candidate, not published yet** — the owner decides when to publish. Everything below
+**Tagged, never published** (see 0.4.6 above). Everything below
 summarises, for users, the internal steps 0.4.2 → 0.4.5.2c made since the last published
 version, 0.4.1. Each item links to its detailed section further down this file by version
 number.
