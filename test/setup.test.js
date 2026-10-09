@@ -382,6 +382,11 @@ test("setup: GET /api/setup exposes control.proxy (lever sources), control.maint
     assert.strictEqual(largeNoteTokens.source, "default");
     // No secret anywhere in the control payload.
     assert.ok(!/sk-ant|sk-test|Bearer /.test(JSON.stringify(c)));
+    // No disk path either (the task's own exclusion list: memoryDir/dataDir, archive folder,
+    // alwaysLoaded) — proxyControl() computes a `dataDir` internally (to know where to read
+    // setup.json/the proxy's own data folder from) but it must never reach the browser.
+    assert.deepStrictEqual(Object.keys(c.proxy).sort(), ["caps", "levers"], "proxy.dataDir never serialized to the client");
+    assert.ok(!JSON.stringify(c).includes(t.data), "the data folder's own path never appears in the control payload");
   } finally { await t.stop(); }
 });
 
