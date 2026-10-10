@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.10.8 — internal (not published)
+
+"A merged search answer is still a complete MCP answer." A search with `memglow_queries` lost
+`result.resultType` (and `isError`, `_meta`). The merge (`mergeSearchResults`) rebuilt the result
+from scratch, and the merged answer skipped the layer that adds `resultType: "complete"` on MCP
+2026-07-28. Claude Code (protocol 2026-07-28) rejected the answer: "missing required resultType —
+servers implementing protocol revision 2026-07-28 MUST include it". Found in production from the Mac.
+
+### Fixed
+
+- `mergeSearchResults` keeps every top-level field of the first phrasing's own result, except the
+  content it rebuilds (new `withResultFields`). Both tiers, all-in-one and proxy modes.
+- `multiQuery.run`: when the request carries the 2026-07-28 envelope and the merged result still
+  has no `resultType`, sets it to `"complete"` (safety net).
+- Checked: every other rewritten or synthesised answer (lever stubs and notices, alias injection,
+  `structuredContent` wrap, tools/list augmentation, the server's own tool errors) already copies
+  the original result or goes through the server's `resultType` layer.
+- New test `test/result-type-0410-8.test.js`: it fails on 0.4.10.7 and passes now (all-in-one and
+  proxy → server, header-only and `_meta` requests).
+
 ## 0.4.10.7 — internal (not published)
 
 Fix round before the production deploy (a cold review said GO with conditions). One regression
