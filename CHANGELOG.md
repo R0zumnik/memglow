@@ -1,5 +1,137 @@
 # Changelog
 
+## 0.5.0 — 2026-10-12 (release candidate, not published)
+
+Everything published since 0.4.6, for users. The internal stages below (0.4.7.1 through
+0.4.12.4) have the full detail; this section only groups and names what changed.
+
+### Memory server
+
+- **All-in-one: one process, one container, one port** (0.4.8.1 below). `memglow memory-server
+  --levers` applies the MCP proxy's levers, memory rules and activity reporting inside the
+  memory server itself — no separate proxy container needed.
+- **Write durability — `--fsync-mode sync|deferred|none`** (default `sync`, 0.4.10.1 below):
+  `sync` never loses an acknowledged write, even to a power cut, at the cost of an fsync per
+  write (can be a second or more on a busy disk); `deferred` answers right after the rename and
+  fsyncs in the background — writes ≈50 ms instead of 2–4 s, at the cost of a short window where
+  a crash can lose the very last write (see README → memglow memory server → Write durability
+  for the filesystem caveat on XFS/`noauto_da_alloc`); `none` skips fsync entirely.
+- **`--kebab-filenames`**: new notes get a `kebab-case.md` file name (accents transliterated)
+  instead of the title as-is, so memglow's own note index (viewer, proxy levers) can resolve
+  them — pairs with the `slugHint` lever below.
+- **`--stop-timeout`**: the server waits for in-flight writes and pending fsyncs on shutdown, up
+  to `--shutdown-timeout` seconds (default 25) — give the container at least that much grace
+  period (`docker run --stop-timeout 30`, or `stop_grace_period: 30s` in compose).
+- **Responsiveness** (0.4.10.x below): startup, search and read latency measurably improved —
+  search ≈20–75 ms vs ≈45 s for basic-memory on the author's memory, writes ≈50 ms with
+  `--fsync-mode deferred` vs 2–4 s, relevance (MRR) 0.28 vs 0.13 on 31 real search→read pairs
+  (`bench/compat.js`, `bench/memory-server-speed.js`; not a controlled benchmark — measure your
+  own notes).
+- **Security fixes** (0.4.9.1 below): file mode of new notes tightened (`0660`, was effectively
+  world-readable), `--serve-files` defaults to text/image only.
+
+### MCP proxy & levers
+
+- **Per-client accounting** (0.4.10.9 below): every `tools/call` is counted once, bucketed by
+  client (MCP `clientInfo`, its `_meta` envelope, or the User-Agent), for the Memory cost panel's
+  "By AI tool" line and Settings → Control's "Mesures".
+- **Three new levers**: `duplicateHint` (14, a `write_note` whose title already names an existing
+  note gets an advisory line, "prefer edit_note"), `slugHint` (15, a title that is not a kebab
+  slug gets the slug `--kebab-filenames` would give it), `hubHint` (16, an append that keeps
+  growing a hub note instead of one of its parts gets pointed at the right part). All three
+  advisory only, off by default.
+- **Search recall improved** (0.4.11.1 below): a real-usage duel (31 search→read pairs) went
+  from MRR 0.130 (basic-memory) / 0.280 (memglow, before) to 0.283 after retuning prefix/fuzzy
+  matching and adding a light "hub" field — see Memory server's own relevance figure above.
+
+### Control panel
+
+- **Settings → Control** (0.4.7.x below): every lever in one place — current value, where it
+  comes from (environment variable, the page, the config file, or the built-in default), and
+  whether an environment variable locks it; the day-one levers (`sizeWarning`, `multiQuery`,
+  `aliases`, `learnAliases`, `indexWarning`) can be switched right from the page.
+
+### Maintenance
+
+- **Technical debt pass** (0.4.12.1–0.4.12.4 below), entirely behaviour-preserving: a note kept
+  three overlapping copies of its own text in memory (`raw`, `body`, `lines`) — now only `raw`,
+  with `body`/`lines` derived on access (≈10% less heap for the note store on a 300-note
+  corpus, measured with `bench/heap-0412-1.js`); five copies of the same frontmatter-block
+  splitter and three directory walkers reduced to one shared helper each, where their semantics
+  really were the same (two are kept deliberately independent — see the 0.4.12.2 entry below for
+  why); a dozen exports nothing outside their own file used were dropped (the functions stayed,
+  only the pointless export went); `lib/proxy-levers.js` (≈2,460 lines) split into `lib/levers/`,
+  one file per lever or small group of related levers, with `lib/proxy-levers.js` staying the
+  public entry point — same `module.exports`, verified byte-for-byte.
+
+### Fixes
+
+- **UI fixes** (0.4.11.2 below): the activity journal no longer shows the redundant
+  "MCP proxy · MCP" when the specific tool name is not known.
+
+## 0.4.12.4 — internal (not published)
+
+**Split `lib/proxy-levers.js` (~2,460 lines) into `lib/levers/`** — one file per lever, or per
+small group of closely-related levers that share pure helpers (`config.js`, `control-panel.js`,
+`note-index.js`, `accounting.js`, `responses.js`, `hidden-tools.js`, `multi-query.js`,
+`aliases.js`, `index-hint.js`, `duplicate-hint.js`, `hub-hint.js`). `lib/proxy-levers.js` is now
+the small core (≈1,040 lines): its own top comment, `createLevers()` (the per-session factory),
+and the same `module.exports` object, byte-for-byte unchanged — every caller
+(`require("../lib/proxy-levers")`: server.js, the MCP proxy, the all-in-one process,
+`bench/replay.js`, every test) keeps working with no changes. Every lever module is required
+eagerly rather than behind its own config flag: their pure functions (`planMultiQuery`,
+`duplicateHintFor`, `hubHintFor`, …) are part of this module's public API regardless of which
+levers are on — several tests and `bench/replay.js` call them directly with no live session or
+config at all, so a flag-gated require would make an export disappear exactly when a caller is
+testing the lever that happens to be off. Full suite: 760 pass, 0 fail.
+
+## 0.4.12.3 — internal (not published)
+
+**Dead exports removed.** An earlier audit listed candidates across `lib/archive.js`
+(`stubLine`, `anchorable`, `archiveIdOf`, `summaryLine`, `entriesOfArchive`, `ARCHIVE_FLAG`,
+`LOG_FILE`), `lib/agent-core.js` (`idsInArgs`), `lib/assistant/index.js` (`TOKEN_TTL`,
+`PROPOSAL_TTL`), `lib/assistant/proposal.js` (`hideSecrets`), `lib/assistant/providers/http.js`
+(`httpError`, `MAX_ANSWER_BYTES`) and `bin/memglow.js` (`askChoices`). Verified each by grepping
+the whole repo, tests included, for every external `require()` of its file: none of them is ever
+imported from outside its own file, though every one is still called from inside it — so the
+functions/constants stay, only the now-pointless export is removed. Nothing here is part of a
+documented API (CLI command or MCP tool). Full suite: 760 pass, 0 fail.
+
+## 0.4.12.2 — internal (not published)
+
+**One frontmatter splitter, one documented reason each walker stays separate.** Five files
+(`lib/archive.js`, `lib/hub-spoke.js`, `lib/index-trim.js`, `lib/assistant/proposal.js`,
+`lib/assistant/tidy.js`) each carried their own byte-for-byte identical
+`splitFrontmatter(text) → { fm, body }` (fm including the fences, for exact reconstruction) plus
+its own copy of the same regex. Four of them now use one shared helper,
+`splitFrontmatterBlock()`, added to `lib/store/frontmatter.js` next to the full YAML-subset
+`splitFrontmatter()`/`parseYaml()` it already exports — same shape, same regex, so behaviour is
+byte-for-byte unchanged; each file's own `module.exports.splitFrontmatter` keeps working for its
+external users. `lib/hub-spoke.js` keeps its own copy: its top-of-file comment already states it
+"must stay import-free and independently testable" — zero dependency on the rest of memglow, by
+design. `lib/memory.js`'s own frontmatter reader (six known flat keys, not full YAML) and its own
+directory walker are also left alone, now with a comment explaining why: the module declares
+itself "zero dependencies… see server.js" at the top of the file. Of the three walkers named in
+an earlier audit (`lib/store/store.js`, `memory-server/writer.js`, `lib/memory.js`):
+`memory-server/writer.js`'s `cleanupTemps()` already imports `SKIP_DIRS` from `store.js`; its own
+walk is kept separate, now documented why (it visits every file looking for crash-temp names, not
+just `*.md`, and is depth- rather than count-bounded). No YAML subset semantics changed anywhere.
+Full suite: 760 pass, 0 fail.
+
+## 0.4.12.1 — internal (not published)
+
+**One copy of note text in memory.** A note object stored `raw`, `body` and `lines`
+(`body.split`) at once — three overlapping copies of the same text, the third a real duplicate
+(an array of per-line strings). Now a note keeps only `raw` + `bodyOffset`; `body` and `lines`
+are derived on access, through a real class (`Note`, `lib/store/note.js`) with `body`/`lines` as
+shared-prototype getters rather than `Object.defineProperty` per instance (tried first, and
+measured WORSE — it de-optimises each note's hidden class/shape in V8, costing more than the
+strings it removed; the class keeps one shared shape for every note). `lib/store/search.js`'s
+`tokeniseBody()` now reads `note.lines` into a local once instead of re-deriving it on every loop
+iteration. Measured with `bench/heap-0412-1.js` (300 synthetic notes, `--expose-gc`): heap used
+to load the corpus, 6,316,192 B before → 5,653,760 B after (≈10% less, ≈18.8 KB/note vs
+≈21.0 KB/note). Full suite: 760 pass, 0 fail (unchanged).
+
 ## 0.4.11.2 — internal (not published)
 
 A pass over the r0zumnik "Memory" lab tab's recent UI work (Forces sliders, compact phone layout,

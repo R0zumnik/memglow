@@ -57,6 +57,7 @@
 | 🛡️ **Protected groups** | At first run, pick the big groups no assistant may ever move notes across (rename how they are shown if you like). [More](#protected-groups) |
 | 🗄️ **Archive tier** | Sections unused for months (≈ 3.5 by default) move, word for word, to an archive note of the same theme, with a one-line summary each; the live memory stays small, nothing is lost. [More](#archive) |
 | 🎛️ **Tune it live** | Background, glow, bubble size, size by links or token cost, names and name distance, spread, gravity, spacing, signal speed, links at rest, auto-rotate, find-a-note. Saved in your browser. [Settings](#settings) |
+| 🎚️ **Control panel** | Settings → Control: every [MCP proxy lever](#mcp-proxy) in one place — current value, where it comes from (env / page / file / default), locked by an environment variable or not — switch the day-one ones from the page itself. [More](#control-panel) |
 | 🌐 **8 languages** | English, French, German, Spanish, Brazilian Portuguese, Japanese, Korean, Simplified Chinese — picks your browser's language, switch it any time. [Languages](#languages) |
 | 🔒 **Private by design** | Localhost by default, read-only access to your notes (the optional assistant writes only what you approve), secret-looking lines masked. Hooks send note names only, never content. No CDN, no analytics. |
 | 📦 **Zero dependencies** | One command, Node 18+. No build step, no database. Or one Docker container. |
@@ -769,6 +770,7 @@ real usage log (stage 0.4.2.2b — [bench/README.md](bench/README.md)).
 | 13 | `deltaRead` / `MEMGLOW_PROXY_DELTA_READ` | off | The hottest notes get re-read in every new session — `dedupe` cannot help there (a new session's context is empty). Two mechanisms: cross-session, the first read of a note in a session is always full, plus one header when it changed since this SAME client's own last read, in an earlier session (`memglow: changed since your last read on <date> — sections changed: …`), remembered in a small per-client ledger (`delta-read.json`); within-session, a note re-read after it changed THIS session gets ONLY the diff since its first read, falling back to the full text past a 60% size ratio. Off for now: a clean sweep on hand-built replay files, but not yet checked against a real usage log the way `multiQuery`/`aliases` were — see 0.4.3 in `bench/README.md`/`mcp-proxy/README.md`. |
 | 14 | `duplicateHint` / `MEMGLOW_PROXY_DUPLICATE_HINT` | off | After a `write_note` (never `edit_note`/`move_note`) whose title already names an existing note: `memglow: a note with this title already exists: [[<id>]] — this write_note may replace or duplicate it; prefer edit_note.` A title close to (but not matching) an existing note's id/label/description gets up to 2 candidates instead, with the same "prefer edit_note" suggestion. Checked before the write reaches the server, so the note being created is never mistaken for its own duplicate; same note never hinted twice per session. Advisory only — never blocks the write, never changes its arguments. Off by default: a pure, unconditional add, same bucket as `searchDetails`/`suggestions`/`archiveHint`/`indexHint` — see 0.4.4.1 below. |
 | 15 | `slugHint` / `MEMGLOW_PROXY_SLUG_HINT` | off | After a successful `write_note` (never `edit_note`/`move_note`) whose title is not a kebab slug (lower-case ASCII words joined by `-`), or that lands directly in the notes root (`directory` empty, `/` or `memory`): `memglow: title "Chantier eau cave Choisy – état au 2026-10-11 soir" is not a kebab slug — prefer "chantier-eau-cave-choisy-etat-au-2026-10-11-soir" in a memory/<folder>/ directory (title = kebab slug, file = slug.md).` The suggested slug is the file name `--kebab-filenames` gives (accents transliterated). Advisory only — never blocks the write, never changes its arguments. Off by default: a house style (title = kebab slug, file = `slug.md`, inside `memory/<folder>/`), not a general rule. |
+| 16 | `hubHint` / `MEMGLOW_PROXY_HUB_HINT` | off | For a memory that uses hub-and-spoke notes (a hub lists its parts under a `## Parts` heading, and/or a part declares itself with frontmatter `part_of`/`parent`): an `edit_note` append/prepend/insert-before/insert-after, or a `write_note` overwrite, that adds more than `hubHintTokens` (default 400) tokens of new content to a note that HAS parts gets one advisory line: `memglow: "<hub>" is a hub — add detail to one of its parts instead: [[part-a]] (topic), [[part-b]] (topic)…`, parts ranked by shared significant words with the added text, best match first. Same hub never hinted twice per session. Advisory only — never blocks the write. Off by default: useful only to a memory that actually follows this convention; see `docs/hub-and-spoke.md`. |
 | — | `indexWarning` / `MEMGLOW_PROXY_INDEX_WARNING` | off | The **index** note read while above `indexWarningTokens` (default 2,000): `⚠ memglow: the index note … is loaded at every session` — suggests trimming it. Once per session. |
 
 Levers 4, 5 and 8 change what the assistant receives: **measure answer quality before enabling
@@ -863,8 +865,11 @@ memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000 --read-write \
 
 **Safety flags**: `--read-only` / `--read-write` (writes are off unless `--read-write` or
 `MEMGLOW_MEMORY_READ_WRITE=1` is given; `--read-only` always wins over either), `--token` /
-`MEMGLOW_MEMORY_TOKEN` (requires `Authorization: Bearer …` on every request but `GET /healthz`),
-`--allow-origin` (a browser-style `Origin` header is refused unless listed — MCP/CLI clients send
+`MEMGLOW_MEMORY_TOKEN` (requires `Authorization: Bearer …` on every request but `GET /healthz` —
+in Docker, prefer `--env-file` over an inline `-e MEMGLOW_MEMORY_TOKEN=…`, the same way
+`docker-compose.example.yml` keeps `MEMGLOW_TOKEN` in `.env` rather than the compose file itself,
+so the token never lands in shell history or `docker inspect`; see the one-container example
+below), `--allow-origin` (a browser-style `Origin` header is refused unless listed — MCP/CLI clients send
 none and are accepted either way), `--on-write CMD` (a debounced hook run after writes, e.g. a
 git snapshot), `--file-mode` (force the mode of files it writes, instead of keeping the existing
 one), `--fsync-mode sync|deferred|none` (see **Write durability** below; `--no-fsync` = `none`), `--kebab-filenames`
@@ -876,10 +881,11 @@ only resolves slugged file names; pair it with the `slugHint` lever to also nudg
 towards slug titles in a sub-folder).
 
 **Measured — on the author's memory** (not a controlled benchmark; see `bench/compat.js` and
-`bench/memory-server-speed.js` to measure your own): search median ≈22 ms vs ≈45 s for
-basic-memory on the same notes folder; relevance (MRR) 0.283 vs 0.130 over 31 real
-search→read pairs; reads byte-identical between the two servers. No claim beyond what was
-measured this way — your own notes, query mix and hardware will differ.
+`bench/memory-server-speed.js` to measure your own): search ≈20–75 ms vs ≈45 s for
+basic-memory on the same notes folder; writes ≈50 ms with `--fsync-mode deferred` vs 2–4 s for
+basic-memory; relevance (MRR) 0.28 vs 0.13 on 31 real search→read pairs; reads byte-identical
+between the two servers. No claim beyond what was measured this way — your own notes, query mix
+and hardware will differ.
 
 - **Search text output** (0.4.10.6, leaner): one `### title` block per hit with `- permalink:`,
   `- score:` and a `- match:` excerpt of at most 120 characters around the query (no match line
@@ -1038,7 +1044,15 @@ docker run -d --name memglow-memory --restart unless-stopped \
 
 Add `-e MEMGLOW_MEMORY_TOKEN=...` to require a bearer token, `-e MEMGLOW_PROXY_…=1` (or a
 `memglow.config.json` in `/data`) to turn levers on or off. The KB volume is read-write
-(`--read-write`); drop both for a read-only server.
+(`--read-write`); drop both for a read-only server. Prefer `--env-file` over inline `-e` for the
+tokens (`MEMGLOW_TOKEN`, `MEMGLOW_MEMORY_TOKEN`), so neither ends up in shell history or
+`docker inspect`:
+```bash
+printf 'MEMGLOW_TOKEN=%s\nMEMGLOW_MEMORY_TOKEN=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" \
+  > /volume1/docker/memglow-data/memory-server.env
+chmod 600 /volume1/docker/memglow-data/memory-server.env
+# then: docker run … --env-file /volume1/docker/memglow-data/memory-server.env … (drop the two -e TOKEN lines above)
+```
 
 **Migrating from the two containers** (`memglow-proxy` on 8765 → `memglow-memory` on 8766):
 
@@ -1116,7 +1130,7 @@ docker run -d --name memglow -p 127.0.0.1:4747:4747 \
   -v /path/to/notes:/memory:ro \
   -v memglow-data:/data \
   -e MEMGLOW_TOKEN=$(cat ~/.memglow/token) \
-  ghcr.io/r0zumnik/memglow:0.4.6
+  ghcr.io/r0zumnik/memglow:0.5.0
 ```
 
 `/data` keeps the Memory cost counts (note ids and numbers only) and the saved view (settings,
@@ -1125,7 +1139,7 @@ layout, camera) across restarts.
 Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
 then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
 
-Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.4.6`.
+Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.5.0`.
 
 The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
 container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.
