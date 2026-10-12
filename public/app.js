@@ -811,6 +811,11 @@ function appDateTime(ms, lang) {
    Backward compatible: `machine` and `channel` are optional — an activity sent before v0.4 (or by
    a sender that does not know about them) has neither, and the line reads exactly as it used to:
    ACTION · GROUP · NOTE · TOOL. o: { type, theme, label, more, source, machine, channel }.
+   `source` "mcp" is the generic placeholder every mcp-proxy/memory-server report falls back to
+   when the specific MCP tool is not known to the caller — right after a channel that already says
+   "MCP proxy" / "memory server" it would just repeat the same word ("MCP proxy · MCP"), so it is
+   hidden in that one case (REDUNDANT_GENERIC_SOURCE below). Any other source — a real agent/CLI
+   name, or, once a sender passes it, the specific tool, e.g. "search_notes" — is shown as before.
    T defaults to the page language (defaultT); tests pass the 2-argument form and get English.
    Pure otherwise. */
 var JOURNAL_ACTION_KEYS = {
@@ -830,6 +835,11 @@ var CHANNEL_LABELS = {
   hook: "hook", "mcp-proxy": "MCP proxy", "memory-server": "memory server", file: "file", api: "API", demo: "demo"
 };
 var CHANNEL_TRANSLATED_KEYS = { file: "journal.channelFile", demo: "journal.channelDemo" };
+// A channel whose own label already says "this came through MCP": its generic "mcp" source
+// would just repeat it ("MCP proxy · MCP", "memory server · MCP") and is dropped — see the
+// function comment above. Any other source under the same channel (a real agent/CLI name, or a
+// specific tool) is unaffected.
+var REDUNDANT_GENERIC_SOURCE = { "mcp-proxy": "mcp", "memory-server": "mcp" };
 function formatJournalLine(o, names, T) {
   T = T || defaultT;
   o = o || {};
@@ -841,6 +851,7 @@ function formatJournalLine(o, names, T) {
   var src = typeof o.source === "string" ? o.source : "";
   var mach = typeof o.machine === "string" ? o.machine : "";
   var chan = typeof o.channel === "string" ? o.channel : "";
+  var srcRedundant = REDUNDANT_GENERIC_SOURCE[chan] === src;
   var p = {
     action: Object.prototype.hasOwnProperty.call(JOURNAL_ACTION_KEYS, o.type) ? T(JOURNAL_ACTION_KEYS[o.type]) : T("journal.actionGeneric"),
     theme: theme,
@@ -849,7 +860,7 @@ function formatJournalLine(o, names, T) {
     machine: mach,
     channel: Object.prototype.hasOwnProperty.call(CHANNEL_TRANSLATED_KEYS, chan) ? T(CHANNEL_TRANSLATED_KEYS[chan])
       : Object.prototype.hasOwnProperty.call(CHANNEL_LABELS, chan) ? CHANNEL_LABELS[chan] : chan,
-    source: Object.prototype.hasOwnProperty.call(SOURCE_LABELS, src) ? SOURCE_LABELS[src]
+    source: srcRedundant ? "" : Object.prototype.hasOwnProperty.call(SOURCE_LABELS, src) ? SOURCE_LABELS[src]
       : Object.prototype.hasOwnProperty.call(SOURCE_TRANSLATED_KEYS, src) ? T(SOURCE_TRANSLATED_KEYS[src]) : src
   };
   p.text = [p.action, p.group, p.note, p.machine, p.channel, p.source].filter(function(x) { return x; }).join(" · ");

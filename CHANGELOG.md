@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.11.2 — internal (not published)
+
+A pass over the r0zumnik "Memory" lab tab's recent UI work (Forces sliders, compact phone layout,
+journal machine/channel, Light background, no-silent-fetch-errors) checked against memglow's own
+viewer: all five were already ported into v0.4.0 and unchanged since — `lib/view.js` SETTINGS
+bounds (0.3–3 / 0.2–3 / 0.3–3 / 0–3, no link curvature), `public/app.css`/`app.js` compact layout
+(`setupSheet`/`setupLegendFold`/`setupSearchFold`), `formatJournalLine`, `FONDS.clair` and
+`mgErrorBanner`, all already tested and documented (see `## 0.4.0` above). No regressions found.
+
+### Fixed
+
+- **Journal: no more "MCP proxy · MCP".** `source: "mcp"` is the generic placeholder every
+  mcp-proxy/memory-server report falls back to when the specific MCP tool is not known to the
+  caller; shown right after a channel label that already says "MCP proxy" or "memory server" it
+  only repeated the same word (`"NAS · MCP proxy · MCP"`). `formatJournalLine` (`public/app.js`)
+  now drops it in that one case only (`REDUNDANT_GENERIC_SOURCE`) — a real agent/CLI name, or, once
+  a sender passes it, the specific tool (e.g. `"search_notes"`), is still shown exactly as before.
+  New test in `test/view.test.js`.
+
 ## 0.4.10.9 — internal (not published)
 
 "Every call counted, under the right name." In production (all-in-one server, 2026-10-12) the
