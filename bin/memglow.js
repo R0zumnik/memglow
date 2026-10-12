@@ -228,4 +228,5 @@ async function run(argv = process.argv.slice(2)) {
 
 if (require.main === module) run().then((code) => { if (code != null) process.exitCode = code; });
 
-module.exports = { run, parse, cmdInit, askChoices };
+// 0.4.12.3: askChoices is only ever called from inside this file — de-exported, not deleted.
+module.exports = { run, parse, cmdInit };
