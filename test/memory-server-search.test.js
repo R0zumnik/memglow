@@ -64,7 +64,14 @@ test("phrases, NOT / -word, AND, prefix", () => {
     const notRugby = s.ids({ query: "garden -rugby" });
     assert.ok(notRugby.length && !notRugby.includes("main/memory/projects/rugby-club"));
     assert.deepStrictEqual(s.ids({ query: "garden NOT rugby" }), notRugby);
-    assert.deepStrictEqual(s.ids({ query: "garden AND stade" }), ["main/memory/projects/rugby-club"]);
+    // 0.4.11.1: the true AND match (the only note with BOTH words) still ranks first, exactly as
+    // before — but an AND query that comes up short of a full page now gets the OR fallback
+    // filling out the rest of the page (new notes only, hard-discounted) instead of stopping at
+    // the one strict hit. See lib/store/search.js's own "OR fallback" comment and CHANGELOG
+    // 0.4.11.1 for why (never for a quoted phrase, which keeps its old, exact behaviour below).
+    const andGardenStade = s.ids({ query: "garden AND stade" });
+    assert.strictEqual(andGardenStade[0], "main/memory/projects/rugby-club", "the true AND match still ranks first");
+    assert.ok(andGardenStade.length > 1, "OR fallback fills the rest of the page with garden/stade individually");
     assert.ok(s.ids({ query: "garden OR zebra" }).includes("main/memory/notes/bad-yaml"));
     assert.ok(s.ids({ query: "courg" }).includes("main/memory/projects/garden-project"), "implicit prefix (3+ chars)");
     assert.ok(s.ids({ query: "court*" }).length === 0);

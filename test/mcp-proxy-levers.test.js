@@ -1721,6 +1721,197 @@ test("duplicateHint (opt-in): the same note is never hinted twice in one session
 });
 
 // ---------------------------------------------------------------------------------------------
+// Lever 16 (hubHint, 0.4.11.1) — its own small fixture: a hub with an explicit "## Parts" list
+// (two parts, distinct topics so ranking-by-overlap is actually testable), a SECOND hub with no
+// such list at all (its two parts only declare `part_of` in frontmatter — the fallback path), and
+// a stand-alone note with no parts whatsoever (never hinted, however large the edit).
+function makeHubNotes() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-hub-"));
+  const notes = path.join(root, "notes");
+  const w = (rel, s) => { fs.mkdirSync(path.dirname(path.join(notes, rel)), { recursive: true }); fs.writeFileSync(path.join(notes, rel), s); };
+  w("project-hub.md", [
+    "---", "title: Project hub", "description: Summary and index to the project's parts", "theme: projects", "---", "",
+    "Summary note — the detail lives in the parts listed below.", "",
+    "## Parts",
+    "- [[part-alpha]] — climate control settings and thermostat schedules",
+    "- [[part-beta]] — network setup and router configuration",
+    "",
+  ].join("\n"));
+  w("part-alpha.md", [
+    "---", "title: Part alpha", "description: Climate control settings", "theme: projects", "part_of: project-hub", "---", "",
+    "Up: [[project-hub]]", "", "Climate details here.",
+  ].join("\n"));
+  w("part-beta.md", [
+    "---", "title: Part beta", "description: Network setup", "theme: projects", "part_of: project-hub", "---", "",
+    "Up: [[project-hub]]", "", "Network details here.",
+  ].join("\n"));
+  // Second hub: NO "## Parts" heading at all — only its parts' own frontmatter says so.
+  w("project-hub2.md", [
+    "---", "title: Project hub two", "description: Another project, no parts list written yet", "theme: projects", "---", "",
+    "Summary note, parts not listed here yet.",
+  ].join("\n"));
+  w("part-gamma.md", [
+    "---", "title: Part gamma", "description: Gamma detail", "theme: projects", "part_of: project-hub2", "---", "",
+    "Up: [[project-hub2]]", "", "Gamma details here.",
+  ].join("\n"));
+  w("solo-note.md", "---\ntitle: Solo note\ndescription: Nothing to do with any hub\ntheme: projects\n---\nSolo body.\n");
+  w("MEMORY.md", "# Index\n[[project-hub]] [[project-hub2]] [[solo-note]]\n");
+  const home = path.join(root, "home");
+  const data = path.join(root, "data");
+  fs.mkdirSync(home);
+  return { root, notes, home, data, log: path.join(root, "args.log") };
+}
+// > hubHintTokens (400 by default, lowered to 50 below for a fixture-sized fixture): ~230 bytes.
+const BIG_ADD = (topic) => `More about ${topic}. `.repeat(20);
+
+test("parsePartsSection: pure — the hub's own '## Parts' bullet lines, any heading level, hook text after the dash; [] with no such section", () => {
+  const text = "# Title\n\nIntro.\n\n## Parts\n- [[part-a]] — topic a\n* [[part-b]] - topic b\n1. [[part-c]]: topic c\n\n## Other\nxyz\n";
+  assert.deepStrictEqual(L.parsePartsSection(text), [
+    { ref: "part-a", hook: "topic a" }, { ref: "part-b", hook: "topic b" }, { ref: "part-c", hook: "topic c" },
+  ]);
+  assert.deepStrictEqual(L.parsePartsSection("# Title\n\nNo parts heading here.\n"), []);
+  assert.deepStrictEqual(L.parsePartsSection(""), []);
+  assert.deepStrictEqual(L.parsePartsSection(null), []);
+});
+
+test("hubPartsFor: pure — the hub's own Parts list wins when non-empty; frontmatter part_of is the fallback for a hub with no list at all; [] for a note with neither", () => {
+  const notes = {
+    "project-hub": "---\ntitle: Project hub\n---\n## Parts\n- [[part-alpha]] — climate\n- [[part-beta]] — network\n",
+    "part-alpha": "---\npart_of: project-hub\n---\nx",
+    "part-beta": "---\npart_of: project-hub\n---\nx",
+    "project-hub2": "---\ntitle: Project hub two\n---\nNo list.\n",
+    "part-gamma": "---\npart_of: project-hub2\n---\nx",
+    "solo-note": "---\ntitle: Solo note\n---\nx",
+  };
+  const index = {
+    noteText(id) { return notes[id] || null; },
+    resolve(ref) { return notes[ref] ? ref : null; },
+    note(id) { return { id, label: id }; },
+    allNotes() { return Object.keys(notes).map((id) => ({ id })); },
+  };
+  assert.deepStrictEqual(L.hubPartsFor(index, "project-hub").map((p) => p.id).sort(), ["part-alpha", "part-beta"]);
+  assert.deepStrictEqual(L.hubPartsFor(index, "project-hub2").map((p) => p.id), ["part-gamma"], "no '## Parts' list at all: the frontmatter fallback still finds it");
+  assert.deepStrictEqual(L.hubPartsFor(index, "solo-note"), [], "no list, and no note declares part_of it: nothing");
+  assert.deepStrictEqual(L.hubPartsFor(index, "ghost"), [], "unknown hub: never throws");
+});
+
+test("hubHintFor: pure — ranks the parts by shared significant words with the added text (best match named first); null with no parts", () => {
+  const notes = {
+    "project-hub": "---\ntitle: Project hub\n---\n## Parts\n- [[part-alpha]] — climate control settings\n- [[part-beta]] — network setup\n",
+  };
+  const index = {
+    noteText(id) { return notes[id] || null; },
+    resolve(ref) { return ref === "project-hub" ? ref : null; },
+    note(id) { return id === "project-hub" ? { id, label: "Project hub" } : null; },
+    allNotes() { return []; },
+  };
+  const b = L.hubHintFor(index, "project-hub", "New thermostat climate control settings for winter.");
+  assert.ok(b, "parts exist: a block is returned");
+  assert.strictEqual(b.type, "text");
+  const line = b.text;
+  assert.match(line, /^memglow: "Project hub" is a hub — add detail to one of its parts instead: /);
+  assert.ok(line.indexOf("[[part-alpha]]") < line.indexOf("[[part-beta]]"), "climate-heavy text names the climate part first");
+  assert.strictEqual(L.hubHintFor(index, "solo", "anything"), null, "unknown / partless hub: no block");
+});
+
+test("hubHint (opt-in, over stdio): a large append to a hub with an explicit Parts list gets the advisory line, best-matching part named first", async () => {
+  const fx = makeHubNotes();
+  const c = start(fx, { MEMGLOW_PROXY_HUB_HINT: "1", MEMGLOW_PROXY_HUB_HINT_TOKENS: "50" });
+  try {
+    const r = texts(await c.call("edit_note", { identifier: "project-hub", operation: "append", content: BIG_ADD("climate control settings") }));
+    assert.strictEqual(r.length, 2);
+    assert.match(r[0], /^# Edited note/, "upstream's own confirmation, untouched");
+    assert.match(r[1], /^memglow: "Project hub" is a hub — add detail to one of its parts instead: /);
+    assert.ok(r[1].indexOf("part-alpha") < r[1].indexOf("part-beta"), "climate-heavy addition names part-alpha first");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("hubHint (opt-in): a hub with no '## Parts' list, only parts declaring part_of in frontmatter, is still caught", async () => {
+  const fx = makeHubNotes();
+  const c = start(fx, { MEMGLOW_PROXY_HUB_HINT: "1", MEMGLOW_PROXY_HUB_HINT_TOKENS: "50" });
+  try {
+    const r = texts(await c.call("edit_note", { identifier: "project-hub2", operation: "append", content: BIG_ADD("gamma") }));
+    assert.strictEqual(r.length, 2);
+    assert.match(r[1], /\[\[part-gamma\]\]/);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("hubHint (opt-in): write_note overwrite=true on a hub is caught; a plain write_note (new note) never is", async () => {
+  const fx = makeHubNotes();
+  const c = start(fx, { MEMGLOW_PROXY_HUB_HINT: "1", MEMGLOW_PROXY_HUB_HINT_TOKENS: "50" });
+  try {
+    const over = texts(await c.call("write_note", { title: "project-hub", content: BIG_ADD("network setup"), directory: "", overwrite: true }));
+    assert.strictEqual(over.length, 2, "overwrite=true: caught");
+    assert.match(over[1], /is a hub/);
+    const plain = texts(await c.call("write_note", { title: "brand-new-note", content: BIG_ADD("whatever"), directory: "" }));
+    assert.strictEqual(plain.length, 1, "no overwrite flag: never checked, however large");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("hubHint (opt-in): find_replace and replace_section are never checked, even when large and on a hub", async () => {
+  const fx = makeHubNotes();
+  const c = start(fx, { MEMGLOW_PROXY_HUB_HINT: "1", MEMGLOW_PROXY_HUB_HINT_TOKENS: "50" });
+  try {
+    const fr = texts(await c.call("edit_note", { identifier: "project-hub", operation: "find_replace", find_text: "Summary", content: BIG_ADD("climate") }));
+    assert.strictEqual(fr.length, 1, "find_replace: never hubHint, however large the replacement");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("hubHint (opt-in): below the token threshold, or a note with no parts at all, never hints", async () => {
+  const fx = makeHubNotes();
+  const c = start(fx, { MEMGLOW_PROXY_HUB_HINT: "1", MEMGLOW_PROXY_HUB_HINT_TOKENS: "50" });
+  try {
+    const small = texts(await c.call("edit_note", { identifier: "project-hub", operation: "append", content: "A short line." }));
+    assert.strictEqual(small.length, 1, "under the threshold: no hint");
+    const soloBig = texts(await c.call("edit_note", { identifier: "solo-note", operation: "append", content: BIG_ADD("anything") }));
+    assert.strictEqual(soloBig.length, 1, "a note with no parts, however large the addition: no hint");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("hubHint: off by default — a large append to a hub gets no hint at all", async () => {
+  const fx = makeHubNotes();
+  const c = start(fx, { MEMGLOW_PROXY_HUB_HINT_TOKENS: "50" });
+  try {
+    const r = texts(await c.call("edit_note", { identifier: "project-hub", operation: "append", content: BIG_ADD("climate control settings") }));
+    assert.strictEqual(r.length, 1);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("hubHint (opt-in): the same hub is never hinted twice in one session; a fresh session hints it again; arguments reach the server unchanged", async () => {
+  const fx = makeHubNotes();
+  const c = start(fx, { MEMGLOW_PROXY_HUB_HINT: "1", MEMGLOW_PROXY_HUB_HINT_TOKENS: "50" });
+  try {
+    const first = texts(await c.call("edit_note", { identifier: "project-hub", operation: "append", content: BIG_ADD("climate") }));
+    assert.strictEqual(first.length, 2, "first time: hinted");
+    const second = texts(await c.call("edit_note", { identifier: "project-hub", operation: "append", content: BIG_ADD("network") }));
+    assert.strictEqual(second.length, 1, "same hub, same session: not hinted again");
+
+    const logged = fs.readFileSync(fx.log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const edits = logged.filter((e) => e.name === "edit_note");
+    assert.strictEqual(edits.length, 2);
+    assert.deepStrictEqual(edits.map((e) => e.args.operation), ["append", "append"], "hubHint never changes the arguments sent upstream");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+  const fx2 = makeHubNotes();
+  const c2 = start(fx2, { MEMGLOW_PROXY_HUB_HINT: "1", MEMGLOW_PROXY_HUB_HINT_TOKENS: "50" });
+  try {
+    const r = texts(await c2.call("edit_note", { identifier: "project-hub", operation: "append", content: BIG_ADD("climate") }));
+    assert.strictEqual(r.length, 2, "a new session hints it again");
+  } finally { await c2.close(); fs.rmSync(fx2.root, { recursive: true, force: true }); }
+});
+
+test("hubHint: config default off, env/file override, anyLever()", () => {
+  const fx = makeHubNotes();
+  const def = L.proxyConfig({ MEMGLOW_HOME: fx.home });
+  assert.strictEqual(def.hubHint, false, "off by default — a house convention, not a general rule");
+  assert.strictEqual(def.hubHintTokens, 400);
+  const on = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_PROXY_HUB_HINT: "1", MEMGLOW_PROXY_HUB_HINT_TOKENS: "123" });
+  assert.strictEqual(on.hubHint, true);
+  assert.strictEqual(on.hubHintTokens, 123);
+  assert.strictEqual(L.anyLever({ hubHint: true }), true, "hubHint alone is enough to turn levers on");
+  fs.rmSync(fx.root, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------------------------
 // Control panel (0.4.7.2): proxyControl() — read-only lever sources for Settings → Control.
 
 test("proxyControl: default / file / env sources, envLocked, day1 flag, and the largeNoteTokens/indexWarningTokens caps", () => {
