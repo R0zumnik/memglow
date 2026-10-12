@@ -160,6 +160,31 @@ test("journal: machine and channel (v0.4), backward compatible when absent", () 
   );
 });
 
+test("journal: the generic 'mcp' source is dropped when the channel already says MCP", () => {
+  const names = { tech: "Tech" };
+  // mcp-proxy / memory-server report "mcp" when the specific tool is not known to the caller:
+  // repeating it after a channel label that already says "MCP proxy" / "memory server" would be
+  // "NAS · MCP proxy · MCP" — just the machine and channel are shown instead.
+  assert.strictEqual(
+    page.formatJournalLine({ type: "search", theme: "tech", label: "note-slug", source: "mcp", channel: "mcp-proxy", machine: "NAS" }, names).text,
+    "Search · Tech · note-slug · NAS · MCP proxy", "no redundant trailing MCP"
+  );
+  assert.strictEqual(
+    page.formatJournalLine({ type: "write", theme: "tech", label: "note-slug", source: "mcp", channel: "memory-server", machine: "Mac" }, names).text,
+    "Write · Tech · note-slug · Mac · memory server"
+  );
+  // A specific tool name under the same channels is NOT redundant and is shown as sent.
+  assert.strictEqual(
+    page.formatJournalLine({ type: "search", theme: "tech", label: "note-slug", source: "search_notes", channel: "mcp-proxy", machine: "NAS" }, names).text,
+    "Search · Tech · note-slug · NAS · MCP proxy · search_notes", "a real tool name is kept"
+  );
+  // "mcp" under a channel that does NOT already say MCP (hook, file, api, unknown) is unaffected.
+  assert.strictEqual(
+    page.formatJournalLine({ type: "read", theme: "tech", label: "note-slug", source: "mcp", channel: "hook", machine: "NAS" }, names).text,
+    "Read · Tech · note-slug · NAS · hook · MCP"
+  );
+});
+
 // ---- write de-duplication ----
 
 test("dedup: a write seen twice is counted once, in both orders; a file-only write counts", () => {
