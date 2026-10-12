@@ -493,6 +493,7 @@
   "control.lever.indexHint": "A search whose only hit is the index gets a short excerpt of the index's own matching lines.",
   "control.lever.deltaRead": "A note re-read after it changed gets only the diff, or a short header noting what changed since a past session.",
   "control.lever.duplicateHint": "Writing a new note whose title already matches or resembles an existing one gets a short duplicate warning.",
+  "control.lever.slugHint": "Writing a note whose title is not a kebab slug, or directly in the notes root, gets a short hint suggesting the slug and a sub-folder.",
   "control.restartNotice": "Restart the MCP proxy to apply a lever change: it reads its settings once, at start.",
   "control.maintEveryHoursLabel": "Scan every (hours, 0 = only at start)",
   "control.archiveAfterDaysLabel": "Archive after not read for (days)",

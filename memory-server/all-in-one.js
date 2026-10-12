@@ -125,6 +125,9 @@ function createAllInOne({ rpc, root, env = process.env, name = "memglow-memory",
 
   function handleAny(payload, ctx = {}) {
     const sk = ctx.sessionKey; // undefined → "default" in both layers (stdio: one session per process)
+    // 0.4.10.9: the HTTP User-Agent (memory-server/http.js), the last-resort client identity for
+    // the per-client accounting when neither the session nor the request names its client.
+    const hints = { userAgent: typeof ctx.userAgent === "string" ? ctx.userAgent : null };
     const w = createWatcher({ server: name, source, onReport: report });
 
     // Lever 9 (multiQuery) — never for a batch, exactly as the HTTP proxy.
@@ -134,7 +137,7 @@ function createAllInOne({ rpc, root, env = process.env, name = "memglow-memory",
       if (applies) {
         try { w.fromClient(payload); } catch { /* keep going */ }
         let run;
-        try { run = Promise.resolve(lv.multiQuery.run(payload, (args) => subCall(subCallParams(payload.params, args), ctx), sk)); }
+        try { run = Promise.resolve(lv.multiQuery.run(payload, (args) => subCall(subCallParams(payload.params, args), ctx), sk, hints)); }
         catch (e) { run = Promise.reject(e); }
         return run.then((r) => {
           try { w.fromServer(r.message); } catch { /* ignore */ }
@@ -149,7 +152,7 @@ function createAllInOne({ rpc, root, env = process.env, name = "memglow-memory",
     } catch { /* keep going */ }
     try {
       if (rules) { const r = rules.clientMessage(msg, sk); if (r.changed) msg = r.msg; }
-      if (lv) { const r = lv.clientMessage(msg, sk); if (r.changed) msg = r.msg; }
+      if (lv) { const r = lv.clientMessage(msg, sk, hints); if (r.changed) msg = r.msg; }
     } catch { msg = payload; }
 
     const after = (out) => {
@@ -167,6 +170,12 @@ function createAllInOne({ rpc, root, env = process.env, name = "memglow-memory",
     return isThenable(out) ? out.then(after) : after(out);
   }
 
+  /** Writes the savings counters now (SIGTERM: before waiting for pending writes). */
+  function flush() {
+    if (!lv) return;
+    try { lv.savings.flush(); } catch { /* best effort */ }
+  }
+
   let closed = false;
   function close() {
     if (closed || !lv) return;
@@ -178,7 +187,7 @@ function createAllInOne({ rpc, root, env = process.env, name = "memglow-memory",
 
   return {
     rpc: { handle: (m, ctx) => handleAny(m, ctx), handleAny, serverInfo: rpc.serverInfo },
-    lv, rules, close,
+    lv, rules, close, flush,
   };
 }
 

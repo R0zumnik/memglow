@@ -212,6 +212,8 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
         headerVersion: req.headers["mcp-protocol-version"] ? String(req.headers["mcp-protocol-version"]) : null,
         sessionVersion: sess ? sess.version : null,
         sessionKey: sessionKeyFor(req, sid, payload, propose),
+        // 0.4.10.9: the all-in-one layer's last-resort client identity (accounting only).
+        userAgent: req.headers["user-agent"] ? String(req.headers["user-agent"]).slice(0, 200) : null,
         onInitialize: (version) => {
           if (version >= "2026-") return; // per-request mode: no session
           newSession = propose();

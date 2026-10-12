@@ -492,6 +492,7 @@
   "control.lever.indexHint": "Une recherche dont le seul résultat est l'index reçoit un court extrait des lignes correspondantes de l'index.",
   "control.lever.deltaRead": "Une note relue après avoir changé ne reçoit que la différence, ou un court en-tête signalant ce qui a changé depuis une session passée.",
   "control.lever.duplicateHint": "Écrire une nouvelle note dont le titre correspond déjà ou ressemble à une note existante déclenche un court avertissement de doublon.",
+  "control.lever.slugHint": "Écrire une note dont le titre n’est pas un slug kebab, ou directement à la racine des notes, déclenche une courte suggestion de slug et de sous-dossier.",
   "control.restartNotice": "Redémarrez le proxy MCP pour appliquer un changement de levier : il lit ses réglages une seule fois, au démarrage.",
   "control.maintEveryHoursLabel": "Analyser toutes les (heures, 0 = seulement au démarrage)",
   "control.archiveAfterDaysLabel": "Archiver après (jours) sans lecture",

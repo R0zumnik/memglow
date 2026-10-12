@@ -768,6 +768,7 @@ real usage log (stage 0.4.2.2b — [bench/README.md](bench/README.md)).
 | 12 | `indexHint` / `MEMGLOW_PROXY_INDEX_HINT` | off | A search whose own results are ONLY the index note, or a read of the index itself while `alreadyLoaded` is off, gets a short suffix: `memglow: the index already says:` followed by up to 3 lines of the index's own text (secret-masked) that mention one of the query's significant words. Off by default: it only ever adds a line, same bucket as `searchDetails`/`suggestions`/`archiveHint`. |
 | 13 | `deltaRead` / `MEMGLOW_PROXY_DELTA_READ` | off | The hottest notes get re-read in every new session — `dedupe` cannot help there (a new session's context is empty). Two mechanisms: cross-session, the first read of a note in a session is always full, plus one header when it changed since this SAME client's own last read, in an earlier session (`memglow: changed since your last read on <date> — sections changed: …`), remembered in a small per-client ledger (`delta-read.json`); within-session, a note re-read after it changed THIS session gets ONLY the diff since its first read, falling back to the full text past a 60% size ratio. Off for now: a clean sweep on hand-built replay files, but not yet checked against a real usage log the way `multiQuery`/`aliases` were — see 0.4.3 in `bench/README.md`/`mcp-proxy/README.md`. |
 | 14 | `duplicateHint` / `MEMGLOW_PROXY_DUPLICATE_HINT` | off | After a `write_note` (never `edit_note`/`move_note`) whose title already names an existing note: `memglow: a note with this title already exists: [[<id>]] — this write_note may replace or duplicate it; prefer edit_note.` A title close to (but not matching) an existing note's id/label/description gets up to 2 candidates instead, with the same "prefer edit_note" suggestion. Checked before the write reaches the server, so the note being created is never mistaken for its own duplicate; same note never hinted twice per session. Advisory only — never blocks the write, never changes its arguments. Off by default: a pure, unconditional add, same bucket as `searchDetails`/`suggestions`/`archiveHint`/`indexHint` — see 0.4.4.1 below. |
+| 15 | `slugHint` / `MEMGLOW_PROXY_SLUG_HINT` | off | After a successful `write_note` (never `edit_note`/`move_note`) whose title is not a kebab slug (lower-case ASCII words joined by `-`), or that lands directly in the notes root (`directory` empty, `/` or `memory`): `memglow: title "Chantier eau cave Choisy – état au 2026-10-11 soir" is not a kebab slug — prefer "chantier-eau-cave-choisy-etat-au-2026-10-11-soir" in a memory/<folder>/ directory (title = kebab slug, file = slug.md).` The suggested slug is the file name `--kebab-filenames` gives (accents transliterated). Advisory only — never blocks the write, never changes its arguments. Off by default: a house style (title = kebab slug, file = `slug.md`, inside `memory/<folder>/`), not a general rule. |
 | — | `indexWarning` / `MEMGLOW_PROXY_INDEX_WARNING` | off | The **index** note read while above `indexWarningTokens` (default 2,000): `⚠ memglow: the index note … is loaded at every session` — suggests trimming it. Once per session. |
 
 Levers 4, 5 and 8 change what the assistant receives: **measure answer quality before enabling
@@ -867,8 +868,12 @@ memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000 --read-write \
 none and are accepted either way), `--on-write CMD` (a debounced hook run after writes, e.g. a
 git snapshot), `--file-mode` (force the mode of files it writes, instead of keeping the existing
 one), `--fsync-mode sync|deferred|none` (see **Write durability** below; `--no-fsync` = `none`), `--kebab-filenames`
-(write new notes as `kebab-case.md` instead of basic-memory's as-is title — useful since
-memglow's own note index only resolves slugged file names).
+/ `MEMGLOW_MEMORY_KEBAB_FILENAMES=1` (write new notes as `kebab-case.md` instead of
+basic-memory's as-is title, accents transliterated: a title `Chantier eau cave Choisy – état au
+2026-10-11 soir` gives `chantier-eau-cave-choisy-etat-au-2026-10-11-soir.md`, while the
+frontmatter `title:` keeps the title exactly as given — useful since memglow's own note index
+only resolves slugged file names; pair it with the `slugHint` lever to also nudge the assistant
+towards slug titles in a sub-folder).
 
 **Measured — on the author's memory** (not a controlled benchmark; see `bench/compat.js` and
 `bench/memory-server-speed.js` to measure your own): search median ≈22 ms vs ≈45 s for
@@ -958,7 +963,9 @@ measured this way — your own notes, query mix and hardware will differ.
     (typically within 30 s).
   The settings panel shows the active mode as a read-only badge under "Memory server" (when
   that server's full status is visible to it); it cannot be changed from the page.
-- **File names**: the title as is, like basic-memory (`--kebab-filenames` for kebab-case). memglow's
+- **File names**: the title as is, like basic-memory (`--kebab-filenames` or
+  `MEMGLOW_MEMORY_KEBAB_FILENAMES=1` for kebab-case, accents transliterated; the frontmatter title
+  is kept as given). memglow's
   own note index (viewer, proxy levers) only knows notes whose file name is a slug, so with
   free-form titles prefer `--kebab-filenames`.
 - **Run it as the notes folder's owner** (1045:100 on the NAS) **or as root**: a write replaces the

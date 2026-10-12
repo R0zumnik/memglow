@@ -51,7 +51,9 @@ options:
   --no-structured-read  read_note's text answer carries the note once (in content), without the
                   FastMCP structuredContent copy of the same text (fewer tokens with clients that
                   pass both on). Env MEMGLOW_MEMORY_STRUCTURED_READ=0
-  --kebab-filenames  file names of new notes in kebab-case (default: the title as is)
+  --kebab-filenames  file names of new notes in kebab-case, accents transliterated ("Été à
+                  Choisy" → ete-a-choisy.md); the title in the frontmatter stays as given
+                  (default: the title as is). Env MEMGLOW_MEMORY_KEBAB_FILENAMES=1
   --update-permalinks-on-move  a moved note's permalink follows its new path (default: kept)
   --fsync-mode sync|deferred|none  durability of writes (default: sync). sync: fsync the file
                   and its folder before answering. deferred: answer right after the atomic rename,
@@ -87,7 +89,7 @@ options:
 function parseArgs(argv, env = process.env) {
   const o = { root: env.MEMGLOW_MEMORY_ROOT || "", project: env.MEMGLOW_MEMORY_PROJECT || "main", listen: "", stdio: false, readOnly: true, pollMs: 3000, watch: true, quiet: false,
     readWrite: /^(1|true|yes|on)$/i.test(String(env.MEMGLOW_MEMORY_READ_WRITE || "")), forceReadOnly: false, fileMode: null, onWrite: env.MEMGLOW_MEMORY_ON_WRITE || "", onWriteDelayMs: 10000,
-    overwriteDefault: false, kebabFilenames: false, updatePermalinksOnMove: false, fsync: true,
+    overwriteDefault: false, kebabFilenames: /^(1|true|yes|on)$/i.test(String(env.MEMGLOW_MEMORY_KEBAB_FILENAMES || "")), updatePermalinksOnMove: false, fsync: true,
     allowOrigins: String(env.MEMGLOW_MEMORY_ALLOW_ORIGIN || "").split(",").map((x) => x.trim()).filter(Boolean), token: env.MEMGLOW_MEMORY_TOKEN || "",
     levers: /^(1|true|yes|on)$/i.test(String(env.MEMGLOW_MEMORY_LEVERS || "")), name: "", source: "mcp",
     serveFiles: String(env.MEMGLOW_MEMORY_SERVE_FILES || "").toLowerCase() === "any" ? "any" : "text",
@@ -316,6 +318,9 @@ function main(argv = process.argv.slice(2), env = process.env) {
     const stop = () => {
       if (stopping) return;
       stopping = true;
+      // 0.4.10.9: the per-client / per-lever savings are written at once, before the wait below
+      // (a container stop may not leave the whole --shutdown-timeout).
+      if (srv.aio) srv.aio.flush();
       server.close();
       const idle = srv.writer ? srv.writer.idle() : Promise.resolve();
       const cap = new Promise((ok) => { const t = setTimeout(ok, o.shutdownTimeoutMs); if (t.unref) t.unref(); });
@@ -326,6 +331,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   }
   // SIGTERM / SIGINT in stdio mode too: pending writes and fsyncs first (0.4.10.6b).
   const stopStdio = () => {
+    if (srv.aio) srv.aio.flush(); // 0.4.10.9: savings first, see stop() above
     const idle = srv.writer ? srv.writer.idle() : Promise.resolve();
     const cap = new Promise((ok) => { const t = setTimeout(ok, o.shutdownTimeoutMs); if (t.unref) t.unref(); });
     Promise.race([idle, cap]).finally(() => { srv.close(); process.exit(0); });

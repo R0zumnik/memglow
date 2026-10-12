@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.4.10.9 — internal (not published)
+
+"Every call counted, under the right name." In production (all-in-one server, 2026-10-12) the
+per-client accounting in `<dataDir>/proxy-savings.json` had almost every call under `unknown`
+and only 4 calls for the whole day.
+
+### Fixed — per-client accounting (all-in-one and proxy)
+
+- **Root cause 1: only reads were counted.** `savings.addClient` was called from `handleRead`
+  alone, i.e. for the `readTools` (`read_note`, `view_note`, `read_content`, `fetch`,
+  `build_context`). Searches, writes, edits, multiQuery searches (answered out of band by
+  `multiQuery.run`, never through `serverMessage`) and every other tool were never counted. Now
+  every `tools/call` with an id is awaited by the levers and counted once in `oneFromServer`
+  (tokens of the answer as the server sent it, before any lever shortens it; errors and empty
+  answers count as a call), and `multiQuery.run` counts its merged answer once.
+- **Root cause 2: the client was only known from a legacy `initialize`.** An MCP 2026-07-28
+  client (Claude Code on the NAS and the Mac) sends no `initialize`, only a per-request `_meta`
+  envelope, so its session had no clientInfo → `unknown`. The identity is now, in order: the
+  session's `initialize` clientInfo; else this request's `_meta`
+  `io.modelcontextprotocol/clientInfo` (remembered for the rest of that session / connection);
+  else the HTTP `User-Agent`'s first product token, mapped to a known client id
+  (`claude-code/2.5.1 (…)` → `claude-code`); else `unknown`. Accounting only: lever 7 and lever
+  8's exemption still use the session's `initialize` clientInfo alone. Lever 13's per-client
+  ledger uses the same identity.
+- A churn of stateless new-connection requests (one lever session per TCP connection) could push
+  a legacy session — and its clientInfo — out of the 200-session LRU; the oldest per-connection
+  session is now evicted first.
+- `clientMessage(msg, key, hints)` and `multiQuery.run(…, key, hints)` take an optional
+  `{ userAgent }`; `memory-server/http.js` passes it in `ctx.userAgent`, the HTTP proxy from the
+  request headers. In proxy mode nothing else changes (it now buffers every `tools/call` answer
+  to count it, as it already did for reads / searches / writes).
+- Per-lever savings: checked to be recorded identically in all-in-one and proxy modes (new test).
+  They stay 0 when `dedupe` / `toc` / `alreadyLoaded` / `deltaRead` are off (their default), and
+  `dedupe`/`toc`/`alreadyLoaded` are per session: a 2026-07-28 client opening a new connection per
+  call has a fresh lever session every call.
+- Flushing: unchanged 2 s `unref`'d timer after the first count; on SIGTERM / SIGINT the server
+  now writes the savings at once, before waiting for pending writes (and again at exit). File
+  format unchanged (`version: 1`, same per-day fields; `clients` simply gets more buckets).
+
+### Added
+
+- `MEMGLOW_MEMORY_KEBAB_FILENAMES=1`, env equivalent of `--kebab-filenames` (checked: a title
+  `Chantier eau cave Choisy – état au 2026-10-11 soir` gives
+  `chantier-eau-cave-choisy-etat-au-2026-10-11-soir.md`, frontmatter `title:` kept as given).
+  Documented in the README memory-server section and `--help`.
+- Lever 15 `slugHint` (`MEMGLOW_PROXY_SLUG_HINT`, `"proxy": { "slugHint": true }`, off by
+  default): after a successful `write_note` whose title is not a kebab slug, or whose directory is
+  the notes root, one advisory line, e.g. `memglow: title "Chantier eau cave Choisy – état au
+  2026-10-11 soir" is not a kebab slug — prefer "chantier-eau-cave-choisy-etat-au-2026-10-11-soir"
+  in a memory/<folder>/ directory (title = kebab slug, file = slug.md).` Never blocks. In the
+  control panel (8 languages), README and `mcp-proxy/README.md`.
+- New test `test/accounting-0410-9.test.js` (the four real traffic shapes in all-in-one and
+  proxy modes, per-lever parity, LRU churn, SIGTERM flush of the real server, kebab file names,
+  slugHint). The accounting tests fail on 0.4.10.8 (the SIGTERM test too, through its counts:
+  the shutdown flush itself already worked).
+
 ## 0.4.10.8 — internal (not published)
 
 "A merged search answer is still a complete MCP answer." A search with `memglow_queries` lost

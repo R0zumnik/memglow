@@ -492,6 +492,7 @@
   "control.lever.indexHint": "Una búsqueda cuyo único resultado es el índice recibe un breve extracto de las líneas coincidentes del propio índice.",
   "control.lever.deltaRead": "Una nota releída tras cambiar recibe solo la diferencia, o un breve encabezado indicando qué cambió desde una sesión pasada.",
   "control.lever.duplicateHint": "Escribir una nota nueva cuyo título ya coincide o se parece a una existente genera un breve aviso de duplicado.",
+  "control.lever.slugHint": "Escribir una nota cuyo título no es un slug kebab, o directamente en la raíz de las notas, genera una breve sugerencia de slug y subcarpeta.",
   "control.restartNotice": "Reinicia el proxy MCP para aplicar un cambio de interruptor: lee su configuración una sola vez, al iniciar.",
   "control.maintEveryHoursLabel": "Analizar cada (horas, 0 = solo al iniciar)",
   "control.archiveAfterDaysLabel": "Archivar tras (días) sin lectura",

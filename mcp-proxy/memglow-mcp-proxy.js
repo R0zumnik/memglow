@@ -457,6 +457,8 @@ function createHttpProxy(o) {
     // answers an `initialize` with a new Mcp-Session-Id, that session's state moves under it.
     const reqSid = req.headers["mcp-session-id"] ? String(req.headers["mcp-session-id"]) : "";
     let sk = reqSid ? "sid:" + reqSid : connKey(req.socket);
+    // 0.4.10.9: the User-Agent, the levers' last-resort client identity for per-client accounting.
+    const hints = { userAgent: req.headers["user-agent"] ? String(req.headers["user-agent"]).slice(0, 200) : null };
     const adoptSession = (h) => {
       const sid = h && h["mcp-session-id"] ? String(h["mcp-session-id"]) : "";
       if (!sid || reqSid) return;
@@ -502,7 +504,7 @@ function createHttpProxy(o) {
       if (parsed !== undefined && !Array.isArray(parsed) && lv && lv.multiQuery.applies(parsed)) {
         try { w.fromClient(parsed); } catch { /* keep relaying */ }
         const sendUpstream = (args) => postJsonRpc(lib, target, baseHeaders, "memglow-mq:" + process.pid + ":" + (++mqN), subCallParams(parsed.params, args));
-        lv.multiQuery.run(parsed, sendUpstream, sk).then((r) => {
+        lv.multiQuery.run(parsed, sendUpstream, sk, hints).then((r) => {
           try { w.fromServer(r.message); } catch { /* ignore: the call is still answered below */ }
           const out = Buffer.from(JSON.stringify(r.message), "utf8");
           res.writeHead(200, { "content-type": "application/json", "content-length": String(out.length) });
@@ -520,7 +522,7 @@ function createHttpProxy(o) {
         try { w.fromClient(parsed); } catch { /* keep relaying */ }
         let msg = parsed, changed = false;
         if (rules) { const r = rules.clientMessage(msg, sk); if (r.changed) { msg = r.msg; changed = true; } }
-        if (lv) { const r = lv.clientMessage(msg, sk); if (r.changed) { msg = r.msg; changed = true; } }
+        if (lv) { const r = lv.clientMessage(msg, sk, hints); if (r.changed) { msg = r.msg; changed = true; } }
         if (changed) body = Buffer.from(JSON.stringify(msg), "utf8");
         const ids = (Array.isArray(parsed) ? parsed : [parsed]).map((m) => m && m.id);
         wanted = (!!lv && lv.wants(ids, sk)) || (!!rules && rules.wants(ids, sk));
