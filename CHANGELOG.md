@@ -65,6 +65,7 @@ Everything published since 0.4.6, for users. The internal stages below (0.4.7.1 
   public entry point — same `module.exports`, verified byte-for-byte.
 
 ### Fixes
+- hubHint (lever 16) never treats the index note or an archived note as a hub, never recommends an archived part, and only parses notes that carry a `part_of`/`parent` marker (cold-review fix).
 
 - **UI fixes** (0.4.11.2 below): the activity journal no longer shows the redundant
   "MCP proxy · MCP" when the specific tool name is not known.
