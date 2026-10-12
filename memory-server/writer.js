@@ -418,6 +418,12 @@ function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, 
    * Removes temp files a crash left behind (".mg-<8 hex>.tmp", and the older
    * ".<name>.memglow-tmp-<pid>-<hex>"), inside the root only, older than `minAgeMs`. Returns the
    * project-relative paths removed.
+   *
+   * 0.4.12.2: its walk() already shares SKIP_DIRS with lib/store/store.js, but is not unified
+   * with store.js's own walk()/walkAsync() beyond that: this one visits EVERY file looking for a
+   * crash-temp name (not just `.md`), is depth-bounded rather than count-bounded, is synchronous
+   * on purpose (a one-off pass at startup/after a write, not the hot read path) and has no
+   * symlink policy at all — different enough a shared helper would blur, not simplify, either one.
    */
   function cleanupTemps(minAgeMs = 60000) {
     const removed = [];
