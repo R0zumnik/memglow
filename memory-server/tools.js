@@ -35,7 +35,26 @@ const OWN_END = /[A-Za-z0-9_]$/;
 /** One text block's references, as the levers' own parsers see them. */
 const refsOf = (text) => ({ perm: searchMeta.permalinksIn(text), ids: idsInText(text) });
 
-const SERVER_VERSION = "0.4.5.2";
+let SERVER_VERSION = "0.0.0";
+try {
+  SERVER_VERSION = require("../package.json").version;
+  // If CHANGELOG has a different internal version, append it as build label
+  try {
+    const changelogPath = path.resolve(__dirname, "../CHANGELOG.md");
+    const changelog = fs.readFileSync(changelogPath, "utf8");
+    const match = changelog.match(/^## ([\d.]+)/m);
+    if (match) {
+      const internalVersion = match[1];
+      if (internalVersion !== SERVER_VERSION) {
+        SERVER_VERSION = `${SERVER_VERSION} (build ${internalVersion})`;
+      }
+    }
+  } catch {
+    // CHANGELOG.md not found or not readable, use package.json version only
+  }
+} catch {
+  // keep default
+}
 const MAX_QUERY_CHARS = 2000;
 const MAX_QUERY_TERMS = 64;
 const READ_ONLY_MESSAGE = "memglow memory server: read-only (phase A / shadow mode)";
