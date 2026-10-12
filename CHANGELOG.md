@@ -18,6 +18,100 @@ bounds (0.3–3 / 0.2–3 / 0.3–3 / 0–3, no link curvature), `public/app.css
   now drops it in that one case only (`REDUNDANT_GENERIC_SOURCE`) — a real agent/CLI name, or, once
   a sender passes it, the specific tool (e.g. `"search_notes"`), is still shown exactly as before.
   New test in `test/view.test.js`.
+## 0.4.11.1 — internal (not published)
+
+Two independent pieces of work on `wB-search` (branch), both scoped to `lib/proxy-levers.js`,
+`lib/store/search.js` and their helpers/tests only — no `public/`, no `memory-server/` version
+code (other worktrees own those).
+
+### Added — lever 16 `hubHint` (hub-append hint)
+
+- The owner's memory uses hub-and-spoke notes (lib/hub-spoke.js's own convention): a hub lists
+  its parts under a "## Parts" heading (`- [[slug]] — hook` lines) and/or a part declares
+  `part_of:`/`parent:` in its own frontmatter, starting its body `Up: [[hub]]`. Sessions kept
+  appending large content straight to the HUB instead of the right part, so hubs grew back after
+  being split (one real hub went 1.1k → 9.4k tokens in 4 days).
+- New lever 16, `hubHint` (default OFF, `MEMGLOW_PROXY_HUB_HINT` / `"proxy": { "hubHint": true }`;
+  threshold `hubHintTokens`, default 400, `MEMGLOW_PROXY_HUB_HINT_TOKENS` / `proxy.hubHintTokens`):
+  an `edit_note` with `operation` append / prepend / insert_before_section / insert_after_section
+  (never find_replace or replace_section — they target a specific, already-chosen spot, not
+  "whatever's at the end"), or a `write_note` with `overwrite: true`, that adds more than the
+  threshold's worth of new content (estimated from the call's own `content` argument) to a note
+  that HAS parts, gets one advisory line appended: `memglow: "<hub>" is a hub — add detail to one
+  of its parts instead: [[part-a]] (topic), [[part-b]] (topic)…`. The part whose own topic (its
+  hub-list hook, else its label/description) shares the most significant words with the added
+  text is named first. Parts are found either way, whichever the hub actually has (the "## Parts"
+  list wins outright when non-empty; falling back to any OTHER note declaring `part_of`/`parent`
+  this hub only when there is no list at all) — `lib/hub-spoke.js`'s own `declaredHubOf()` is
+  reused for the marker, never re-implemented. Same hub never hinted twice in one session. Never
+  blocks, never shortens or replaces the write's own answer — one block appended, the exact same
+  mechanics as `duplicateHint`/`slugHint`. Works in both proxy and all-in-one modes (a new
+  `index.noteText(id)` helper on `createNoteIndex`, same read-the-file-directly pattern as the
+  existing `fileHash`, works in either). New tests: `test/mcp-proxy-levers.test.js` (pure
+  `parsePartsSection`/`hubPartsFor`/`hubHintFor`, plus end-to-end over stdio — explicit Parts
+  list, frontmatter-only fallback, `write_note overwrite`, the excluded operations, the token
+  threshold, off-by-default, once-per-session).
+
+### Changed — better search recall (`lib/store/search.js`, `lib/store/text.js`)
+
+A real duel on the owner's memory (31 search → read pairs from real transcripts) had memglow at
+rank-1 6/31, top-3 10/31, MRR 0.283, target anywhere in the results 15/31 (basic-memory: rank-1
+1/31, in-results 17/31) — memglow ranks well but misses a few targets. A local, uncommitted eval
+harness (`/tmp/eval-recall.js` — not part of this commit; the pairs and the memory copy it reads
+are private and were never copied into the repo) reproduced close numbers on this worktree's own
+copy of the task's private fixtures (31/31 pairs still present after the restriction to "target
+exists in this copy"): rank-1 6/31, top-3 8/31, MRR 0.280, in-results 16/31 — and, after every
+change below, **rank-1 6/31, top-3 8/31, in-results 16/31, MRR 0.281**: no pair regressed, one
+pair's rank improved (10 → 8), nothing dropped out of the top 10 that was in it before.
+
+- **Light stemming, EN + FR, applied symmetrically** (`stem()` in `lib/store/text.js`, used at
+  both index and query time already — only its rules changed): plural `s`/`x` now normalises
+  FIRST, so a word and its plural end up at the exact same stem once the OTHER suffixes apply to
+  that normalised form — `-ing` ("deploying"/"deploy") and `-tion`/`-sion` ("decision"/
+  "decisions", FR "télévision"/"télévisions") both kept, both neutral-to-positive on the 31-pair
+  duel. `-ed` and `-ment` were ALSO tried (equally common EN/FR suffixes) and DROPPED: measured
+  in isolation, `-ed` turned a borderline rank-10 hit into an outright miss (an unrelated word
+  collided on the same stripped stem) and `-ment` quietly worsened one hit's rank with no
+  offsetting gain anywhere — "if a technique hurts MRR, drop it."
+- **Prefix matching raised from ≥ 3 to ≥ 5 characters** (`PREFIX_MIN_LEN`, `lib/store/search.js`):
+  a short query/index term is no longer treated as a prefix stand-in for a longer word (too many
+  unrelated 3-4-character words share a prefix) — applied to `queryTermScore`, `candidates()` and
+  the observation prefix check. Neutral-to-positive on the duel; one pair's rank improved (10 → 8).
+- **Fuzzy (edit-distance-1) matching for off-vocabulary query terms ≥ 6 characters**
+  (`editDistanceLE1`, `fuzzyExpand`, `FUZZY_MIN_LEN` / `FUZZY_DISCOUNT`): only when a query term
+  has NO exact hit anywhere in the index at all (a real, if rare, word already has one) — a plain
+  linear vocabulary scan, length-filtered first, cached per query term. Neutral on the duel (no
+  typo'd query among the 31 pairs), proven on the new synthetic fixture instead.
+  `candidates()` also expands fuzzy hits into the scored document set, so a fuzzy-only match is
+  never excluded before scoring gets a chance to find it.
+  `OR_FALLBACK_DISCOUNT`/`FUZZY_DISCOUNT`/`PREFIX_DISCOUNT` are all independent constants — none
+  of this is prefix matching in disguise.
+- **A dedicated "hub" field, weight 0.5** (`FIELD_WEIGHTS`, `buildHubResolver()`/`docOf()`): a
+  note's hub (frontmatter `part_of`/`parent`, resolved against base/slug/title/permalink, built
+  once per index build/update — `buildIndex`, `updateIndex`, `warmAsync` all pass the same
+  resolver) has its own title + description folded into the PART's index entry, so a search for
+  the hub's words still surfaces the part even when the part's own text never repeats them — the
+  owner's hub-and-spoke convention keeps a part's body about its own slice only. Weight tuned
+  DOWN from an initial guess of 2.5 (between "desc" and "head") to 0.5 after the duel showed the
+  higher weight made siblings of a multi-part hub score more alike — hurting the very common case
+  of picking ONE part out of several (MRR 0.280 → 0.276) — while 0.5 never regressed a single
+  pair (0.281) and still turns a "found nowhere" into a real hit on the synthetic fixture: a
+  quiet tie-breaker, not a dominant signal.
+- **OR fallback for a short AND-ish result** (`search()`): an explicit `AND`, or a required
+  "quoted phrase", that comes up short of a full page is retried as a plain OR over the same
+  terms — new notes only, at `OR_FALLBACK_DISCOUNT`, capped to EXACTLY fill the page (never more)
+  so an unrelated common word shared by half the corpus can never turn a precise query's `total`
+  into a flood of barely-related hits. Never fires for an already-OR query. Neutral on the duel
+  (no AND/phrase pair came up short there); proven on the synthetic fixture.
+- New committed test: `test/store-search-recall.test.js` — `stem()` suffix equivalences and length
+  guards in isolation, then one engine-level assertion per mechanism above (FR + EN notes).
+- `test/fixtures/ranking-golden.json` regenerated (`node test/fixtures/ranking-corpus.js
+  --write`): 8 of the 215 snapshot queries changed (order and/or `total`), all traceable to the
+  changes above — two quoted-phrase queries whose `total` grows from 1 to a full page (`"vegetable
+  garden"`, `"jardin et la forêt"`: the OR fallback, exactly its intended effect) and six more
+  with a few results reordered among an unchanged `total` (the prefix threshold, stemming or the
+  hub field nudging scores on the 400-note synthetic corpus). No other query's result set changed
+  at all.
 
 ## 0.4.10.9 — internal (not published)
 
