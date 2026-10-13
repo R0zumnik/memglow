@@ -81,7 +81,7 @@ const TOOLS = [
     wrapSchema([{ type: "string" }, { type: "array", items: { type: "object", additionalProperties: true } }])),
 
   tool("search_notes", "Search Notes",
-    "Search the knowledge base. Words are matched with accents folded and English/French stop-words ignored, the title counting most; \"quoted phrases\", AND, OR, NOT / -word, prefix* and tag:name are understood. search_type: text (default), title, permalink (exact, prefix, or a * pattern); vector/semantic/hybrid run the same lexical engine (no embeddings in this server). Filters: note_types, entity_types (entity, observation, relation), categories, tags, status, metadata_filters, after_date. Results are paginated and ordered by score, then permalink.",
+    "Search the knowledge base. Words are matched with accents folded and English/French stop-words ignored, the title counting most; \"quoted phrases\", AND, OR, NOT / -word, prefix* and tag:name are understood. search_type: text (default unless semantic search is configured), title, permalink (exact, prefix, or a * pattern); vector/semantic/hybrid run the same lexical engine UNLESS an optional, local-first embeddings provider is configured (off by default, no model ships with this server — see README \"Semantic search (optional)\"), in which case vector/semantic rank by embedding similarity and hybrid fuses that with the lexical ranking, and omitting search_type then defaults to hybrid. Filters: note_types, entity_types (entity, observation, relation), categories, tags, status, metadata_filters, after_date. Results are paginated and ordered by score, then permalink.",
     {
       query: nullable("string", "What to look for. Optional when filters are given."),
       ...PROJECT,

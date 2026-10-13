@@ -987,8 +987,9 @@ and hardware will differ.
 - **One project** (`--project`, default `main`): permalinks are the frontmatter `permalink:` when
   present, else `<project>/<path>`; `project` / `project_id` / `workspace` arguments are accepted
   and ignored.
-- **Semantic search is not implemented**: `search_type` `vector` / `semantic` / `hybrid` run the
-  same lexical engine.
+- **Semantic search is optional, off by default**: `search_type` `vector` / `semantic` / `hybrid`
+  run the same lexical engine UNLESS a local embeddings provider is configured (no model ships
+  with memglow, no new dependency) — see **Semantic search (optional)** below.
 - **HTTP**: legacy sessions (`initialize` → `Mcp-Session-Id`) and the MCP 2026-07-28
   per-request mode (no session, `MCP-Protocol-Version` header and/or `params._meta`) both work;
   JSON answers, or one SSE event for a client that only accepts `text/event-stream`.
@@ -1000,6 +1001,69 @@ and hardware will differ.
   (`.git/…`) and special files are refused.
 - `bench/compat.js` compares it with another server call by call (latency, identical reads,
   search overlap, text shape); `bench/memory-server-speed.js` measures it on a notes folder.
+
+<a id="semantic-search"></a>
+### Semantic search (optional)
+
+Lexical search (above) has a ceiling: a note about "the car" is invisible to a search for
+"automobile". Semantic search closes some of that gap by also ranking notes with an **embeddings
+model** — **off by default**, **no model ships with memglow**, **no new dependency** (a plain
+HTTP call to a provider you already run or point at, over Node's built-in `fetch`).
+
+**Setup — pick one:**
+
+- **Ollama, local, free** (recommended; multilingual FR+EN models exist):
+  ```bash
+  ollama pull nomic-embed-text   # or: ollama pull bge-m3
+  ollama serve                    # http://localhost:11434
+  export MEMGLOW_SEMANTIC_URL=http://localhost:11434
+  export MEMGLOW_SEMANTIC_MODEL=nomic-embed-text
+  export MEMGLOW_SEMANTIC_PROVIDER=ollama   # default once any of the three is set
+  memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000
+  ```
+- **An OpenAI-compatible endpoint** (LM Studio, llama.cpp's `server` with `--embedding`, or a
+  hosted API): `MEMGLOW_SEMANTIC_PROVIDER=openai`, `MEMGLOW_SEMANTIC_URL=http://127.0.0.1:1234`
+  (no trailing `/v1/embeddings` — it is added), `MEMGLOW_SEMANTIC_MODEL=…`, and, for a hosted key,
+  `"search": { "semantic": { "apiKeyEnv": "MY_PROVIDER_KEY" } }` in `memglow.config.json`
+  (`MEMGLOW_CONFIG` or `~/.memglow/` only — never a key written in the file itself, same rule as
+  the optional assistant's own provider keys) with `MY_PROVIDER_KEY` set in the environment.
+  **Privacy**: with this provider, the TEXT of every embedded chunk and every search query is
+  sent to that endpoint — only use one you trust with your notes.
+
+**Config** (`memglow.config.json`, `MEMGLOW_CONFIG` or `~/.memglow/` only — the same trust
+boundary as every other memory-server setting, never a `./memglow.config.json` in the notes
+folder itself):
+```json
+{ "search": { "semantic": { "provider": "ollama", "url": "http://localhost:11434", "model": "nomic-embed-text" } } }
+```
+Env wins over the file: `MEMGLOW_SEMANTIC_URL`, `MEMGLOW_SEMANTIC_MODEL`, `MEMGLOW_SEMANTIC_PROVIDER`
+(`ollama` or `openai`). **Any one of the three being set is what turns this on** — there is no
+separate on/off switch, and with none of them set, `search_type` `vector`/`semantic`/`hybrid`
+keep running the plain lexical engine, byte for byte, exactly as before this feature existed.
+
+**How it works**: each note is split into chunks (one per `##` section, long ones further split,
+~400 tokens each); a background pass (never on the request path, started a second or so after
+startup and re-run, debounced, whenever a note changes) embeds title + description + heading +
+chunk text for every chunk whose content actually changed since the last pass, and caches the
+vectors in `<dataDir>/embeddings.bin`/`.json` (a disposable cache — delete it to force a full
+re-embed, e.g. after switching models). A search's own query is embedded on the request path,
+with an 800 ms budget: `search_type: "vector"`/`"semantic"` rank purely by embedding similarity;
+`"hybrid"` fuses that with the lexical ranking (Reciprocal Rank Fusion); omitting `search_type`
+defaults to `"hybrid"` once a provider is configured (plain `"text"` otherwise). A slow or
+unreachable provider is never fatal: that one query (or that one background pass) falls back to
+lexical-only, logged once, retried automatically once the provider answers again.
+
+**CPU/RAM**: embedding is the provider's job, not memglow's — Ollama with `nomic-embed-text` on
+CPU embeds a few notes a second on ordinary hardware (a one-off cost per changed chunk, not per
+search); memglow itself just keeps the resulting vectors in memory (a few hundred bytes per
+chunk) and does a brute-force cosine top-k over them, which measures in single-digit
+milliseconds for a few thousand chunks (a few hundred notes) — see `bench/semantic-eval.js`.
+
+**Measuring it on your own notes**: `node bench/semantic-eval.js --pairs <search→read
+pairs>.jsonl --memory <your notes folder>` (provider configured as above) replays a JSONL of
+`{"query", "target"}` pairs and reports lexical vs semantic MRR / in-results — the same shape as
+the lexical-engine duel earlier in this section. Committed generic, with no private data: both
+the pairs file and the notes folder are arguments, never built in.
 
 <a id="all-in-one"></a>
 ### All-in-one: one container

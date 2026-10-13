@@ -6,12 +6,19 @@
  * from scratch for memglow; JSON outputs keep the same field names.
  *
  * Write tools (phase B, stage 0.4.5.2) live in write-tools.js; with `readOnly` (the default) they
- * answer the read-only error. Read tools are synchronous; a write tool call returns a Promise.
+ * answer the read-only error. Read tools are synchronous — except `search_notes` (and the
+ * `search` tool), which return a Promise exactly when a configured semantic engine
+ * (lib/store/semantic.js) is merging embeddings into the ranking; a write tool call always
+ * returns a Promise.
  */
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { createSearch, clip } = require("../lib/store/search");
+const { createSemanticSearch } = require("../lib/store/semantic");
+
+/** A value returned by a (possibly async) tool handler — a Promise or a plain MCP result. */
+const isThenable = (x) => !!x && typeof x.then === "function";
 
 // 0.4.10.6: search_notes' TEXT output is leaner — no external_id line (it stays in the json
 // output), the match excerpt cut to MATCH_MAX characters around the query, a shorter footer.
@@ -95,8 +102,13 @@ const dirOf = (rel) => { const d = path.posix.dirname(rel); return d === "." ? "
 // (`--serve-files any`), the behaviour before 0.4.9.1.
 const SERVE_EXT = new Set([".md", ".txt", ".json", ".csv", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf"]);
 
-function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true }) {
-  const engine = createSearch(store);
+function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn }) {
+  // Optional, local-first semantic search (lib/store/semantic.js) — self-configuring from env /
+  // memglow.config.json, OFF unless a provider is actually set there (see that module's header
+  // comment). `semanticIn` (tests): pass an engine to control it directly, or `null` to force it
+  // off whatever the environment says.
+  const semantic = semanticIn !== undefined ? semanticIn : createSemanticSearch({ store, log });
+  const engine = createSearch(store, semantic);
   const writes = !readOnly && writer ? createWriteTools({ store, writer, project, ...writeOptions }) : null;
   const projectId = stableId("memglow-project:" + project);
 
@@ -148,10 +160,14 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     checkQuery(args.query);
     const page = int(args.page, 1, { min: 1, name: "page" });
     const pageSize = int(args.page_size, 10, { min: 1, max: 1000, name: "page_size" });
-    const type = args.search_type == null || args.search_type === "" ? "text" : str(args.search_type).toLowerCase();
+    // No explicit search_type: "hybrid" once a semantic provider is actually configured, else
+    // "text" exactly as before (engine.defaultSearchType, lib/store/search.js).
+    const type = args.search_type == null || args.search_type === "" ? engine.defaultSearchType : str(args.search_type).toLowerCase();
     if (!["text", "title", "permalink", "vector", "semantic", "hybrid"].includes(type)) {
       throw new ToolError(`Invalid search_type '${args.search_type}'. Valid options: hybrid, permalink, semantic, text, title, vector`);
     }
+    // A Promise exactly when the semantic engine is configured AND merging this query (see
+    // lib/store/search.js's own header comment) — plain object otherwise, as always.
     return engine.search({ ...args, search_type: type, page, page_size: pageSize });
   }
 
@@ -166,6 +182,12 @@ function createTools({ store, project = store.project, readOnly = true, startedA
       return textResult("# No Search Criteria\n\nGive at least one of: `query`, `metadata_filters`, `tags`, `status`, `note_types`, `entity_types`, `categories`, `after_date`.");
     }
     const r = runSearch(args);
+    // runSearch() returns a Promise only when a configured semantic engine is merging this
+    // query (lib/store/search.js) — everything below is the exact same formatting either way.
+    return isThenable(r) ? r.then((v) => formatSearchResults(v, args, format)) : formatSearchResults(r, args, format);
+  }
+
+  function formatSearchResults(r, args, format) {
     const query = typeof args.query === "string" ? args.query.trim() : "";
     if (format === "json") {
       return jsonResult({ results: r.results.map(hitJson), current_page: r.page, page_size: r.page_size, total: r.total, total_is_exact: true, has_more: r.has_more });
@@ -615,7 +637,12 @@ function createTools({ store, project = store.project, readOnly = true, startedA
       `- file watching: ${s.watching ? "on" : "off"}; rescan every ${s.pollMs} ms`,
       `- uptime: ${Math.round((Date.now() - startedAt) / 1000)} s`,
       `- runtime: Node.js ${process.version} on ${os.platform()} ${os.arch()}`,
-      "- search: lexical (BM25-style, accent folding, EN+FR stop-words); vector / semantic / hybrid use the same engine",
+      (() => {
+        const st = semantic.stats();
+        return st.configured
+          ? `- search: lexical (BM25-style, accent folding, EN+FR stop-words) + semantic (${st.provider} ${st.model}, ${st.chunks} chunk(s) over ${st.notes} note(s)${st.down ? ", provider currently unreachable — falling back to lexical" : ""}); default search_type: ${engine.defaultSearchType}`
+          : "- search: lexical (BM25-style, accent folding, EN+FR stop-words); vector / semantic / hybrid run the same engine (semantic search not configured — see README \"Semantic search (optional)\")";
+      })(),
     ];
     const twins = sameFileTwins(store.notes());
     if (twins.length) {
@@ -654,11 +681,17 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     if (UNSUPPORTED_TOOLS.has(name)) return errorResult(`${name}: ${UNSUPPORTED_MESSAGE}`);
     const h = typeof name === "string" ? HANDLERS.get(name) : undefined;
     if (!h) return null;
-    try { return h(a); }
-    catch (e) {
+    const fail = (e) => {
       if (e instanceof ToolError) return errorResult(`Error calling tool '${name}': ${e.message}`);
       return errorResult(`Error calling tool '${name}': internal error (${e && e.message})`);
-    }
+    };
+    try {
+      const out = h(a);
+      // search_notes (and search): a Promise exactly when the semantic engine is merging this
+      // query (lib/store/search.js); mergeAsync never rejects in practice, but a handler's own
+      // formatting after it resolves still runs under this same safety net as any other tool.
+      return isThenable(out) ? out.then((v) => v, fail) : out;
+    } catch (e) { return fail(e); }
   }
 
   return { call, tools: TOOLS, engine, warm: () => engine.warm() };
