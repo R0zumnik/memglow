@@ -24,6 +24,7 @@ const { createWriter, ownershipWarning, FSYNC_MODES } = require("./writer");
 const defaultsLib = require("../lib/defaults");
 const { createHttpServer } = require("./http");
 const { createAllInOne } = require("./all-in-one");
+const memoryCore = require("../lib/memory-core");
 
 const HELP = `memglow memory server ${SERVER_VERSION} (preview)
 
@@ -83,7 +84,16 @@ options:
   --name NAME     with --levers: the server name the levers and activity reports use
                   (default: memglow-memory)
   --source S      with --levers: the activity source label (default: mcp)
+  --index NOTE[,NOTE…]  the memory's index note, tried in order (default: MEMORY,index — the
+                  same default as lib/config.js's indexNote). Used by memory_core /
+                  memory_index_level only. Env MEMGLOW_MEMORY_INDEX
   --quiet         no log on stderr
+
+memory_core / memory_index_level (always-loaded cost: per-project core loading) also read, when
+present: a "coreMap" key of memglow.config.json (MEMGLOW_CONFIG or ~/.memglow only, never a
+./memglow.config.json inside the notes folder — same trust boundary as everywhere else), or
+MEMGLOW_MEMORY_CORE_MAP (a JSON object string, for tests/overrides); and, for the "most-read"
+fallback only, MEMGLOW_DATA_DIR (memglow's own accounting file, optional, best effort).
 `;
 
 function parseArgs(argv, env = process.env) {
@@ -94,6 +104,7 @@ function parseArgs(argv, env = process.env) {
     levers: /^(1|true|yes|on)$/i.test(String(env.MEMGLOW_MEMORY_LEVERS || "")), name: "", source: "mcp",
     serveFiles: String(env.MEMGLOW_MEMORY_SERVE_FILES || "").toLowerCase() === "any" ? "any" : "text",
     structuredRead: !/^(0|false|no|off)$/i.test(String(env.MEMGLOW_MEMORY_STRUCTURED_READ || "")),
+    indexNote: String(env.MEMGLOW_MEMORY_INDEX || "").split(",").map((s) => s.trim()).filter(Boolean),
     shutdownTimeoutMs: Math.max(0, Number(env.MEMGLOW_MEMORY_SHUTDOWN_TIMEOUT) || 25) * 1000 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -137,6 +148,8 @@ function parseArgs(argv, env = process.env) {
     else if (a.startsWith("--name=")) o.name = a.slice(7);
     else if (a === "--source") o.source = argv[++i] || "mcp";
     else if (a.startsWith("--source=")) o.source = a.slice(9);
+    else if (a === "--index") o.indexNote = String(argv[++i] || "").split(",").map((s) => s.trim()).filter(Boolean);
+    else if (a.startsWith("--index=")) o.indexNote = a.slice(8).split(",").map((s) => s.trim()).filter(Boolean);
     else if (a === "--quiet" || a === "-q") o.quiet = true;
     else if (a === "-h" || a === "--help") o.help = true;
     else o.unknown = (o.unknown || []).concat(a);
@@ -185,7 +198,8 @@ function resolveFsyncMode(o, env = process.env) {
 }
 
 function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 3000, watch = true, maxFileBytes, log = () => {},
-  fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", structuredRead = true, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne, deferStart = false }) {
+  fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", structuredRead = true, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne, deferStart = false,
+  coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"] }) {
   let tools = null, warmTimer = null, isReady = !deferStart;
   // The search index is rebuilt lazily by the next search anyway; warming it after a change is
   // coalesced (a burst of writes costs one rebuild, not one per write).
@@ -204,7 +218,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     const col = store.collisions();
     if (twins.length || col.length) log(`memglow memory server: ${twins.length + col.length} note(s) present under several paths or permalinks (an interrupted move?) — see basic_memory_diagnostics`);
   };
-  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, log, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
+  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, log, coreMap, dataDir, indexNote, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
   let ready;
   if (!deferStart) {
     store.start();
@@ -290,9 +304,16 @@ function main(argv = process.argv.slice(2), env = process.env) {
   const root = path.resolve(o.root);
   const t0 = Date.now();
   const fsyncInfo = resolveFsyncMode(o, env);
+  // memory_core / memory_index_level (always-loaded cost, per-project core loading): the coreMap
+  // config (never a ./memglow.config.json inside the notes folder — same trust boundary as the
+  // fsync mode just above) and, best-effort only, memglow's own data folder (top-3 most-read
+  // fallback). Neither is required: absent, memory_core just has fewer matching tiers to use.
+  const coreMap = memoryCore.readCoreMap(env, root);
+  const dataDir = env.MEMGLOW_DATA_DIR ? path.resolve(env.MEMGLOW_DATA_DIR) : null;
   // 0.4.10.2: the port opens at once; the notes folder is loaded and indexed in the background
   // (requests meanwhile wait for it, they never fail).
   const srv = createMemoryServer({ root, project: o.project, readOnly: o.readOnly, pollMs: o.pollMs, watch: o.watch, log,
+    coreMap, dataDir, indexNote: o.indexNote.length ? o.indexNote : ["MEMORY", "index"],
     fsync: o.fsync, fsyncMode: fsyncInfo.mode, fileMode: o.fileMode, serveFiles: o.serveFiles, structuredRead: o.structuredRead, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
     allInOne: o.levers ? { env, name: o.name || "memglow-memory", source: o.source } : false, deferStart: true });
   if (fsyncInfo.warning) log(fsyncInfo.warning);

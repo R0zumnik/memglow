@@ -49,7 +49,7 @@ test("HTTP legacy session: initialize → Mcp-Session-Id, notifications/initiali
     assert.strictEqual(n.status, 202);
     assert.strictEqual(await n.text(), "");
     const list = await (await s.post({ jsonrpc: "2.0", id: 2, method: "tools/list" }, { "mcp-session-id": sid, "mcp-protocol-version": "2025-06-18" })).json();
-    assert.strictEqual(list.result.tools.length, 21);
+    assert.strictEqual(list.result.tools.length, 23);
     const call = await (await s.post({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "search_notes", arguments: { query: "garden" } } }, { "mcp-session-id": sid })).json();
     assert.strictEqual(call.id, 3);
     assert.match(call.result.content[0].text, /^# Search Results: garden/);
@@ -77,7 +77,7 @@ test("HTTP MCP 2026-07-28 per-request mode: no initialize, version in header and
     // _meta alone (no header), and neither (lenient).
     const viaMeta = await (await s.post({ jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: META } })).json();
     assert.strictEqual(viaMeta.result.resultType, "complete");
-    assert.strictEqual(viaMeta.result.tools.length, 21);
+    assert.strictEqual(viaMeta.result.tools.length, 23);
     const bare = await (await s.post({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "search_notes", arguments: { query: "alice" } } })).json();
     assert.match(bare.result.content[0].text, /### Alice Martin/);
     const disc = await (await s.post({ jsonrpc: "2.0", id: 4, method: "server/discover", params: { _meta: META } }, { "mcp-protocol-version": "2026-07-28" })).json();

@@ -19,6 +19,10 @@ const { createSemanticSearch } = require("../lib/store/semantic");
 
 /** A value returned by a (possibly async) tool handler — a Promise or a plain MCP result. */
 const isThenable = (x) => !!x && typeof x.then === "function";
+const { estimateTokens } = require("../lib/cost");
+const hubSpoke = require("../lib/hub-spoke");
+const indexTree = require("../lib/index-tree");
+const memoryCore = require("../lib/memory-core");
 
 // 0.4.10.6: search_notes' TEXT output is leaner — no external_id line (it stays in the json
 // output), the match excerpt cut to MATCH_MAX characters around the query, a shorter footer.
@@ -102,7 +106,7 @@ const dirOf = (rel) => { const d = path.posix.dirname(rel); return d === "." ? "
 // (`--serve-files any`), the behaviour before 0.4.9.1.
 const SERVE_EXT = new Set([".md", ".txt", ".json", ".csv", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf"]);
 
-function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn }) {
+function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"] }) {
   // Optional, local-first semantic search (lib/store/semantic.js) — self-configuring from env /
   // memglow.config.json, OFF unless a provider is actually set there (see that module's header
   // comment). `semanticIn` (tests): pass an engine to control it directly, or `null` to force it
@@ -606,6 +610,79 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     return textResult(out.join("\n"));
   }
 
+  // ---- memory_core / memory_index_level (always-loaded cost: per-project core loading, and a
+  // deterministic RAPTOR-like index tree — both read-only, lib/memory-core.js / lib/index-tree.js) ----
+
+  /** The memory's index note (first of `indexNote` that resolves), or null. */
+  function findIndexNote() {
+    for (const name of indexNote) {
+      const n = store.resolve(name);
+      if (n) return n;
+    }
+    return null;
+  }
+
+  /**
+   * Which of the index's own entries (lib/index-tree.js's flat entry list) are CONFIRMED hubs
+   * (lib/hub-spoke.js `detect()`, computed fresh from the store's own notes — same cost every
+   * other hub-and-spoke tool already pays, no cache). lib/hub-spoke.js matches a `part_of`/
+   * `parent` marker, and resolves links, against whatever id scheme the caller feeds it — the
+   * convention every other caller uses (lib/memory.js's own `id`, mcp-server/memglow-mcp.js,
+   * server.js) is the note's bare TITLE (a wikilink's own target text, not its folder-qualified
+   * `rel`), so entries built here follow the same rule, case-insensitively.
+   */
+  function hubEntryIds(entries, indexTitle) {
+    let hubTitlesLower;
+    try {
+      const records = store.notes().map((n) => ({ id: n.title || n.base, label: n.title, text: n.raw, folder: n.dir || "" }));
+      const r = hubSpoke.detect({ notes: records, indexId: indexTitle });
+      hubTitlesLower = new Set(r.hubs.map((h) => h.id.toLowerCase()));
+    } catch { hubTitlesLower = new Set(); }
+    const out = new Set();
+    for (const e of entries) if (hubTitlesLower.has(e.id.toLowerCase())) out.add(e.id);
+    return out;
+  }
+
+  function noIndexResult(format) {
+    const msg = `memglow memory server: no index note found (looked for: ${indexNote.join(", ")}) — nothing to build a core view from.`;
+    return format === "json" ? jsonResult({ available: false, message: msg }) : textResult(msg);
+  }
+
+  function memory_core(args) {
+    const format = fmtOf(args.output_format);
+    const idx = findIndexNote();
+    if (!idx) return noIndexResult(format);
+    const cwd = str(args.cwd, "");
+    const projectHints = Array.isArray(args.project) ? args.project.map((x) => str(x)).filter(Boolean)
+      : (typeof args.project === "string" && args.project.trim() ? [args.project.trim()] : []);
+    const budgetTokens = int(args.budget_tokens, 1500, { min: 100, max: 20000, name: "budget_tokens" });
+    const tree = indexTree.parseIndexTree(idx.raw);
+    const entries = tree.groups.flatMap((g) => g.entries);
+    const notesById = new Map();
+    for (const e of entries) { const n = store.resolve(e.id); if (n) notesById.set(e.id, n); }
+    const hubIds = hubEntryIds(entries, idx.title);
+    const built = memoryCore.buildMemoryCore({ cwd, projectHints, tree, entries, notesById, coreMap, budgetTokens, hubIds, dataDir });
+    if (format === "json") return jsonResult({ ...built.meta, text: built.text });
+    return textResult(built.text);
+  }
+
+  function memory_index_level(args) {
+    const format = fmtOf(args.output_format);
+    const idx = findIndexNote();
+    if (!idx) return noIndexResult(format);
+    const level = int(args.level, 0, { min: 0, max: 2, name: "level" });
+    const group = args.group != null && str(args.group).trim() ? str(args.group).trim() : null;
+    const tree = indexTree.parseIndexTree(idx.raw);
+    const entries = tree.groups.flatMap((g) => g.entries);
+    // Level 2 is the index exactly as stored: no hub filtering to compute (and nothing to save by
+    // computing it) when the whole thing is being returned anyway.
+    const hubIds = level < 2 ? hubEntryIds(entries, idx.title) : null;
+    const titleOf = (id) => { const n = store.resolve(id); return (n && n.title) || id; };
+    const text = indexTree.renderLevel(tree, level, { group, titleOf, hubIds });
+    if (format === "json") return jsonResult({ level, group, text, tokens: estimateTokens(text) });
+    return textResult(text);
+  }
+
   // ---- projects / workspaces / diagnostics ----
 
   function list_memory_projects(args) {
@@ -664,6 +741,7 @@ function createTools({ store, project = store.project, readOnly = true, startedA
   const HANDLERS = new Map(Object.entries({
     search_notes, read_note, view_note, read_content, build_context, recent_activity, list_directory,
     list_memory_projects, list_workspaces, basic_memory_diagnostics, search, fetch: fetchTool,
+    memory_core, memory_index_level,
   })); // a Map: "toString", "constructor", "__proto__"… are unknown tools, not Object.prototype members
 
   /** Runs a tool call: `call(name, args)` → MCP result (never throws). */

@@ -90,6 +90,48 @@ worktrees own those).
   - README "Semantic search (optional)" and `docs/llms.txt` document setup, config, CPU/RAM
     expectations and the OpenAI-compatible provider's privacy note (chunk/query text is sent to
     that endpoint).
+## 0.5.1.1 — internal (not published)
+
+**Always-loaded cost, two features: per-project core loading + a deterministic index tree.**
+
+- **`memory_core`** (memory server, read-only, plain and `--levers` modes): instead of the whole
+  index note at every session start, answers with (a) a compact global index — one line per
+  top-level group of the index's own headings, naming only its CONFIRMED hubs
+  (`docs/hub-and-spoke.md`'s `part_of`/structural detection; a group with none lists none, and
+  with hub/part status unknown altogether every entry counts — the honest fallback), never their
+  hooks; (b) the hub(s) matching `cwd` / `project`, in full; (c) one line on how to expand.
+  Matching order: an explicit `coreMap` (`memglow.config.json`, `{"<path-or-repo-glob>":
+  "<hub-slug>"}`, `~` honoured, read-only even in the control panel — no save path from the
+  browser, on purpose) or `MEMGLOW_MEMORY_CORE_MAP`; a candidate's own `project_paths:`/`repo:`
+  frontmatter; a word match against `cwd`'s own name and the project hints; with no match at
+  all, the top-3 most-read hubs from memglow's own accounting file, when available.
+  `budget_tokens` (default 1500) truncates to whole lines, honestly reporting what was cut.
+- **`memory_index_level(level, group?)`**: the deterministic (no AI, no writes), cacheable tree
+  it is built from — `lib/index-tree.js`, pure, reuses `lib/index-trim.js`'s own
+  "`- [[target]] — hook`" line shape so the two modules never disagree on what an index entry is.
+  `level=0`/`1` carry the same hub-filtered content (0 as one compact line per group, 1 as a
+  `## group` / `- hub` block); `level=2` is the index exactly as stored, hooks included; `group`
+  restricts the answer to one group's own block of the original text.
+- **A ready-to-use SessionStart hook**, `hooks/memglow-session-core.js`: calls `memory_core` with
+  the session's own working folder and git remote over HTTP, prints
+  `hookSpecificOutput.additionalContext`, and **fails open on anything at all** (server down,
+  bad token, a timeout, a malformed or SSE answer) — nothing printed, exit 0, a hard overall
+  timeout (default 2.5 s) wins even against a server that never answers at all.
+- `lib/memory-rules.js`: one more built-in rule, telling the assistant to start a session from
+  `memory_core` / `memory_index_level` level 0 and expand on demand — deterministic (same bytes
+  for the same config, the whole point of the cache-stable prefix, 0.4.4.4).
+- **Measured**: on the author's real memory (~2,390 index tokens, read-only, never committed),
+  level 0 ≈168 tokens (7 %); on `demo/memory` and the committed synthetic fixture
+  `test/fixtures/synthetic-index-70.md` (8 groups, ~70 lines, no private data) — neither declares
+  any `part_of`, so hub detection finds none — level 0 falls back to "every entry counts", ≈22–23 %
+  of the full index (still well under it); filtered to the same fixture's hubs specifically, ≈4 %.
+- Tests: `test/index-tree.test.js` (12), `test/memory-core.test.js` (19, matching order tiers,
+  budget truncation, coreMap sanitisation/reading, top-read fallback), `test/memory-server-
+  core.test.js` (8, wired through `createMemoryServer`/`createTools`, real hub-spoke filtering),
+  `test/hooks-session-core.test.js` (11, every fail-open path — down server, bad token, malformed
+  stdin, a server that never answers — plus the real success path), one more in
+  `test/memory-rules.test.js`. `test/memory-server-tools.test.js` / `-http.test.js` updated for
+  the two new tool names (21 → 23). Full suite: 814 pass, 0 fail (baseline 763 + 51).
 
 ## 0.5.0 — 2026-10-12 (release candidate, not published)
 
