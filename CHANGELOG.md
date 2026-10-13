@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.1 — 2026-10-13 (release candidate, not published)
+
+Less memory loaded at the start of every session, and shorter reads of notes that are dated logs.
+
+### Added
+
+- **`memory_core` tool + `hooks/memglow-session-core.js`**: a session started in a project folder loads
+  only that project's hub and a compact index (level 0), not the whole index. Matching order: the
+  `coreMap` config, then hub frontmatter (`project_paths:`, `repo:`), then a strict word match (generic
+  folder words ignored; a clear winner is required). If nothing matches, the hook loads the compact index
+  only. On any problem the hook fails open and never breaks a session start. See 0.5.1.1 and 0.5.1.4.
+- **`memory_index_level` tool**: the index as a tree. Level 0 shows groups, level 1 groups and hubs,
+  level 2 the full index. Level 0 is a few hundred tokens. See 0.5.1.1.
+- **Lever 17 `stateView`** (off by default): a large note made of dated updates is served as its intro,
+  its undated sections and its two most recent updates, plus one line naming the older ones and how to
+  get them (`memglow_section`, `memglow_fresh`). It fails open to the full note. See 0.5.1.2.
+- **Optional semantic search**: Ollama or an OpenAI-compatible embeddings endpoint, mixed with lexical
+  search by reciprocal rank fusion. It is OFF and has no effect unless a provider is configured. See
+  0.5.1.3.
+
 ## 0.5.1.4 — internal (not published)
 
 **Fix round for `memory_core` / `lib/index-tree.js` (0.5.1.1): a cold reviewer's NO-GO, all five
