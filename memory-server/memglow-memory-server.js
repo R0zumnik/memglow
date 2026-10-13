@@ -204,7 +204,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     const col = store.collisions();
     if (twins.length || col.length) log(`memglow memory server: ${twins.length + col.length} note(s) present under several paths or permalinks (an interrupted move?) — see basic_memory_diagnostics`);
   };
-  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
+  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, log, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
   let ready;
   if (!deferStart) {
     store.start();

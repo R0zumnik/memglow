@@ -32,6 +32,9 @@
   "pollMs": 2000,
   "clients": ["claude-code", "codex"],
   "trustProxy": false,
+  "search": {
+    "semantic": { "provider": "ollama", "url": "http://localhost:11434", "model": "nomic-embed-text" }
+  },
   "assistant": {
     "enabled": false,
     "provider": "claude-code",

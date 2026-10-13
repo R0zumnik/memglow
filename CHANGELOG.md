@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.1.3 — internal (not published)
+
+- **Semantic search, optional and off by default** (`lib/store/semantic.js`, new module):
+  `search_type` `vector` / `semantic` / `hybrid` on `search_notes` now really rank by embedding
+  similarity once a local-first provider is configured — Ollama (`nomic-embed-text`, `bge-m3`,
+  POST `/api/embed`) or any OpenAI-compatible endpoint (LM Studio, llama.cpp's server, a hosted
+  API with a key from an env var only), through `search.semantic` in `memglow.config.json`
+  (`MEMGLOW_CONFIG`/`~/.memglow` only, same trust boundary as every other memory-server setting)
+  or `MEMGLOW_SEMANTIC_URL` / `_MODEL` / `_PROVIDER`. No model ships with memglow, no new
+  dependency (Node's own `fetch`). **With no provider configured, `search()`'s behaviour is
+  byte-identical to before this module existed** — proven by a dedicated test, not just assumed.
+  - Notes are chunked by section (~400 tokens, longer ones split), embedded title + description +
+    heading + text, cached in `<dataDir>/embeddings.bin`/`.json` keyed by a content hash — only a
+    changed chunk is ever re-embedded. Embedding runs entirely in the background (after startup,
+    debounced after a write), never on the request path; the one call that IS on the request path
+    (the query itself) has an 800 ms budget and falls back to plain lexical ranking on a timeout
+    or a down provider (logged once, retried automatically).
+  - `hybrid` fuses the lexical and vector rankings by Reciprocal Rank Fusion (k=60); omitting
+    `search_type` now defaults to `hybrid` once a provider is configured (`text` otherwise, as
+    before) — `memory-server/tools.js`'s minimal wiring for this: `search_notes` becomes a
+    Promise exactly in that one case (the same convention the write tools already use), the
+    JSON-RPC and multiQuery layers already treat any tool answer as "maybe a Promise", so neither
+    needed to change.
+  - `bench/semantic-eval.js` (new, generic, no private data): replays a `{query, target}` JSONL
+    of search→read pairs against a real notes folder and a real provider, reporting lexical vs
+    semantic MRR / in-results — the same shape as this project's own "31 real search→read pairs"
+    duel. Real Ollama was not reachable in this environment (`localhost:11434` / `ollama:11434`
+    both unreachable) — run `bench/semantic-eval.js` yourself once a model is pulled and serving.
+  - README "Semantic search (optional)" and `docs/llms.txt` document setup, config, CPU/RAM
+    expectations and the OpenAI-compatible provider's privacy note (chunk/query text is sent to
+    that endpoint).
+
 ## 0.5.0 — 2026-10-12 (release candidate, not published)
 
 Everything published since 0.4.6, for users. The internal stages below (0.4.7.1 through
