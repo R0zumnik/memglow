@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.5.1.2 — internal (not published)
+
+Branch `wF3-state`, scoped to `lib/levers/` (new module) plus minimal, additive hooks in
+`lib/proxy-levers.js` only — no `memory-server/tools.js`, no `lib/store/search.js` (other
+worktrees own those).
+
+### Added — lever 17 `stateView` ("journal → current state view")
+
+- The owner's notes often grow dated sections forever (`## Mise à jour 12/10`, `## État au 5/10
+  soir`, `## Chantier en cours (2026-10-11)`…), appended over time, where usually only the latest
+  state matters. New lever 17, `stateView` (default OFF, `MEMGLOW_PROXY_STATE_VIEW` /
+  `"proxy": { "stateView": true }`; its own, smaller size gate `stateViewTokens`, default 1500 —
+  well under `largeNoteTokens`'s 5000 — `MEMGLOW_PROXY_STATE_VIEW_TOKENS` /
+  `proxy.stateViewTokens`): a note with at least 3 sections whose HEADING carries a parseable
+  date (FR or EN, numeric or named — `2026-10-12`, `12/10/2026`, `12/10`, `5/10 soir`, `12 oct.`,
+  "Oct 12, 2026"…) gets, on a plain read, its frontmatter/intro + every UNDATED section (rules,
+  decisions, a "## Parts" list…) + its 2 most recent dated sections IN FULL, followed by ONE line
+  naming exactly how many older dated sections were left out, their combined ≈tokens and their
+  headings, plus how to get one back (`memglow_section`, now advertised in `tools/list` as soon
+  as EITHER `toc` or `stateView` is on) or the whole note (`memglow_fresh`) — never silent. A
+  heading with no year is inferred from the note's own mtime, walking backward through the
+  document so an explicit year on one heading also anchors any yearless heading still earlier in
+  the note (`lib/levers/state-view.js`'s own `inferYears`).
+- **Fails open** (the full note, unchanged) on fewer than 3 parseable dated headings, a note
+  under the threshold, or when the reduced answer would not actually save at least 30% —
+  verified on a real note of the owner's own memory (`project-ha-climate-operations-2026-10`,
+  4 dated headings, 2820 tokens): the 2 "most recent" sections happen to be the largest ones, so
+  dropping the 2 small older ones only saves 26% — correctly relayed in full, not shortened.
+- **Order with the other shortening levers** (see `lib/proxy-levers.js` `handleRead`): tried
+  AFTER `dedupe` (4) and `deltaRead`'s within-session diff (13) — both only ever match a note
+  already delivered in FULL earlier in the SAME session, which is strictly better than a fresh
+  stateView recomputation when it applies — and BEFORE `toc` (5), so a plain read of a
+  journal-shaped note never also gets `toc`'s own big-note outline on top of a stateView answer.
+  A stateView answer never seeds `dedupe`/`deltaRead`'s own "delivered in full" bookkeeping
+  (same convention `toc` already follows): the next read of the same note is therefore never
+  diffed against a partial text — `deltaRead` only ever diffs against the last FULL delivery,
+  chosen as the one safe option (a diff against a partial text could invent a "change" out of
+  content that was simply never sent, or hide a real change inside an omitted older section).
+  `memglow_fresh: true` always wins; repeating the same plain read after a stateView answer gets
+  the full text back, the same escape hatch `dedupe`/`toc`/`alreadyLoaded`/`deltaRead` already
+  share. Savings are tallied per-call like the other shortening levers (`stateView` now a
+  `SAVINGS_LEVER_KINDS` entry, `lib/levers/accounting.js`), so they show up in the Memory cost
+  panel's per-lever breakdown.
+- New module `lib/levers/state-view.js` (pure: `extractHeadingDate`, `inferYears`,
+  `classifySections`, `buildStateView`), re-exported from `lib/proxy-levers.js` like every other
+  lever module since 0.4.12.4. New tests: `test/state-view.test.js` (detection — FR, EN, mixed
+  headings; year inference — mtime anchor, document-order chaining, a December→January wrap;
+  recency ordering by actual date, not document position; every fail-open case) and
+  `test/state-view-levers.test.js` (integration through `createLevers` — `memglow_fresh`,
+  `memglow_section` on an omitted older section even with `toc` off, the repeat-call escape
+  hatch, the interaction with `dedupe`/`deltaRead`/`alreadyLoaded`, and an all-in-one ≡
+  standalone-proxy equivalence check: byte-identical `read_note` answers for the same journal
+  note through both deployment modes). New synthetic FR fixture
+  `test/fixtures/journal-chantier.js` — a fictitious building-site log, no private data.
+- **Measured** (never committed) on a real copy of the owner's memory (177 notes): 21 notes
+  qualify. Top 5 by size, before → after: `project-memglow-history` 4377 → 2718 tokens (-38%);
+  `project-systeme-eau-cave-choisy` 3923 → 1243 (-68%); `project-memglow-v04-strategy` 3408 →
+  622 (-82%); `project-memglow-memory-server-production` 3350 → 1229 (-63%);
+  `project-roz-assistant` 3118 → 1977 (-37%).
+
 ## 0.5.0 — 2026-10-12 (release candidate, not published)
 
 Everything published since 0.4.6, for users. The internal stages below (0.4.7.1 through
