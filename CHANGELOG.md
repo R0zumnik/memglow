@@ -1,6 +1,20 @@
 # Changelog
 
-## 0.5.1 — 2026-10-13 (release candidate, not published)
+## 0.5.2 — 2026-10-13
+
+This is 0.5.1 below, plus one test fix. 0.5.1 was tagged but never reached npm: its release run
+failed on the test fixed here.
+
+### Fixed
+
+- `test/fix-0410-7.test.js` "deferred fsyncs are coalesced" asserted fewer than 10 folder fsyncs for 60
+  writes. How writes and syncs interleave depends on the machine: a fast CI disk gave 12, the NAS far
+  fewer. The test now checks coalescing (at most 20, i.e. at least 3× fewer than writes) rather than an
+  exact count. The code itself is unchanged.
+- `memory_core`: a `coreMap` target that is not listed in the index is now resolved (0.5.1.5, also in
+  this release). Landing page, README pins and `llms.txt` are updated for 0.5.x.
+
+## 0.5.1 — 2026-10-13 (tagged, never published; see 0.5.2)
 
 Less memory loaded at the start of every session, and shorter reads of notes that are dated logs.
 
