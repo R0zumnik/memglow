@@ -133,3 +133,16 @@ test("memory_core / memory_index_level appear in tools/list as read-only, and ar
     srv.close();
   } finally { kb.cleanup(); }
 });
+
+test("memory_core: a coreMap target that is NOT listed in the index is still resolved and served (0.5.1 prod fix)", () => {
+  const kb = makeHubKb();
+  try {
+    // A project hub filed under another hub: present in the notes, absent from MEMORY.md.
+    fs.writeFileSync(path.join(kb.root, "projects", "hub-hidden.md"), "---\ntitle: hub-hidden\n---\n\n# Hidden project\n\nCellar water system notes.\n");
+    const srv = createMemoryServer({ root: kb.root, watch: false, pollMs: 0, coreMap: { "*/cellar*": "hub-hidden" } });
+    const out = srv.tools.call("memory_core", { cwd: "/home/x/cellar-work" }).content[0].text;
+    assert.doesNotMatch(out, /note not found/);
+    assert.match(out, /Cellar water system notes/);
+    srv.close();
+  } finally { kb.cleanup(); }
+});

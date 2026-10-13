@@ -660,6 +660,11 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     const entries = tree.groups.flatMap((g) => g.entries);
     const notesById = new Map();
     for (const e of entries) { const n = store.resolve(e.id); if (n) notesById.set(e.id, n); }
+    // A coreMap target (trusted config) may be a hub that is not itself listed in the index
+    // (e.g. a project hub filed under another hub): resolve it too, or it would read "not found".
+    for (const slug of Object.values(coreMap || {})) {
+      if (typeof slug === "string" && !notesById.has(slug)) { const n = store.resolve(slug); if (n) notesById.set(slug, n); }
+    }
     const hubIds = hubEntryIds(entries, idx.title);
     const built = memoryCore.buildMemoryCore({ cwd, projectHints, tree, entries, notesById, coreMap, budgetTokens, hubIds, dataDir });
     if (format === "json") return jsonResult({ ...built.meta, text: built.text });
