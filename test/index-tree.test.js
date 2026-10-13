@@ -70,20 +70,40 @@ test("renderLevel level 0/1 with no hubIds: every entry counts (the honest fallb
   assert.match(l1, /## Work\n- hub-a\n- note-a1/);
 });
 
-test("renderLevel level 0/1 with hubIds: only confirmed hubs are listed, per group — a group with none lists none", () => {
+test("renderLevel level 0/1 with hubIds: a group WITH a confirmed hub lists only that hub", () => {
   const tree = parseIndexTree(GROUPED);
   const hubIds = new Set(["hub-a", "hub-b"]);
   const l0 = renderLevel(tree, 0, { hubIds });
   assert.strictEqual(l0, "Work: hub-a\nFamily: hub-b");
+});
+
+test("renderLevel 0.5.1.4: a group with NO confirmed hub falls back to its own entries (never silent), capped with +N more", () => {
+  const tree = parseIndexTree(GROUPED); // Family has 3 entries, cap (ENTRY_CAP) is 4: no "+more" needed here
   const l1 = renderLevel(tree, 1, { hubIds: new Set() }); // no confirmed hub anywhere
-  assert.strictEqual(l1, "## Work\n\n## Family");
+  assert.strictEqual(l1, "## Work\n- hub-a\n- note-a1\n\n## Family\n- hub-b\n- note-b1\n- note-b2");
+  const l0 = renderLevel(tree, 0, { hubIds: new Set() });
+  assert.strictEqual(l0, "Work: hub-a, note-a1\nFamily: hub-b, note-b1, note-b2");
+});
+
+test("renderLevel 0.5.1.4: a group's entry list beyond ENTRY_CAP is capped, with a trailing +N more (level 0 and level 1)", () => {
+  const { ENTRY_CAP } = require("../lib/index-tree");
+  const lines = ["## Big"];
+  for (let i = 0; i < ENTRY_CAP + 3; i++) lines.push(`- [[note-${i}]] — hook ${i}`);
+  const tree = parseIndexTree(lines.join("\n"));
+  const l0 = renderLevel(tree, 0);
+  assert.strictEqual(l0, `Big: ${Array.from({ length: ENTRY_CAP }, (_, i) => `note-${i}`).join(", ")}, +3 more`);
+  const l1 = renderLevel(tree, 1);
+  assert.match(l1, /- \+3 more$/);
+  assert.strictEqual(l1.split("\n").length, 1 + ENTRY_CAP + 1); // heading + capped entries + "+N more"
 });
 
 test("renderLevel: titleOf() maps an entry's link target to a display title", () => {
   const tree = parseIndexTree(GROUPED);
   const titleOf = (id) => ({ "hub-a": "Hub A (nice title)" }[id] || id);
   const l0 = renderLevel(tree, 0, { titleOf, hubIds: new Set(["hub-a"]) });
-  assert.strictEqual(l0, "Work: Hub A (nice title)\nFamily");
+  // Family has no confirmed hub: falls back to its own entries (titleOf has no mapping for them,
+  // so they render as their bare id — this exercises the id-fallback half of titleOf, not just hub-a's).
+  assert.strictEqual(l0, "Work: Hub A (nice title)\nFamily: hub-b, note-b1, note-b2");
 });
 
 test("groupMatches: case/accent-insensitive, substring allowed", () => {
@@ -122,4 +142,20 @@ test("measurement: synthetic-index-70.md (8 groups, ~70 lines, no private data) 
   const l1 = estimateTokens(renderLevel(tree, 1));
   assert.ok(l0 < full, `level 0 (${l0}) should be well under the full index (${full})`);
   assert.ok(l0 <= l1, "level 0 (one compact line per group) must never be bigger than level 1's block form");
+});
+
+// ---------------------------------------------------------------------------------------------
+// 0.5.1.4 regression: coverage (no group ever renders silent) and boundedness (~300 tokens) when
+// hub-spoke confirms NO hub anywhere — the realistic case against a real, conservatively-detected
+// memory, per the cold reviewer's NO-GO.
+
+test("0.5.1.4: level 0 on synthetic-index-70.md, with hub-spoke confirming ZERO hubs anywhere, stays ≈300 tokens and names every group", () => {
+  const text = fs.readFileSync(path.join(__dirname, "fixtures", "synthetic-index-70.md"), "utf8");
+  const tree = parseIndexTree(text);
+  const l0 = renderLevel(tree, 0, { hubIds: new Set() }); // the worst case: detection ran and found nothing
+  const tokens = estimateTokens(l0);
+  assert.ok(tokens <= 300, `level 0 (${tokens} tokens) should stay close to the ~300-token target even with zero confirmed hubs`);
+  const byLine = l0.split("\n");
+  assert.strictEqual(byLine.length, tree.groups.length, "one line per group, none dropped");
+  for (const line of byLine) assert.doesNotMatch(line, /^[^:]+$/, "every group lists SOMETHING, never just its bare label");
 });

@@ -59,7 +59,7 @@ test("memory_core: a cwd/project matching hub-acme returns its full note text, p
   const kb = makeHubKb();
   try {
     const srv = createMemoryServer({ root: kb.root, watch: false, pollMs: 0 });
-    const out = srv.tools.call("memory_core", { cwd: "/home/x/projects/acme-storefront", project: ["acme"] }).content[0].text;
+    const out = srv.tools.call("memory_core", { cwd: "/home/x/projects/hub-acme", project: ["acme"] }).content[0].text;
     assert.match(out, /The project hub itself/);
     assert.match(out, /Work: hub-acme/);
     assert.match(out, /memory_index_level/);
@@ -99,7 +99,7 @@ test("memory_core budget_tokens: truncates to whole lines and says what was cut"
   const kb = makeHubKb();
   try {
     const srv = createMemoryServer({ root: kb.root, watch: false, pollMs: 0 });
-    const r = JSON.parse(srv.tools.call("memory_core", { cwd: "/home/x/projects/acme-storefront", budget_tokens: 100, output_format: "json" }).content[0].text);
+    const r = JSON.parse(srv.tools.call("memory_core", { cwd: "/home/x/projects/hub-acme", budget_tokens: 100, output_format: "json" }).content[0].text);
     assert.strictEqual(r.truncated, true);
     assert.match(r.text, /cut \d+ line\(s\)/);
     srv.close();

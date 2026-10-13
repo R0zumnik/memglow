@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.5.1.4 — internal (not published)
+
+**Fix round for `memory_core` / `lib/index-tree.js` (0.5.1.1): a cold reviewer's NO-GO, all five
+items addressed, each with a regression test.**
+
+- **MAJOR — `matchHub()` tier 3 (word match) hardened** (`lib/memory-core.js`): a single shared
+  generic word (`app`, `src`, `dev`, `home`, `workspace`…) no longer matches anything —
+  `/home/florent/dev/app` no longer picks an unrelated "App review" note. A `GENERIC_WORDS`
+  stop-list is stripped from the cwd/project-hint side; a candidate is accepted only with
+  `WORD_MATCH_MIN_SCORE` (2) distinct non-generic shared words, OR an exact whole-path-segment
+  match to its own id/title; and only with a CLEAR winner (strictly ahead of the runner-up) — a
+  tie is "no match". `matchHub` also takes an optional `hubIds`: when known, tier 3 only ever
+  proposes a CONFIRMED hub, never an arbitrary standalone note. `/home/node/workspace` (generic)
+  now matches nothing. Tests: `test/memory-core.test.js` (6 new: the exact bug, a single generic
+  word, a 2-word legit match, an exact-segment match, a tie, the hubIds restriction).
+- **MAJOR — `truncateToBudget` fenced-code and budget safety** (`lib/memory-core.js`): never
+  stops truncating inside an unterminated ` ``` `/`~~~` fence (it keeps cutting until the fence
+  is removed whole — "cut before it", never a fabricated closer); a mandatory `keepSuffix` (the
+  escape hatch `buildMemoryCore` passes in — "Expand: read_note / memory_index_level…") is
+  appended AFTER truncation, as plain text, never one of the cut lines, and its token cost is
+  reserved from the very first budget check; the FINAL text (notice + `keepSuffix` included) now
+  actually fits `budgetTokens` whenever that is mathematically possible. Tests: a sweep of
+  budgets straddling a fence (never an odd number of fence markers), a fence right at the cut
+  point, a budget smaller than the notice itself, and a sweep from the unavoidable floor upward
+  asserting the final size never exceeds the budget.
+- **Level-0 coverage** (`lib/index-tree.js`): lib/hub-spoke.js's detection is deliberately
+  conservative, so a group with zero confirmed hubs used to render as a bare label — on a real
+  memory, often most groups. It now falls back to that group's own entries' titles, capped at
+  `ENTRY_CAP` (4) with a trailing "+N more", exactly like a group that DOES have hubs is capped
+  too. `renderLevel`'s `hubIds` doc updated to match. Measured: `test/fixtures/
+  synthetic-index-70.md` with hub-spoke confirming ZERO hubs anywhere — level 0 is 201 tokens
+  (was ~0, i.e. just bare labels) and every group names something; on the author's real memory,
+  level 0 dropped from 168 to 139 tokens (fewer-but-always-something per group). Tests:
+  `test/index-tree.test.js` (3 new: the "+N more" cap at both levels, the fallback replacing
+  the old "lists none", and a dedicated coverage/boundedness check against the 0.5.1.1 fixture).
+- **minor — hook fetch timeout accounts for time already spent** (`hooks/
+  memglow-session-core.js`): `remainingFetchTimeoutMs()` replaces the fixed `HARD_TIMEOUT_MS -
+  300`, computing what is actually left once `readStdin` (<=300ms) and `gitHint` (<=800ms) have
+  run, floored at `MIN_FETCH_TIMEOUT_MS` (300ms) with `EXIT_MARGIN_MS` (150ms) held back for this
+  process's own wrap-up. Tests: `test/hooks-session-core.test.js` (2 new).
+- **minor — `stateViewTokens` in the control panel** (`lib/levers/control-panel.js`):
+  `LEVER_INT_CAPS` gains it (read-only, default/file/env sources, like the other two caps;
+  `fileSection: "proxy"` since — unlike them — it lives under memglow.config.json's `proxy`
+  section, not at the top level). Test: `test/mcp-proxy-levers.test.js` (1 new).
+- Full suite, file by file: 870 pass, 0 fail (baseline 854 + 16: memory-core.test.js 19→29,
+  index-tree.test.js 12→15, hooks-session-core.test.js 11→13, mcp-proxy-levers.test.js 90→91).
+  `test/one-index-0410-3.test.js` reran alone, clean.
+
 ## 0.5.1.2 — internal (not published)
 
 Branch `wF3-state`, scoped to `lib/levers/` (new module) plus minimal, additive hooks in

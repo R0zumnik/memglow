@@ -36,7 +36,18 @@ const MCP_PATH = process.env.MEMGLOW_MEMORY_PATH || "/mcp";
 const TOKEN_FILE = process.env.MEMGLOW_MEMORY_TOKEN_FILE || path.join(os.homedir(), ".config", "memglow", "token");
 const BUDGET = Number(process.env.MEMGLOW_MEMORY_CORE_BUDGET) > 0 ? Number(process.env.MEMGLOW_MEMORY_CORE_BUDGET) : 1500;
 const HARD_TIMEOUT_MS = Number(process.env.MEMGLOW_MEMORY_CORE_TIMEOUT_MS) > 0 ? Number(process.env.MEMGLOW_MEMORY_CORE_TIMEOUT_MS) : 2500;
-const FETCH_TIMEOUT_MS = Math.max(500, HARD_TIMEOUT_MS - 300);
+// 0.5.1.4 (cold-review fix): the fetch gets whatever is actually LEFT of HARD_TIMEOUT_MS once
+// readStdin (<=300ms) and gitHint (<=800ms) have already run — not a fixed "-300ms" guess that
+// ignores them. MIN_FETCH_TIMEOUT_MS is the floor (a fetch still gets a real chance even when
+// the budget is nearly spent); EXIT_MARGIN_MS is held back for this process's own wrap-up
+// (JSON.stringify, the write, exiting) so the outer safety timer is never the one that fires.
+const MIN_FETCH_TIMEOUT_MS = 300;
+const EXIT_MARGIN_MS = 150;
+const START_MS = Date.now();
+/** Milliseconds actually left of HARD_TIMEOUT_MS right now, floored at MIN_FETCH_TIMEOUT_MS. */
+function remainingFetchTimeoutMs(nowFn = Date.now) {
+  return Math.max(MIN_FETCH_TIMEOUT_MS, HARD_TIMEOUT_MS - (nowFn() - START_MS) - EXIT_MARGIN_MS);
+}
 
 function token() {
   if (process.env.MEMGLOW_MEMORY_TOKEN) return process.env.MEMGLOW_MEMORY_TOKEN.trim();
@@ -82,7 +93,7 @@ function parseBody(text, contentType) {
   try { return JSON.parse(s); } catch { return null; }
 }
 
-async function callMemoryCore({ cwd, project }) {
+async function callMemoryCore({ cwd, project, fetchTimeoutMs = MIN_FETCH_TIMEOUT_MS }) {
   const body = JSON.stringify({
     jsonrpc: "2.0", id: "memglow-session-core", method: "tools/call",
     params: { name: "memory_core", arguments: { cwd, project, budget_tokens: BUDGET, output_format: "text" } },
@@ -90,7 +101,7 @@ async function callMemoryCore({ cwd, project }) {
   const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
   const t = token();
   if (t) headers.authorization = "Bearer " + t;
-  const res = await fetch(BASE + MCP_PATH, { method: "POST", headers, body, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  const res = await fetch(BASE + MCP_PATH, { method: "POST", headers, body, signal: AbortSignal.timeout(fetchTimeoutMs) });
   const text = await res.text();
   if (!res.ok) return null;
   const msg = parseBody(text, res.headers.get("content-type"));
@@ -107,7 +118,7 @@ async function run() {
   try { const payload = JSON.parse(stdinRaw); if (payload && typeof payload.cwd === "string" && payload.cwd.trim()) cwd = payload.cwd.trim(); } catch { /* keep process.cwd() */ }
   const remote = gitHint(cwd);
   const project = [remote, path.basename(cwd)].filter(Boolean);
-  const additionalContext = await callMemoryCore({ cwd, project });
+  const additionalContext = await callMemoryCore({ cwd, project, fetchTimeoutMs: remainingFetchTimeoutMs() });
   if (!additionalContext) return; // fail open: print nothing
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: "SessionStart", additionalContext },
@@ -121,4 +132,4 @@ if (require.main === module) {
   run().catch(() => { /* fail open: nothing printed */ }).finally(() => { finished = true; clearTimeout(safety); process.exit(0); });
 }
 
-module.exports = { parseBody, gitHint, readStdin, callMemoryCore };
+module.exports = { parseBody, gitHint, readStdin, callMemoryCore, remainingFetchTimeoutMs, MIN_FETCH_TIMEOUT_MS, EXIT_MARGIN_MS, HARD_TIMEOUT_MS };

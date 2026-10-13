@@ -1958,3 +1958,34 @@ test("proxyControl: default / file / env sources, envLocked, day1 flag, and the 
   const day1 = def.levers.filter((x) => x.day1).map((x) => x.key).sort();
   assert.deepStrictEqual(day1, ["aliases", "indexWarning", "learnAliases", "multiQuery", "sizeWarning"]);
 });
+
+test("proxyControl (0.5.1.4): stateViewTokens is shown, read-only, same default/file/env sources as the other caps — nested under proxy.*", () => {
+  const fx = makeNotes();
+  try {
+    const def = L.proxyControl({ MEMGLOW_HOME: fx.home }, fx.root);
+    const stateViewTokens = def.caps.find((x) => x.key === "stateViewTokens");
+    assert.ok(stateViewTokens, "stateViewTokens must appear in LEVER_INT_CAPS / proxyControl's caps");
+    assert.strictEqual(stateViewTokens.value, 1500, "same default as lib/levers/config.js's DEFAULTS.stateViewTokens");
+    assert.strictEqual(stateViewTokens.source, "default");
+    assert.strictEqual(stateViewTokens.env, "MEMGLOW_PROXY_STATE_VIEW_TOKENS");
+    assert.strictEqual(stateViewTokens.min, 200);
+    assert.strictEqual(stateViewTokens.max, 1000000);
+
+    // File: unlike largeNoteTokens/indexWarningTokens (top-level keys), this one lives under
+    // memglow.config.json's "proxy" section — proxyControl must look there, not at the top level.
+    fs.writeFileSync(path.join(fx.home, "memglow.config.json"), JSON.stringify({ proxy: { stateViewTokens: 3000 } }));
+    const file = L.proxyControl({ MEMGLOW_HOME: fx.home }, fx.root);
+    const fileCap = file.caps.find((x) => x.key === "stateViewTokens");
+    assert.strictEqual(fileCap.value, 3000);
+    assert.strictEqual(fileCap.source, "file");
+
+    // Env wins over the file and locks it.
+    const env = L.proxyControl({ MEMGLOW_HOME: fx.home, MEMGLOW_PROXY_STATE_VIEW_TOKENS: "4321" }, fx.root);
+    const envCap = env.caps.find((x) => x.key === "stateViewTokens");
+    assert.strictEqual(envCap.value, 4321);
+    assert.strictEqual(envCap.source, "env");
+    assert.strictEqual(envCap.envLocked, true);
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});

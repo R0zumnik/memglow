@@ -10,6 +10,7 @@ const os = require("os");
 const path = require("path");
 const MC = require("../lib/memory-core");
 const { parseIndexTree } = require("../lib/index-tree");
+const { estimateTokens } = require("../lib/cost");
 
 const INDEX = [
   "## Work",
@@ -56,11 +57,46 @@ test("matchHub: tier 2, frontmatter repo: hint, matched against a project hint (
   assert.deepStrictEqual(r.hubIds, ["hub-acme"]);
 });
 
-test("matchHub: tier 3, word match on the cwd's own folder name when nothing else matches", () => {
+test("matchHub: tier 3, word match needs >= 2 distinct non-generic shared words (0.5.1.4 hardening)", () => {
   const { entries, notesById } = fixture();
-  const r = MC.matchHub({ cwd: "/home/x/projects/nas-homelab", coreMap: {}, entries, notesById });
+  // "nas", "home" and "lab" all overlap with hub-nas's title/description — a clear, multi-word match.
+  const r = MC.matchHub({ cwd: "/home/x/nas-home-lab", coreMap: {}, entries, notesById });
   assert.strictEqual(r.matchedBy, "words");
   assert.deepStrictEqual(r.hubIds, ["hub-nas"]);
+});
+
+test("matchHub: tier 3, a SINGLE shared word is never enough on its own, generic or not (0.5.1.4)", () => {
+  const { entries, notesById } = fixture();
+  // Only "nas" overlaps (one word) — below the minimum score, and no exact segment match either.
+  const r = MC.matchHub({ cwd: "/home/x/projects/nas-cluster", coreMap: {}, entries, notesById });
+  assert.deepStrictEqual(r, { hubIds: [], matchedBy: "none" });
+});
+
+test("matchHub: tier 3, an exact whole-path-segment match to the hub's own id wins even with a single word (0.5.1.4)", () => {
+  const { entries, notesById } = fixture();
+  const r = MC.matchHub({ cwd: "/home/x/projects/hub-nas", coreMap: {}, entries, notesById });
+  assert.deepStrictEqual(r, { hubIds: ["hub-nas"], matchedBy: "words" });
+});
+
+test("matchHub: tier 3, generic path words alone (the cold-review bug: /home/florent/dev/app) never match", () => {
+  const entries = [{ id: "app-review", hook: "App review: periodic review of installed apps" }, { id: "hub-nas", hook: "Home NAS hub" }];
+  const notesById = new Map([["app-review", { title: "App review" }], ["hub-nas", { title: "NAS" }]]);
+  assert.deepStrictEqual(MC.matchHub({ cwd: "/home/florent/dev/app", entries, notesById }), { hubIds: [], matchedBy: "none" });
+  // The documented generic fallback case: a fully generic cwd never matches anything.
+  assert.deepStrictEqual(MC.matchHub({ cwd: "/home/node/workspace", entries, notesById }), { hubIds: [], matchedBy: "none" });
+});
+
+test("matchHub: tier 3, a tie between two equally-scored candidates is ambiguous → no match (0.5.1.4, 'clear winner' gate)", () => {
+  const entries = [{ id: "acme-one", hook: "hook" }, { id: "acme-two", hook: "hook" }];
+  const notesById = new Map([["acme-one", { title: "Acme One", description: "ecommerce rebuild project" }], ["acme-two", { title: "Acme Two", description: "ecommerce rebuild project" }]]);
+  assert.deepStrictEqual(MC.matchHub({ cwd: "/home/x/acme-ecommerce-rebuild", entries, notesById }), { hubIds: [], matchedBy: "none" });
+});
+
+test("matchHub: tier 3, 'match only hubs' — with hubIds known, a plain standalone note is never proposed, even on a strong word match", () => {
+  const entries = [{ id: "standalone-note", hook: "hook" }];
+  const notesById = new Map([["standalone-note", { title: "Standalone Note" }]]);
+  assert.strictEqual(MC.matchHub({ cwd: "/home/x/standalone-note", entries, notesById }).matchedBy, "words", "fallback (hub status unknown): still matches");
+  assert.deepStrictEqual(MC.matchHub({ cwd: "/home/x/standalone-note", entries, notesById, hubIds: new Set() }), { hubIds: [], matchedBy: "none" });
 });
 
 test("matchHub: no match at all → empty hubIds, matchedBy 'none'", () => {
@@ -133,6 +169,59 @@ test("truncateToBudget: cuts whole lines off the end, says what was cut, never d
   assert.match(r.text, /cut \d+ line\(s\) to fit the 50-token budget/);
 });
 
+// 0.5.1.4 (cold-review NO-GO fix #2): never cut inside a fenced code block, the final size
+// (notice included) must fit the budget whenever that is at all achievable, and a mandatory
+// `keepSuffix` (buildMemoryCore's escape hatch) must always survive, verbatim, as plain text.
+
+test("truncateToBudget: never leaves an unterminated ``` fence, across a sweep of budgets straddling the fence", () => {
+  const pad = (n) => Array.from({ length: n }, (_, i) => `word${i}`).join(" ");
+  const text = [pad(8), "```js", pad(6), pad(6), pad(6), "```", pad(8), "```", pad(4), "```", pad(10)].join("\n");
+  const full = estimateTokens(text);
+  for (let b = 5; b <= full + 5; b += 3) {
+    const r = MC.truncateToBudget(text, b);
+    const fenceLines = (r.text.match(/```/g) || []).length;
+    assert.strictEqual(fenceLines % 2, 0, `budget ${b}: an odd number of \`\`\` markers means an unterminated fence — text:\n${r.text}`);
+  }
+});
+
+test("truncateToBudget: a fence right at the cut point is removed WHOLE, never left half-open (cut before it, not a fabricated closer)", () => {
+  const text = ["intro line here", "```", "code line one", "code line two", "```", "final outro line"].join("\n");
+  const r = MC.truncateToBudget(text, estimateTokens(text) - 1); // forces cutting right at the trailing fence
+  assert.doesNotMatch(r.text, /```/); // the whole fenced block was dropped, not half of it
+  assert.match(r.text, /^intro line here/);
+});
+
+test("truncateToBudget: keepSuffix (the escape hatch) always survives verbatim, as plain text, even under a budget smaller than the notice itself", () => {
+  const text = Array.from({ length: 12 }, (_, i) => `padding word ${i} `.repeat(6)).join("\n");
+  const suffix = "\n\n---\nExpand: read_note or memory_index_level.";
+  const tiny = MC.truncateToBudget(text, 1, { keepSuffix: suffix });
+  assert.ok(tiny.cut);
+  assert.ok(tiny.text.endsWith(suffix), "the escape hatch survives even a hopeless budget");
+  assert.ok(!/```/.test(suffix), "sanity: the escape hatch itself is never fenced");
+});
+
+test("truncateToBudget: the FINAL text (notice + keepSuffix included) stays <= budgetTokens for every budget at or above what is achievable", () => {
+  const pad = (n) => Array.from({ length: n }, (_, i) => `word${i}`).join(" ");
+  const text = Array.from({ length: 12 }, (_, i) => `${pad(6)}-line${i}`).join("\n");
+  const suffix = "\n\n---\nExpand: read_note or memory_index_level.";
+  const minimum = estimateTokens(MC.truncateToBudget(text, 1, { keepSuffix: suffix }).text); // the unavoidable floor
+  const full = estimateTokens(text + suffix);
+  for (let b = minimum; b <= full + 20; b += 3) {
+    const r = MC.truncateToBudget(text, b, { keepSuffix: suffix });
+    assert.ok(estimateTokens(r.text) <= b, `budget ${b}: got ${estimateTokens(r.text)} tokens`);
+    assert.ok(r.text.endsWith(suffix), `budget ${b}: the escape hatch must still be there`);
+  }
+});
+
+test("truncateToBudget: below the unavoidable floor, still never throws, still keeps the suffix and at least one line", () => {
+  const text = "a single very long line ".repeat(50);
+  const suffix = "\n\n---\nExpand: read_note or memory_index_level.";
+  const r = MC.truncateToBudget(text, 1, { keepSuffix: suffix });
+  assert.ok(r.cut);
+  assert.ok(r.text.endsWith(suffix));
+  assert.ok(r.text.length > 0);
+});
+
 test("buildMemoryCore: no match and no dataDir → says so plainly, still returns the compact index", () => {
   const { tree, entries, notesById } = fixture();
   const built = MC.buildMemoryCore({ cwd: "/nowhere/zzz", tree, entries, notesById, coreMap: {}, hubIds: new Set(["hub-acme", "hub-nas"]) });
@@ -151,11 +240,19 @@ test("buildMemoryCore: a match includes the matched hub's FULL note text", () =>
   assert.match(built.text, /memory_index_level/);
 });
 
-test("buildMemoryCore: respects budget_tokens end to end", () => {
+test("buildMemoryCore: respects budget_tokens end to end — and the escape hatch survives even a hopeless budget (0.5.1.4)", () => {
   const { tree, entries, notesById } = fixture();
-  const built = MC.buildMemoryCore({ cwd: "/home/x/work/acme/storefront", tree, entries, notesById, coreMap: {}, budgetTokens: 15 });
-  assert.ok(built.meta.truncated);
-  assert.ok(built.meta.tokensUsed <= 15 + 40, "a little slack for the cut notice itself, still clearly bounded");
+  // 15 is below even the mandatory footer's own size: the floor is "unavoidable", not a bug —
+  // the escape hatch (read_note / memory_index_level) is never one of the lines that get cut.
+  const tiny = MC.buildMemoryCore({ cwd: "/home/x/work/acme/storefront", tree, entries, notesById, coreMap: {}, budgetTokens: 15 });
+  assert.ok(tiny.meta.truncated);
+  assert.match(tiny.text, /memory_index_level/, "the escape hatch is never sacrificed to the budget");
+
+  // A realistic, achievable budget: the guarantee is a real one here (no slack needed).
+  const budgetTokens = 120;
+  const reasonable = MC.buildMemoryCore({ cwd: "/home/x/work/acme/storefront", tree, entries, notesById, coreMap: {}, budgetTokens });
+  assert.ok(reasonable.meta.tokensUsed <= budgetTokens, `${reasonable.meta.tokensUsed} should fit the ${budgetTokens}-token budget`);
+  assert.match(reasonable.text, /memory_index_level/);
 });
 
 test("topReadHubs: no dataDir → [] (best-effort, never throws)", () => {

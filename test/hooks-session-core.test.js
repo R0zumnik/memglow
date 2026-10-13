@@ -11,7 +11,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 const { createMemoryServer } = require("../memory-server/memglow-memory-server");
 const { createHttpServer } = require("../memory-server/http");
-const { parseBody, gitHint } = require("../hooks/memglow-session-core");
+const { parseBody, gitHint, remainingFetchTimeoutMs, MIN_FETCH_TIMEOUT_MS, EXIT_MARGIN_MS, HARD_TIMEOUT_MS } = require("../hooks/memglow-session-core");
 const { makeKb } = require("./fixtures/memory-kb");
 
 const HOOK = path.join(__dirname, "..", "hooks", "memglow-session-core.js");
@@ -43,6 +43,28 @@ test("parseBody: empty / malformed → null, never throws", () => {
   assert.strictEqual(parseBody("", "application/json"), null);
   assert.strictEqual(parseBody("not json", "application/json"), null);
   assert.strictEqual(parseBody("event: message\ndata: not json\n\n", "text/event-stream"), null);
+});
+
+test("remainingFetchTimeoutMs: accounts for time ALREADY spent (stdin+git), not a fixed '-300ms' guess (0.5.1.4)", () => {
+  // The function is remainingFetchTimeoutMs(nowFn) = max(MIN, HARD_TIMEOUT_MS - (nowFn() - START_MS)
+  // - EXIT_MARGIN_MS). Two calls `EXTRA` ms apart, both well clear of the floor, must differ by
+  // exactly `EXTRA` — this holds regardless of the module's own (unexported, real) START_MS, so
+  // the test needs no knowledge of it.
+  const base = Date.now();
+  const EXTRA = 1100; // worst case: 300ms stdin + 800ms git, already spent before the fetch
+  const atBase = remainingFetchTimeoutMs(() => base);
+  const afterSpending = remainingFetchTimeoutMs(() => base + EXTRA);
+  assert.ok(atBase > MIN_FETCH_TIMEOUT_MS + EXTRA, "pick a base far enough from the floor for this assertion to be meaningful");
+  assert.strictEqual(atBase - afterSpending, EXTRA, "every ms already spent on stdin/git comes straight off the fetch's own timeout");
+  // The old code ignored stdin+git entirely (a fixed HARD_TIMEOUT_MS - 300): once EXTRA (1100ms)
+  // alone exceeds that fixed margin, the new, accounting-aware value must be smaller.
+  const oldFixedGuess = Math.max(500, HARD_TIMEOUT_MS - 300);
+  assert.ok(afterSpending < oldFixedGuess, "the fix leaves materially less time for the fetch once stdin+git are accounted for");
+});
+
+test("remainingFetchTimeoutMs: never below MIN_FETCH_TIMEOUT_MS, however much time has already passed", () => {
+  const base = Date.now();
+  assert.strictEqual(remainingFetchTimeoutMs(() => base + HARD_TIMEOUT_MS * 10), MIN_FETCH_TIMEOUT_MS);
 });
 
 test("gitHint: a non-repo folder (or a missing git binary) returns \"\", never throws", () => {
