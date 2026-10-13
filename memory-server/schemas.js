@@ -229,6 +229,23 @@ const TOOLS = [
       output_format: fmt(),
     }, ["note_type"], RO("Infer Schema")),
 
+  tool("memory_core", "Memory Core",
+    "Per-project core loading: instead of the whole memory index, a compact global index (one line per top-level group, hub titles only, no hooks) plus the project hub(s) matching `cwd` / `project`, in full. Matching order: an explicit coreMap entry (config), then a candidate's own `project_paths:`/`repo:` frontmatter, then a word match against the cwd's own name and the project hints; with no match, the top-3 most-read hubs (if accounting data is available). Meant to be called once, at session start (see a SessionStart hook in hooks/), instead of injecting the full index.",
+    {
+      cwd: { type: "string", default: "", description: "The session's working folder (an absolute path, e.g. process.cwd())." },
+      project: strList("Repo name / git remote hint(s), tried in addition to cwd."),
+      budget_tokens: { type: "integer", default: 1500, minimum: 100, maximum: 20000, description: "Truncates to whole lines to fit this many ≈tokens (bytes/4); says what was cut." },
+      output_format: fmt(),
+    }, null, RO("Memory Core")),
+
+  tool("memory_index_level", "Memory Index Level",
+    "A deterministic (no AI) view of the memory index's own structure, built from its headings and bullet lines: level 0 = group titles with their hubs only, one compact line each; level 1 = the same, as a `## group` + `- hub` block; level 2 = the index exactly as stored (every hook included). `group` restricts the answer to one group (by title, case/accent-insensitive).",
+    {
+      level: { type: "integer", default: 0, minimum: 0, maximum: 2, description: "0 = groups + hubs (compact), 1 = groups + hubs (block), 2 = the full index as stored." },
+      group: nullable("string", "Restrict the answer to this one group (by title)."),
+      output_format: fmt(),
+    }, null, RO("Memory Index Level")),
+
   tool("schema_diff", "Schema Diff",
     "Not supported by the memglow memory server.",
     {

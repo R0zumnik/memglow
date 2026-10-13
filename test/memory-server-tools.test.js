@@ -19,11 +19,11 @@ function setup() {
   return { kb, srv, call, text, json, done: () => { srv.close(); kb.cleanup(); } };
 }
 
-test("tools/list mirrors basic-memory's 21 tool names, with schemas and annotations", () => {
+test("tools/list mirrors basic-memory's 21 tool names plus memglow's own memory_core/memory_index_level, with schemas and annotations", () => {
   assert.deepStrictEqual(TOOLS.map((t) => t.name).sort(), [
     "basic_memory_diagnostics", "build_context", "create_memory_project", "delete_note", "delete_project", "edit_note", "fetch",
-    "list_directory", "list_memory_projects", "list_workspaces", "move_note", "read_content", "read_note", "recent_activity",
-    "schema_diff", "schema_infer", "schema_validate", "search", "search_notes", "view_note", "write_note"]);
+    "list_directory", "list_memory_projects", "list_workspaces", "memory_core", "memory_index_level", "move_note", "read_content",
+    "read_note", "recent_activity", "schema_diff", "schema_infer", "schema_validate", "search", "search_notes", "view_note", "write_note"]);
   for (const t of TOOLS) {
     assert.strictEqual(t.inputSchema.type, "object", t.name);
     assert.ok(t.description && t.annotations && typeof t.annotations.readOnlyHint === "boolean", t.name);

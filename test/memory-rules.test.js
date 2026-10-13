@@ -40,6 +40,16 @@ test("defaultTemplate (0.4.2.2b): the first rule tells the assistant to use memg
   assert.match(firstRule, /2–3 different phrasings/, "the rule still names the 2-3 phrasings habit");
 });
 
+test("defaultTemplate (0.5.1.1): tells the assistant to start from memory_core / memory_index_level level 0 and expand on demand, deterministically", () => {
+  const args = { largeNoteTokens: 4000, splitChunkTokens: 1500, protectedLabel: "People, Family" };
+  const text = R.defaultTemplate(args);
+  assert.match(text, /memory_core/);
+  assert.match(text, /memory_index_level/);
+  assert.match(text, /on demand/);
+  // Cache-stable (0.4.4.4's whole point): same input, same bytes, every time.
+  assert.strictEqual(R.defaultTemplate(args), R.defaultTemplate({ ...args }));
+});
+
 test("buildRulesText (0.4.4.4): identical bytes for an identical config — no dates, no unordered object iteration", () => {
   const themes = [{ id: "people", label: "People" }, { id: "work", label: "Work" }];
   const config = { themes, protectedThemes: ["people", "work"], largeNoteTokens: 4000, splitChunkTokens: 1500, dataDir: null };

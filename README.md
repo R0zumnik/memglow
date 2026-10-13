@@ -896,11 +896,50 @@ and hardware will differ.
   from `read_note`'s text answer.
 - **Read tools**: `search_notes`, `read_note`, `read_content`, `view_note`,
   `build_context`, `recent_activity`, `list_directory`, `list_memory_projects`,
-  `list_workspaces`, `search` / `fetch`, `basic_memory_diagnostics`. `read_content` serves text
+  `list_workspaces`, `search` / `fetch`, `basic_memory_diagnostics`, `memory_core`,
+  `memory_index_level`. `read_content` serves text
   and image files only (`.md .txt .json .csv .yaml .yml .png .jpg .jpeg .gif .webp .svg .pdf`,
   since 0.4.9.1); `--serve-files any` (or `MEMGLOW_MEMORY_SERVE_FILES=any`) serves any regular
   file under the root, as before. `schema_*`,
   `create_memory_project` and `delete_project` answer "not supported".
+- **Per-project core loading — `memory_core` / `memory_index_level`** (internal 0.5.1.1): the
+  index note (`--index MEMORY,index`, env `MEMGLOW_MEMORY_INDEX`) loaded whole at every session is
+  the biggest part of the [Memory cost](#memory-cost); `memory_core` answers with
+  just (a) a compact global index — one line per top-level group (`## heading` in the index),
+  naming only its CONFIRMED hubs ([hub and spoke](docs/hub-and-spoke.md)'s `part_of`/structural
+  detection — a group with no confirmed hub lists none; with none known at all, every entry
+  counts, the honest fallback), never their hooks; (b) the hub(s) matching `cwd` / `project`, in
+  full; (c) one line on how to expand (`read_note` / `memory_index_level`). Matching order:
+  1. an explicit `coreMap` in `memglow.config.json` (`{"<path-or-repo-glob>": "<hub-slug>"}`,
+     `~` honoured — read-only even in the control panel, never editable from the browser, and
+     never read from a `./memglow.config.json` inside the notes folder itself, the same
+     trust boundary as everywhere else), or `MEMGLOW_MEMORY_CORE_MAP` (a JSON object, for
+     overrides/tests);
+  2. a candidate's own `project_paths:` (glob, `~` honoured) or `repo:` frontmatter;
+  3. a word match between `cwd`'s last two path segments / `project` hints and a candidate's id,
+     title, description and index hook;
+  4. no match at all → the top-3 most-read hubs, from memglow's own accounting file
+     (`MEMGLOW_DATA_DIR`), when one is configured — otherwise memglow says so plainly.
+  `budget_tokens` (default 1500) truncates to whole lines and says what was cut.
+  `memory_index_level(level, group?)` is the deterministic (no AI) tree it is built from:
+  `level=0` groups + confirmed hubs, one compact line each (same filtering as above); `level=1`
+  the same as a `## group` / `- hub` block; `level=2` the index exactly as stored, hooks
+  included; `group` restricts the answer to one group. Measured: level 0 ≈168 tokens on the
+  author's real ~2,390-token index (7 %); on `demo/memory` and `test/fixtures/synthetic-index-70.md`
+  (no confirmed hubs — nothing there declares `part_of`), it degrades to the honest "every entry
+  counts" fallback, ≈22–23 % of the full index — still well under it, and ≈4 % on the same
+  synthetic index once hubs ARE confirmed. A ready-to-use **SessionStart hook**,
+  `hooks/memglow-session-core.js`, calls `memory_core` with the session's own folder (and its
+  git remote) over HTTP (`MEMGLOW_MEMORY_URL`, bearer token from `MEMGLOW_MEMORY_TOKEN` or
+  `~/.config/memglow/token`) and prints the hook JSON
+  (`hookSpecificOutput.additionalContext`); it **fails open on anything at all** — server down,
+  bad token, a timeout, a malformed answer — printing nothing, exit 0, so a session never starts
+  broken. Wire it in Claude Code's `settings.json`:
+  ```json
+  { "hooks": { "SessionStart": [ { "hooks": [
+      { "type": "command", "command": "node /path/to/hooks/memglow-session-core.js" }
+  ] } ] } }
+  ```
 - **Write tools — only with `--read-write`** (or `MEMGLOW_MEMORY_READ_WRITE=1`; `--read-only`
   always wins). Without it they answer `memglow memory server: read-only (phase A / shadow mode)`.
   - `write_note` creates `<directory>/<title>.md` with the frontmatter laid out as
@@ -1113,6 +1152,7 @@ With neither, `memglow` uses what `memglow init` wrote in `~/.memglow`.
 | `assistant.allowMissingLines` | `0` | how many original lines may be missing from a proposal (0 = none) |
 | `protectedThemes` | not set (asked at first run) | [protected groups](#protected-groups): theme ids the assistant never moves notes across; a choice saved from the page wins |
 | `alwaysLoaded` | `[]` | instruction files loaded at every session (`"~/.claude/CLAUDE.md"`, `"./CLAUDE.md"`, `"AGENTS.md"`…); size only, never read; relative paths from where memglow starts |
+| `coreMap` / `MEMGLOW_MEMORY_CORE_MAP` | `{}` | [`memory_core`](#memory-server)'s explicit `{"<path-or-repo-glob>": "<hub-slug>"}` map (config file only, `~` honoured); shown read-only in Settings → Control, never editable from the browser; `MEMGLOW_MEMORY_CORE_MAP` (JSON) is for the memory server process specifically (tests/overrides) |
 | `sessionsPerDay` | `5` | Always loaded: sessions per day when no read of the index note was counted |
 | `indexWarningTokens` | `2000` | Always loaded: "trim" tip above this; also the threshold of the proxy's `indexWarning` |
 | `MEMGLOW_INDEX_TRIM_MAX_CHARS` / `indexTrimMaxChars` | `90` | **Trim the index**: an index line's hook longer than this many characters is a candidate for deterministic shortening (30-1000) |
