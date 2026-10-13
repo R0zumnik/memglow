@@ -11,6 +11,7 @@ failed on the test fixed here.
   writes. How writes and syncs interleave depends on the machine: a fast CI disk gave 12, the NAS far
   fewer. The test now checks coalescing (at most 20, i.e. at least 3× fewer than writes) rather than an
   exact count. The code itself is unchanged.
+- `test/one-index-0410-3.test.js`: its timing bound (extra cost of the first search after a write) goes from 25 ms to 100 ms; it still catches a full index rebuild, but no longer fails on a loaded machine.
 - `memory_core`: a `coreMap` target that is not listed in the index is now resolved (0.5.1.5, also in
   this release). Landing page, README pins and `llms.txt` are updated for 0.5.x.
 

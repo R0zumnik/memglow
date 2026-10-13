@@ -119,7 +119,8 @@ test("search index: an incremental update after writes is exactly a full rebuild
     engine.search({ query: "rugby stade" });
     const steady = Number(process.hrtime.bigint() - t0) / 1e6;
     process.stdout.write(`# search right after a write ${afterWrite.toFixed(2)} ms, steady ${steady.toFixed(2)} ms\n`);
-    assert.ok(afterWrite - steady < 25, `first search after a write costs ${(afterWrite - steady).toFixed(1)} ms extra`);
+    // Generous bound: this guards against a full index rebuild (hundreds of ms), not against machine load.
+    assert.ok(afterWrite - steady < 100, `first search after a write costs ${(afterWrite - steady).toFixed(1)} ms extra`);
   } finally { srv.close(); }
 });
 
