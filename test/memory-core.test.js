@@ -287,3 +287,98 @@ test("buildMemoryCore: no match but accounting data available → falls back to 
   assert.match(built.text, /most-read/);
   assert.match(built.text, /hub-nas note body/);
 });
+
+// ---------------------------------------------------------------------------------------------
+// accountingSummary (0.5.3): proxy-savings.json is the preferred source (same reader the Memory
+// cost panel / Settings → Control already use for it, lib/levers/accounting.js's
+// readClientSavings), falling back to the OLD file (activity-counts.json) when it has nothing.
+
+test("accountingSummary: no dataDir → null, never throws", () => {
+  assert.strictEqual(MC.accountingSummary({ dataDir: null }), null);
+  assert.strictEqual(MC.accountingSummary({}), null);
+});
+
+test("accountingSummary: neither file present, or both empty → null", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-acct-"));
+  assert.strictEqual(MC.accountingSummary({ dataDir: dir }), null, "no files at all");
+  fs.writeFileSync(path.join(dir, "proxy-savings.json"), JSON.stringify({ version: 1, days: {} }));
+  assert.strictEqual(MC.accountingSummary({ dataDir: dir }), null, "an empty proxy-savings.json");
+});
+
+test("accountingSummary: reads proxy-savings.json — per-lever tokens/calls, last 7 days, newest-saving-first", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-acct-"));
+  const now = Date.now();
+  const day = (n) => { const d = new Date(now - n * 86400000); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+  fs.writeFileSync(path.join(dir, "proxy-savings.json"), JSON.stringify({
+    version: 1,
+    days: {
+      [day(1)]: { dedupe: 300, dedupeCalls: 3, alreadyLoaded: 900, alreadyLoadedCalls: 4, clients: { "claude-code": { tokens: 500, calls: 10 } } },
+      [day(3)]: { toc: 50, tocCalls: 1 },
+      [day(40)]: { dedupe: 99999, dedupeCalls: 99 }, // outside the 7-day window: ignored
+    },
+  }));
+  const summary = MC.accountingSummary({ dataDir: dir, now });
+  assert.match(summary, /^memglow: proxy accounting, last 7 days/);
+  // alreadyLoaded (900) saved more than dedupe (300): named first.
+  assert.match(summary, /alreadyLoaded ≈900t\/4.*dedupe ≈300t\/3.*toc ≈50t\/1/);
+  assert.match(summary, /≈500 tokens relayed to 1 client/);
+  assert.ok(!summary.includes("99999"), "the 40-day-old entry is outside the 7-day window");
+});
+
+test("accountingSummary: no per-lever savings, but client traffic alone is enough to report something", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-acct-"));
+  const today = new Date().toISOString().slice(0, 10);
+  fs.writeFileSync(path.join(dir, "proxy-savings.json"), JSON.stringify({
+    version: 1, days: { [today]: { clients: { "claude-code": { tokens: 1200, calls: 6 } } } },
+  }));
+  const summary = MC.accountingSummary({ dataDir: dir });
+  assert.match(summary, /no per-lever savings yet/);
+  assert.match(summary, /≈1200 tokens relayed to 1 client/);
+});
+
+test("accountingSummary: falls back to the OLD file (activity-counts.json) when proxy-savings.json has nothing", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-acct-"));
+  const today = new Date().toISOString().slice(0, 10);
+  fs.writeFileSync(path.join(dir, "activity-counts.json"), JSON.stringify({
+    version: 1, since: today, started: today,
+    days: { [today]: { notes: { "hub-nas": { read: 3, search: 2, write: 0 } } } }, last: {},
+  }));
+  const summary = MC.accountingSummary({ dataDir: dir });
+  assert.match(summary, /^memglow: 5 read\/search\/write event\(s\) recorded in the last 7 days \(no proxy-savings\.json yet\)\.$/);
+});
+
+test("accountingSummary: proxy-savings.json wins outright over activity-counts.json when BOTH are present", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-acct-"));
+  const today = new Date().toISOString().slice(0, 10);
+  fs.writeFileSync(path.join(dir, "activity-counts.json"), JSON.stringify({
+    version: 1, since: today, started: today, days: { [today]: { notes: { x: { read: 99, search: 0, write: 0 } } } }, last: {},
+  }));
+  fs.writeFileSync(path.join(dir, "proxy-savings.json"), JSON.stringify({ version: 1, days: { [today]: { dedupe: 10, dedupeCalls: 1 } } }));
+  const summary = MC.accountingSummary({ dataDir: dir });
+  assert.match(summary, /^memglow: proxy accounting/);
+  assert.ok(!summary.includes("99"), "the old file is never even consulted once the new one has data");
+});
+
+test("buildMemoryCore: no match, no top-read hubs, but proxy-savings.json has real data → a savings summary, never the old 'no accounting data' wording", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-acct-core-"));
+  const today = new Date().toISOString().slice(0, 10);
+  // Real savings, but note ids topReadHubs would never surface a "most read" hub from this file
+  // alone (proxy-savings.json carries no per-note counts at all).
+  fs.writeFileSync(path.join(dir, "proxy-savings.json"), JSON.stringify({
+    version: 1, days: { [today]: { alreadyLoaded: 450, alreadyLoadedCalls: 2 } },
+  }));
+  const { tree, entries, notesById } = fixture();
+  const built = MC.buildMemoryCore({ cwd: "/nowhere/zzz", tree, entries, notesById, coreMap: {}, dataDir: dir });
+  assert.strictEqual(built.meta.matchedBy, "none");
+  assert.strictEqual(built.meta.usedTopRead, false, "proxy-savings.json alone never resolves a hub id to show in full");
+  assert.match(built.text, /No project hub matched for this folder/);
+  assert.ok(!built.text.includes("no accounting data is available yet"), "there plainly IS accounting data — just not of the per-note kind");
+  assert.match(built.text, /memglow: proxy accounting, last 7 days — alreadyLoaded ≈450t\/2/);
+});
+
+test("buildMemoryCore: no match and a dataDir with truly nothing in either file → the honest 'no accounting data' wording, unchanged", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-acct-core-empty-"));
+  const { tree, entries, notesById } = fixture();
+  const built = MC.buildMemoryCore({ cwd: "/nowhere/zzz", tree, entries, notesById, coreMap: {}, dataDir: dir });
+  assert.match(built.text, /no accounting data is available yet/);
+});

@@ -16,6 +16,19 @@
   an `Authorization: Bearer` when a token is configured). See README
   "Session identity with Claude Code (headersHelper)".
 
+### Fixed
+
+- `memory_core` ("no project hub matched" fallback) said "no accounting data is available yet"
+  even when `MEMGLOW_DATA_DIR` plainly had accounting data, as long as it was in
+  `proxy-savings.json` (the MCP proxy / all-in-one levers' own file) rather than the older
+  `activity-counts.json` (the viewer's per-note read/search/write journal) `topReadHubs()` reads
+  for its "most-read hubs" fallback — a deployment that only ever runs the proxy/all-in-one
+  levers never writes the latter at all. `lib/memory-core.js` now has `accountingSummary()`: a
+  one-line savings summary for the last 7 days, preferring `proxy-savings.json` (the SAME reader
+  the Memory cost panel already uses, `lib/levers/accounting.js`'s `readClientSavings`) and
+  falling back to `activity-counts.json` when the new file has nothing. Shown inside the same
+  token budget as everything else in `memory_core`'s answer.
+
 ## 0.5.2 — 2026-10-13
 
 This is 0.5.1 below, plus one test fix. 0.5.1 was tagged but never reached npm: its release run

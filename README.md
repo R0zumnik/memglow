@@ -919,7 +919,11 @@ and hardware will differ.
   3. a word match between `cwd`'s last two path segments / `project` hints and a candidate's id,
      title, description and index hook;
   4. no match at all → the top-3 most-read hubs, from memglow's own accounting file
-     (`MEMGLOW_DATA_DIR`), when one is configured — otherwise memglow says so plainly.
+     (`activity-counts.json` in `MEMGLOW_DATA_DIR`), when one is configured and has per-note
+     data. Still nothing to show → (0.5.3) a one-line savings summary for the last 7 days from
+     `proxy-savings.json` instead, when THAT file has data (the common case for a deployment
+     that only ever runs the MCP proxy / all-in-one levers, which never writes
+     `activity-counts.json` at all) — otherwise memglow says so plainly.
   `budget_tokens` (default 1500) truncates to whole lines and says what was cut.
   `memory_index_level(level, group?)` is the deterministic (no AI) tree it is built from:
   `level=0` groups + confirmed hubs, one compact line each (same filtering as above); `level=1`
