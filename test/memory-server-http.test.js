@@ -8,7 +8,7 @@ const path = require("path");
 const http = require("http");
 const { spawn } = require("child_process");
 const { createMemoryServer } = require("../memory-server/memglow-memory-server");
-const { createHttpServer } = require("../memory-server/http");
+const { createHttpServer, sessionKeyFor, validHeaderSid } = require("../memory-server/http");
 const { READ_ONLY_MESSAGE } = require("../memory-server/tools");
 const { makeKb } = require("./fixtures/memory-kb");
 
@@ -30,6 +30,46 @@ async function start(opts = {}) {
   };
   return { kb, srv, server, url, post, callTool, done: () => { server.closeAllConnections(); server.close(); srv.close(); kb.cleanup(); } };
 }
+
+// ---------------------------------------------------------------------------------------------
+// sessionKeyFor / validHeaderSid (0.5.3) — the `x-memglow-session` header, a stateless (MCP
+// 2026-07-28) client's own fallback between the Mcp-Session-Id check and the per-connection one.
+
+test("validHeaderSid: 8-128 characters of [A-Za-z0-9._:-], trimmed; anything else is rejected, never throws", () => {
+  assert.strictEqual(validHeaderSid("  claude-code-session-1  "), "claude-code-session-1", "trimmed");
+  assert.strictEqual(validHeaderSid("a1b2c3d4-e5f6-7890-aaaa-bbbbccccdddd"), "a1b2c3d4-e5f6-7890-aaaa-bbbbccccdddd", "a UUID fits");
+  assert.strictEqual(validHeaderSid("short"), null, "under 8 characters");
+  assert.strictEqual(validHeaderSid("a".repeat(129)), null, "over 128 characters");
+  assert.strictEqual(validHeaderSid("has a space in it!!"), null, "characters outside [A-Za-z0-9._:-]");
+  assert.strictEqual(validHeaderSid(""), null);
+  assert.strictEqual(validHeaderSid("   "), null, "blank once trimmed");
+  assert.strictEqual(validHeaderSid(null), null);
+  assert.strictEqual(validHeaderSid(undefined), null);
+  assert.strictEqual(validHeaderSid(42), null, "non-string");
+  assert.strictEqual(validHeaderSid(["a-valid-looking-string"]), null, "non-string (array)");
+});
+
+test("sessionKeyFor: priority order — initialize-opens-session > Mcp-Session-Id > x-memglow-session header > per-connection fallback", () => {
+  const socket = {};
+  const propose = () => "NEWID";
+  // An `initialize` that opens a (legacy) session wins outright, even with a header present.
+  assert.strictEqual(
+    sessionKeyFor({ socket }, "existing-sid", { method: "initialize", id: 1, params: { protocolVersion: "2025-06-18" } }, propose, "a-valid-header-id"),
+    "sid:NEWID",
+  );
+  // A known Mcp-Session-Id wins over the header.
+  assert.strictEqual(sessionKeyFor({ socket }, "abc", { method: "tools/call", id: 2 }, propose, "a-valid-header-id"), "sid:abc");
+  // No Mcp-Session-Id: a validated header wins over the per-connection fallback.
+  assert.strictEqual(sessionKeyFor({ socket }, null, { method: "tools/call", id: 3 }, propose, "a-valid-header-id"), "hdr:a-valid-header-id");
+  // No Mcp-Session-Id, and the header is invalid (the call site would have passed null here —
+  // sessionKeyFor itself does no validation, it only checks truthiness): same as having none.
+  assert.match(sessionKeyFor({ socket }, null, { method: "tools/call", id: 4 }, propose, null), /^conn:/);
+  // A 2026-07-28 batch containing an initialize still opens a session, header or not.
+  assert.strictEqual(
+    sessionKeyFor({ socket }, null, [{ method: "initialize", id: 5, params: {} }], propose, "a-valid-header-id"),
+    "sid:NEWID",
+  );
+});
 
 test("HTTP legacy session: initialize → Mcp-Session-Id, notifications/initialized → 202, tools/list and tools/call with the session", async () => {
   const s = await start();

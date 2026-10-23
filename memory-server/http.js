@@ -6,7 +6,13 @@
  *    send it back. An unknown or missing session id is accepted (no 404): reads need no session
  *    state, and a client whose session was lost to a server restart keeps working.
  *  - MCP 2026-07-28 per-request mode: no session, version in the `MCP-Protocol-Version` header
- *    and/or `params._meta`.
+ *    and/or `params._meta`. 0.5.3: Claude Code opens a NEW TCP connection between calls even
+ *    within the same conversation, so the per-connection fallback alone gave the all-in-one
+ *    layer's per-session levers (lib/proxy-levers.js: alreadyLoaded, dedupe, deltaRead…) a fresh
+ *    key on every call — never a repeat, 0 tokens saved. A request may now carry its own
+ *    `x-memglow-session` header (validated: 8-128 characters of [A-Za-z0-9._:-], else ignored),
+ *    sent by Claude Code's `headersHelper` mechanism (hooks/memglow-headers.js) from its own
+ *    per-conversation `CLAUDE_CODE_SESSION_ID` — see sessionKeyFor() below and the README.
  *  - Answers `application/json`; a client whose Accept lists only `text/event-stream` gets one SSE
  *    `event: message`. Notifications (and client responses) → 202. Batches are answered as arrays.
  *  - GET /mcp → 405 (no server-initiated stream), DELETE /mcp → ends a session, GET /healthz → a
@@ -67,17 +73,33 @@ function opensSession(m) {
   return !(v && SUPPORTED_VERSIONS.includes(v) && v >= "2026-");
 }
 
+// 0.5.3: validates the `x-memglow-session` header (see sessionKeyFor below) — 8-128 characters
+// of [A-Za-z0-9._:-] once trimmed (a UUID, e.g. CLAUDE_CODE_SESSION_ID, comfortably fits); any
+// other shape (too short/long, stray characters, not a string at all) is simply ignored, never
+// an error — this header is advisory, never required.
+const HEADER_SID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
+function validHeaderSid(v) {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return HEADER_SID_RE.test(s) ? s : null;
+}
+
 /**
  * The session key the all-in-one layer (memory-server/all-in-one.js) uses for this request —
  * ignored by the plain server: for an `initialize` that opens a session, the id that session is
  * about to get (a re-initialize under a known id gets a NEW id: its key follows); else the
- * Mcp-Session-Id when one is sent; else (a stateless request) one key per TCP connection —
- * never a single key shared by every client. "sid:" prefix: a client-chosen session id can never
- * collide with a connection key.
+ * Mcp-Session-Id when one is sent; else (0.5.3) a validated `x-memglow-session` header
+ * (validHeaderSid above), "hdr:" prefixed; else (a stateless request with neither) one key per
+ * TCP connection — never a single key shared by every client. Distinct prefixes ("sid:"/"hdr:"/
+ * "conn:") mean a client-chosen session id, a header value and a connection key can never
+ * collide with one another. `hdrSid` is passed in already validated (the call site reads
+ * `req.headers["x-memglow-session"]` through validHeaderSid) so this function stays pure/testable
+ * without needing a real `req.headers`.
  */
-function sessionKeyFor(req, sid, payload, propose) {
+function sessionKeyFor(req, sid, payload, propose, hdrSid) {
   if ((Array.isArray(payload) ? payload : [payload]).some(opensSession)) return "sid:" + propose();
   if (sid) return "sid:" + sid;
+  if (hdrSid) return "hdr:" + hdrSid;
   return connKey(req.socket);
 }
 
@@ -211,7 +233,7 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
       const ctx = {
         headerVersion: req.headers["mcp-protocol-version"] ? String(req.headers["mcp-protocol-version"]) : null,
         sessionVersion: sess ? sess.version : null,
-        sessionKey: sessionKeyFor(req, sid, payload, propose),
+        sessionKey: sessionKeyFor(req, sid, payload, propose, validHeaderSid(req.headers["x-memglow-session"])),
         // 0.4.10.9: the all-in-one layer's last-resort client identity (accounting only).
         userAgent: req.headers["user-agent"] ? String(req.headers["user-agent"]).slice(0, 200) : null,
         onInitialize: (version) => {
@@ -243,4 +265,4 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
   return server;
 }
 
-module.exports = { createHttpServer, wantsSseOnly, sessionKeyFor, connKey };
+module.exports = { createHttpServer, wantsSseOnly, sessionKeyFor, connKey, validHeaderSid, HEADER_SID_RE };

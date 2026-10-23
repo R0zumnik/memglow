@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.3 — 2026-10-23
+
+### Added
+
+- **Session identity for stateless clients (`x-memglow-session`)**: MCP 2026-07-28 (Claude Code)
+  carries no session id, and Claude Code opens a new TCP connection between calls — the
+  per-connection fallback alone gave the per-session levers (`dedupe`, `alreadyLoaded`,
+  `deltaRead`…) a fresh key every call, never a repeat, 0 tokens saved in practice. A request may
+  now carry a validated `x-memglow-session` header (8-128 characters of `[A-Za-z0-9._:-]`),
+  checked right after `Mcp-Session-Id` and before the per-connection fallback —
+  `memory-server/http.js`'s `sessionKeyFor()` and `mcp-proxy/memglow-mcp-proxy.js`'s
+  `createHttpProxy` both apply the same rule. `hooks/memglow-headers.js` is a ready-to-use
+  Claude Code `headersHelper` that turns its own `CLAUDE_CODE_SESSION_ID` into that header (plus
+  an `Authorization: Bearer` when a token is configured). See README
+  "Session identity with Claude Code (headersHelper)".
+
 ## 0.5.2 — 2026-10-13
 
 This is 0.5.1 below, plus one test fix. 0.5.1 was tagged but never reached npm: its release run

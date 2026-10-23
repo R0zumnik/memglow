@@ -229,6 +229,30 @@ test("all-in-one: sessions never mix — two legacy sessions, two stateless conn
   } finally { ag1.destroy(); ag2.destroy(); B.close(); kb.cleanup(); fs.rmSync(home, { recursive: true, force: true }); }
 });
 
+test("all-in-one: stateless (2026-07-28) requests sharing the SAME x-memglow-session header share a session across DIFFERENT connections; a different header value shares nothing", async () => {
+  const kb = baseKb();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-aio-"));
+  const B = await startAllInOne(kb.root, leverEnv(home), []);
+  const ag1 = new http.Agent({ keepAlive: true, maxSockets: 1 }), ag2 = new http.Agent({ keepAlive: true, maxSockets: 1 }), ag3 = new http.Agent({ keepAlive: true, maxSockets: 1 });
+  try {
+    const read = (id, H, ag) => post(B.url, call(id, "read_note", { identifier: "long-read" }, META), H, ag).then((r) => JSON.parse(r.text).result.content.map((c) => c.text).join("\n"));
+    const SH = (sid) => ({ "mcp-protocol-version": "2026-07-28", "x-memglow-session": sid });
+    // Claude Code's own shape: a UUID handed out once per conversation by its headersHelper
+    // (hooks/memglow-headers.js), sent back on every request — including one on a BRAND NEW
+    // TCP connection, exactly what happens between Claude Code's own calls.
+    const full = await read(1, SH("a1b2c3d4-e5f6-47a8-9abc-1234567890ab"), ag1);
+    assert.match(await read(2, SH("a1b2c3d4-e5f6-47a8-9abc-1234567890ab"), ag2), /^memglow:/, "same header, a DIFFERENT connection: dedupe stub fires — the two calls share a session");
+    // A different conversation (a different header value), on yet another connection: its own
+    // session, no sharing at all — the full note again, not the dedupe stub.
+    assert.strictEqual(await read(3, SH("z9y8x7w6-v5u4-47a8-9abc-0987654321ba"), ag3), full, "a different x-memglow-session: no sharing");
+    // An invalid header (too short) is simply ignored — falls back to the per-connection key,
+    // same as having no header at all (checked on a FOURTH, otherwise unused connection).
+    const ag4 = new http.Agent({ keepAlive: true, maxSockets: 1 });
+    try { assert.strictEqual(await read(4, SH("short"), ag4), full, "an invalid header is ignored, not treated as a session id"); }
+    finally { ag4.destroy(); }
+  } finally { ag1.destroy(); ag2.destroy(); ag3.destroy(); B.close(); kb.cleanup(); fs.rmSync(home, { recursive: true, force: true }); }
+});
+
 test("all-in-one over stdio (runStdio): one session per process, multiQuery and writes answered", async () => {
   const { runStdio } = require("../memory-server/memglow-memory-server");
   const { PassThrough } = require("stream");

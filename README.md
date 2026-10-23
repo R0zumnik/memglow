@@ -1031,7 +1031,9 @@ and hardware will differ.
   with memglow, no new dependency) — see **Semantic search (optional)** below.
 - **HTTP**: legacy sessions (`initialize` → `Mcp-Session-Id`) and the MCP 2026-07-28
   per-request mode (no session, `MCP-Protocol-Version` header and/or `params._meta`) both work;
-  JSON answers, or one SSE event for a client that only accepts `text/event-stream`.
+  JSON answers, or one SSE event for a client that only accepts `text/event-stream`. See
+  **Session identity with Claude Code (headersHelper)** below for the 2026-07-28 case with
+  Claude Code specifically, where the per-connection fallback alone is not enough.
 - **Security**: a request carrying an `Origin` header (a browser page — DNS rebinding) is
   refused unless listed with `--allow-origin` (default: none; MCP and CLI clients send no
   Origin and are accepted). `--token` (better: env `MEMGLOW_MEMORY_TOKEN`) requires
@@ -1040,6 +1042,47 @@ and hardware will differ.
   (`.git/…`) and special files are refused.
 - `bench/compat.js` compares it with another server call by call (latency, identical reads,
   search overlap, text shape); `bench/memory-server-speed.js` measures it on a notes folder.
+
+<a id="session-identity"></a>
+### Session identity with Claude Code (headersHelper)
+
+Claude Code talks MCP 2026-07-28: **stateless**, no `Mcp-Session-Id` at all. Without one, the
+server (and the [MCP proxy](#mcp-proxy) in front of it) falls back to one session key per TCP
+connection — and Claude Code opens a **new connection between calls**, even within the same
+conversation. The per-session levers (`dedupe`, `alreadyLoaded`, `deltaRead`…) then never see a
+repeat: every call looks like a brand new session, and they save nothing in practice.
+
+The fix (0.5.3) is a request header, `x-memglow-session` (validated: 8-128 characters of
+`[A-Za-z0-9._:-]`, otherwise ignored — never required), checked right after `Mcp-Session-Id` and
+before the per-connection fallback. Claude Code itself has no session id of its own to send —
+but it supports a `headersHelper`: a command whose JSON stdout becomes headers sent on *every*
+request of that MCP server for the rest of the conversation, and Claude Code runs it with
+`CLAUDE_CODE_SESSION_ID` (a UUID, unique per conversation) already in its environment.
+`hooks/memglow-headers.js` is exactly that helper — zero dependencies, never throws, always
+prints valid JSON and exits 0 — printing `{"x-memglow-session": "<CLAUDE_CODE_SESSION_ID>"}`,
+plus `"Authorization": "Bearer <token>"` when one is configured (`MEMGLOW_MEMORY_TOKEN`, or
+`~/.config/memglow/token`).
+
+Point Claude Code's MCP entry at it (`claude mcp add`, or `.claude.json` directly):
+
+```json
+{
+  "mcpServers": {
+    "memglow": {
+      "type": "http",
+      "url": "http://127.0.0.1:8000/mcp",
+      "headersHelper": "node /path/to/memglow/hooks/memglow-headers.js"
+    }
+  }
+}
+```
+
+Every request this MCP entry sends for the rest of the conversation now carries
+`x-memglow-session`, whatever TCP connection it happens to go out on — the all-in-one server and
+the MCP proxy both recognise it (same validation, same priority order) and key the session by it
+instead of the connection, so the per-session levers finally see the repeats they are meant to
+save tokens on. No `headersHelper` configured, or an invalid/missing header on a given request:
+nothing breaks — it is exactly the pre-0.5.3 per-connection behaviour, just without the benefit.
 
 <a id="semantic-search"></a>
 ### Semantic search (optional)

@@ -48,7 +48,7 @@ const negativeCacheLib = require("../lib/negative-cache");
 const deltaReadLib = require("../lib/delta-read");
 const memoryRules = require("../lib/memory-rules");
 const { StringDecoder } = require("string_decoder");
-const { connKey } = require("../memory-server/http");
+const { connKey, validHeaderSid } = require("../memory-server/http");
 
 // A request body larger than this is refused (413) and its connection dropped — never truncated
 // and relayed (0.4.9.1, S5).
@@ -455,8 +455,13 @@ function createHttpProxy(o) {
     // shared "default" session for every client, which gave the memory rules to the first client
     // only and mixed up lever 7, lever 8's exemption and per-client savings. When the upstream
     // answers an `initialize` with a new Mcp-Session-Id, that session's state moves under it.
+    // 0.5.3: a stateless client that opens a NEW connection per call (Claude Code, MCP
+    // 2026-07-28) never gets a repeat from the per-connection fallback alone — a validated
+    // `x-memglow-session` header (same rule as memory-server/http.js's sessionKeyFor) is checked
+    // first, "hdr:" prefixed so it can never collide with a connection key.
     const reqSid = req.headers["mcp-session-id"] ? String(req.headers["mcp-session-id"]) : "";
-    let sk = reqSid ? "sid:" + reqSid : connKey(req.socket);
+    const hdrSid = validHeaderSid(req.headers["x-memglow-session"]);
+    let sk = reqSid ? "sid:" + reqSid : hdrSid ? "hdr:" + hdrSid : connKey(req.socket);
     // 0.4.10.9: the User-Agent, the levers' last-resort client identity for per-client accounting.
     const hints = { userAgent: req.headers["user-agent"] ? String(req.headers["user-agent"]).slice(0, 200) : null };
     const adoptSession = (h) => {

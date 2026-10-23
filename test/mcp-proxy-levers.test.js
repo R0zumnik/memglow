@@ -1137,6 +1137,56 @@ test("HTTP proxy with levers: JSON answer gets the suffix with a correct Content
   }
 });
 
+test("HTTP proxy, stateless (no Mcp-Session-Id): the x-memglow-session header shares a dedupe session across DIFFERENT TCP connections; a different header, or none, never shares", async () => {
+  const fx = makeNotes();
+  const cfg = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_MEMORY_DIR: fx.notes, MEMGLOW_DATA_DIR: fx.data, MEMGLOW_LARGE_NOTE_TOKENS: "1000", MEMGLOW_PROXY_DEDUPE: "1" });
+  const engine = L.createLevers({ config: cfg, index: L.createNoteIndex(cfg), savings: L.createSavings({ ...cfg, savingsFile: false, log: false }) });
+  // Long enough that dedupe's stub actually saves tokens (respTokens > the stub's own size).
+  const FULL_TEXT = "permalink: people/alice\n" + "Alice likes gardening and long walks. ".repeat(60);
+  const upstream = http.createServer((req, res) => {
+    let b = ""; req.on("data", (c) => (b += c));
+    req.on("end", () => {
+      const m = JSON.parse(b);
+      const body = JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: FULL_TEXT }] } });
+      res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(body) });
+      res.end(body);
+    });
+  });
+  await new Promise((ok) => upstream.listen(0, "127.0.0.1", ok));
+  const proxy = createHttpProxy({ upstream: `http://127.0.0.1:${upstream.address().port}/mcp`, name: "notes", onReport: () => {}, levers: engine });
+  await new Promise((ok) => proxy.listen(0, "127.0.0.1", ok));
+  const base = `http://127.0.0.1:${proxy.address().port}/mcp`;
+  // Each call on its OWN http.Agent (maxSockets: 1): a stateless client that opens a new TCP
+  // connection per request, exactly what Claude Code does on MCP 2026-07-28.
+  const call = (id, headers, agent) => new Promise((resolve, reject) => {
+    const data = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "read_note", arguments: { identifier: "alice" } } }), "utf8");
+    const req = http.request(base, { method: "POST", agent, headers: { "content-type": "application/json", "content-length": String(data.length), ...headers } }, (res) => {
+      const parts = []; res.on("data", (c) => parts.push(c)); res.on("end", () => resolve(JSON.parse(Buffer.concat(parts).toString("utf8"))));
+    });
+    req.on("error", reject);
+    req.end(data);
+  });
+  const agents = [];
+  const agent = () => { const a = new http.Agent({ keepAlive: true, maxSockets: 1 }); agents.push(a); return a; };
+  try {
+    const r1 = await call(1, { "x-memglow-session": "claude-code-session-aaaa1111" }, agent());
+    assert.strictEqual(r1.result.content[0].text, FULL_TEXT, "first read: full text");
+    const r2 = await call(2, { "x-memglow-session": "claude-code-session-aaaa1111" }, agent());
+    assert.match(r2.result.content[0].text, /^memglow:/, "SAME header, a DIFFERENT connection: dedupe stub — the two calls share a session");
+    const r3 = await call(3, { "x-memglow-session": "zzzz9999-different-session" }, agent());
+    assert.strictEqual(r3.result.content[0].text, FULL_TEXT, "a different header value: its own session, full text again");
+    const r4 = await call(4, { "x-memglow-session": "short" }, agent());
+    assert.strictEqual(r4.result.content[0].text, FULL_TEXT, "an invalid header (too short) is ignored, not treated as a session id");
+    const r5 = await call(5, {}, agent());
+    assert.strictEqual(r5.result.content[0].text, FULL_TEXT, "no header at all: its own (per-connection) session");
+  } finally {
+    for (const a of agents) a.destroy();
+    upstream.closeAllConnections(); upstream.close();
+    proxy.closeAllConnections(); proxy.close();
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
 test("hideUnsupportedTools over HTTP: two simultaneous sessions (Claude Code and ChatGPT) each get their own tools/list, no cross-talk", async () => {
   const fx = makeNotes();
   const cfg = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_MEMORY_DIR: fx.notes, MEMGLOW_DATA_DIR: fx.data, MEMGLOW_PROXY_HIDE_UNSUPPORTED: "1" });
