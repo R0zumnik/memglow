@@ -1962,6 +1962,119 @@ test("hubHint: config default off, env/file override, anyLever()", () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+// orphanHint (0.5.3) — its own small fixture: a hub (linked from the index), a note that already
+// has a DANGLING [[future-note]] link (nothing named that exists yet), and a stand-alone note
+// that is already an orphan today (no links either way, not in the index) — used to prove that
+// an edit, or an overwrite of an EXISTING note, never (retroactively) triggers the hint.
+function makeOrphanNotes() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-orphan-"));
+  const notes = path.join(root, "notes");
+  const w = (rel, s) => { fs.mkdirSync(path.dirname(path.join(notes, rel)), { recursive: true }); fs.writeFileSync(path.join(notes, rel), s); };
+  w("hub.md", "---\ntitle: Hub\ndescription: A hub note\ntheme: projects\n---\nHub body.\n");
+  w("pointer.md", "---\ntitle: Pointer\ndescription: Points at a note not written yet\ntheme: projects\n---\nSee [[future-note]] for details.\n");
+  w("orphan-already.md", "---\ntitle: Already orphan\ndescription: Pre-existing, already linkless, not in the index\ntheme: projects\n---\nNo links here either.\n");
+  w("MEMORY.md", "# Index\n[[hub]] [[pointer]]\n");
+  const home = path.join(root, "home");
+  const data = path.join(root, "data");
+  fs.mkdirSync(home);
+  return { root, notes, home, data, log: path.join(root, "args.log") };
+}
+
+test("orphanHintFor: pure — the one advisory block, naming the note; null for a non-string/empty id", () => {
+  const b = L.orphanHintFor("new-note");
+  assert.strictEqual(b.type, "text");
+  assert.strictEqual(b.text, 'memglow: note [[new-note]] links to nothing and nothing links to it — add an "Up: [[hub]]" line or list it in its hub/index, or it will float alone in the graph.');
+  assert.strictEqual(L.orphanHintFor(""), null);
+  assert.strictEqual(L.orphanHintFor(null), null);
+  assert.strictEqual(L.orphanHintFor(undefined), null);
+  assert.strictEqual(L.orphanHintFor(42), null);
+});
+
+test("orphanHint (opt-in, over stdio): a brand-new note with no outgoing link, and nothing linking to it, gets the advisory line", async () => {
+  const fx = makeOrphanNotes();
+  const c = start(fx, { MEMGLOW_PROXY_ORPHAN_HINT: "1" });
+  try {
+    const r = texts(await c.call("write_note", { title: "new-note", directory: "", content: "Just a plain note, no links at all." }));
+    assert.strictEqual(r.length, 2);
+    assert.match(r[0], /^# Created note/, "upstream's own confirmation, untouched");
+    assert.strictEqual(r[1], 'memglow: note [[new-note]] links to nothing and nothing links to it — add an "Up: [[hub]]" line or list it in its hub/index, or it will float alone in the graph.');
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("orphanHint (opt-in): a new note that LINKS OUT to an existing note is never flagged", async () => {
+  const fx = makeOrphanNotes();
+  const c = start(fx, { MEMGLOW_PROXY_ORPHAN_HINT: "1" });
+  try {
+    const r = texts(await c.call("write_note", { title: "linked-note", directory: "", content: "See [[hub]] for context." }));
+    assert.strictEqual(r.length, 1, "it links out to an existing note: never an orphan");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("orphanHint (opt-in): a new note that something ALREADY links to (a dangling [[wikilink]] this very write resolves) is never flagged", async () => {
+  const fx = makeOrphanNotes();
+  const c = start(fx, { MEMGLOW_PROXY_ORPHAN_HINT: "1" });
+  try {
+    const r = texts(await c.call("write_note", { title: "future-note", directory: "", content: "Here it is at last — no links of its own." }));
+    assert.strictEqual(r.length, 1, "pointer.md already links to it: never an orphan, even though its own body has no links");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("orphanHint (opt-in): an overwrite of an EXISTING, already-linkless note is never flagged — only a BRAND NEW note is checked", async () => {
+  const fx = makeOrphanNotes();
+  const c = start(fx, { MEMGLOW_PROXY_ORPHAN_HINT: "1" });
+  try {
+    const r = texts(await c.call("write_note", { title: "orphan-already", directory: "", content: "Still no links, overwritten.", overwrite: true }));
+    assert.strictEqual(r.length, 1, "the title already named an existing note before this write: never checked");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("orphanHint (opt-in): edit_note is never checked, however linkless the note it targets", async () => {
+  const fx = makeOrphanNotes();
+  const c = start(fx, { MEMGLOW_PROXY_ORPHAN_HINT: "1" });
+  try {
+    const r = texts(await c.call("edit_note", { identifier: "orphan-already", operation: "append", content: "\nstill nothing links here" }));
+    assert.strictEqual(r.length, 1, "edit_note: never orphanHint, even on an already-orphan note");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("orphanHint: off by default — a brand-new note with no links at all gets no hint", async () => {
+  const fx = makeOrphanNotes();
+  const c = start(fx, {});
+  try {
+    const r = texts(await c.call("write_note", { title: "new-note", directory: "", content: "No links." }));
+    assert.strictEqual(r.length, 1);
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("orphanHint (opt-in): writing the SAME title again is never re-flagged (no longer a new note); a genuinely different new note in the same session still is", async () => {
+  const fx = makeOrphanNotes();
+  const c = start(fx, { MEMGLOW_PROXY_ORPHAN_HINT: "1" });
+  try {
+    const first = texts(await c.call("write_note", { title: "new-note", directory: "", content: "No links." }));
+    assert.strictEqual(first.length, 2, "first time: a brand-new, linkless note");
+    const again = texts(await c.call("write_note", { title: "new-note", directory: "", content: "No links, still.", overwrite: true }));
+    assert.strictEqual(again.length, 1, "same title again: no longer a NEW note, never re-checked");
+    const other = texts(await c.call("write_note", { title: "another-new-note", directory: "", content: "No links either." }));
+    assert.strictEqual(other.length, 2, "a genuinely different new note: flagged on its own");
+
+    const logged = fs.readFileSync(fx.log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const writes = logged.filter((e) => e.name === "write_note");
+    assert.strictEqual(writes.length, 3);
+    assert.ok(writes.every((e) => !("memglow_fresh" in e.args)), "orphanHint never adds/changes the write's own arguments");
+  } finally { await c.close(); fs.rmSync(fx.root, { recursive: true, force: true }); }
+});
+
+test("orphanHint: config default off, env/file override, anyLever()", () => {
+  const fx = makeOrphanNotes();
+  const def = L.proxyConfig({ MEMGLOW_HOME: fx.home });
+  assert.strictEqual(def.orphanHint, false, "off by default — a pure, unconditional add on the one note it fires for");
+  const on = L.proxyConfig({ MEMGLOW_HOME: fx.home, MEMGLOW_PROXY_ORPHAN_HINT: "1" });
+  assert.strictEqual(on.orphanHint, true);
+  assert.strictEqual(L.anyLever({ orphanHint: true }), true, "orphanHint alone is enough to turn levers on");
+  fs.rmSync(fx.root, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------------------------
 // Control panel (0.4.7.2): proxyControl() — read-only lever sources for Settings → Control.
 
 test("proxyControl: default / file / env sources, envLocked, day1 flag, and the largeNoteTokens/indexWarningTokens caps", () => {

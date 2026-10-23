@@ -97,8 +97,9 @@ function createAllInOne({ rpc, root, env = process.env, name = "memglow-memory",
   const cfg = lv && lv.config ? lv.config : null;
   const leverWriteTools = new Set(cfg && Array.isArray(cfg.writeTools) ? cfg.writeTools : []);
   // A write the levers' own handleWrite already follows with index.afterWrite() (sizeWarning,
-  // negativeCache or duplicateHint on, tool in proxy.writeTools) needs no second rescan here.
-  const leverRefreshes = !!(cfg && (cfg.negativeCache || cfg.sizeWarning || cfg.duplicateHint));
+  // negativeCache, duplicateHint or orphanHint on, tool in proxy.writeTools) needs no second
+  // rescan here.
+  const leverRefreshes = !!(cfg && (cfg.negativeCache || cfg.sizeWarning || cfg.duplicateHint || cfg.orphanHint));
   const writeTools = new Set(SERVER_WRITE_TOOLS.concat([...leverWriteTools]));
   const needsOwnRefresh = (tool) => writeTools.has(tool) && !(leverRefreshes && leverWriteTools.has(tool));
   let mqN = 0;

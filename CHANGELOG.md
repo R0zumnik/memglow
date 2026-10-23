@@ -15,6 +15,16 @@
   Claude Code `headersHelper` that turns its own `CLAUDE_CODE_SESSION_ID` into that header (plus
   an `Authorization: Bearer` when a token is configured). See README
   "Session identity with Claude Code (headersHelper)".
+- **Lever 18 `orphanHint`** (off by default): after a `write_note` that creates a BRAND NEW note
+  (never an edit, never an overwrite of a note that already existed) memglow's own graph finds no
+  link to or from, either direction — `memglow: note [[<id>]] links to nothing and nothing links
+  to it — add an "Up: [[hub]]" line or list it in its hub/index, or it will float alone in the
+  graph.` Gated the same way as `duplicateHint`/`slugHint`/`hubHint`
+  (`MEMGLOW_PROXY_ORPHAN_HINT` / `proxy.orphanHint`). `lib/levers/orphan-hint.js`;
+  `lib/levers/note-index.js` gained `linked(id)` to answer it. Not added to `server.js`'s
+  `/api/graph` or the control panel: `graph()` already returns every note's links, so an orphan
+  count/list is computable client-side with no backend change, and wiring a new item type into
+  the maintenance panel's rendering/i18n would not have been a small change.
 
 ### Fixed
 
