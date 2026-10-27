@@ -106,8 +106,8 @@ test("audit: R4 — a pure sibling-listing line is removable", () => {
   const r4 = issues.filter((i) => i.rule === "R4");
   assert.strictEqual(r4.length, 1, JSON.stringify(issues));
   assert.strictEqual(r4[0].note, "a");
-  assert.strictEqual(r4[0].fix.type, "remove-line");
-  const built = star.buildFix(r4[0].fix, new Map(notes.map((n) => [n.id, n])));
+  assert.strictEqual(r4[0].fix, null); // 0.5.4: reported only — the worker never deletes a note's line
+  const built = star.buildFix({ type: "remove-line", note: "a", lineIndex: r4[0].lineIndex }, new Map(notes.map((n) => [n.id, n])));
   assert.doesNotMatch(built.after, /See also/);
   assert.match(built.after, /Body of a\./);
 });
