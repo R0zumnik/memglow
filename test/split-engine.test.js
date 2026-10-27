@@ -249,3 +249,13 @@ test("splitNote: read-only server refuses like other writes", async () => {
     assert.match(res.errors[0], /read-only/);
   } finally { srv.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("normalizeSlug: never doubles the hub's own tail (0.5.4, seen in a real AI plan)", () => {
+  const { normalizeSlug } = require("../lib/split-engine");
+  const n = (raw, hub) => normalizeSlug(raw, hub, new Set(), new Set());
+  assert.strictEqual(n("garden-log-2026-jan-may", "project-garden-log-2026"), "project-garden-log-2026-jan-may");
+  assert.strictEqual(n("jan-may", "project-garden-log-2026"), "project-garden-log-2026-jan-may");
+  assert.strictEqual(n("project-garden-log-2026-x", "project-garden-log-2026"), "project-garden-log-2026-x");
+  assert.strictEqual(n("initiatives-silvae", "initiatives-0-synthese-initiatives-design-spec"), "initiatives-0-synthese-initiatives-design-spec-initiatives-silvae");
+  assert.strictEqual(n("2026", "project-garden-log-2026"), "project-garden-log-2026-2026");
+});
