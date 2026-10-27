@@ -183,3 +183,26 @@ test("parsePlan: strips a ```json fence and finds the object even with leading p
   assert.deepStrictEqual(p, { parts: [{ slug: "x" }] });
   assert.throws(() => auto.parsePlan("not json at all"));
 });
+
+test("worker: status() — never the key, reports provider/model/pending/lastScan even when disabled", async () => {
+  const { srv, cleanup } = makeSrv({ "memory/big.md": bigNote() }, {});
+  try {
+    const off = auto.createAutoSplitWorker({ store: srv.store, writer: srv.writer, config: { enabled: false, provider: "anthropic" }, env: {} });
+    const s0 = off.status();
+    assert.strictEqual(s0.enabled, false);
+    assert.strictEqual(s0.provider, "anthropic");
+    assert.strictEqual(s0.keySet, false);
+    assert.strictEqual(s0.lastScanAt, null);
+    assert.ok(!JSON.stringify(s0).toLowerCase().includes("sk-"));
+
+    const on = auto.createAutoSplitWorker({ store: srv.store, writer: srv.writer, config: { enabled: true, thresholdTokens: 200, provider: "anthropic", apiKeyEnv: "FAKE" }, env: { FAKE: "a-fake-key" } });
+    on.noteWritten(["memory/big.md"]);
+    await on.runScan();
+    const s1 = on.status();
+    assert.strictEqual(s1.enabled, true);
+    assert.strictEqual(s1.keySet, true);
+    assert.ok(s1.pendingCount >= 0);
+    assert.strictEqual(typeof s1.lastScanAt, "number");
+    assert.strictEqual(s1.nextScanAt, s1.lastScanAt + auto.DEFAULTS.scanHours * 3600000);
+  } finally { cleanup(); }
+});
