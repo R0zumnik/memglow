@@ -1203,7 +1203,13 @@ re-read and compared right before applying: changed since it was queued, the att
 original single-string `archiveFolder` setting still works as a one-item alias — useful for a
 versioned work document, or any folder the owner wants left whole), and a note with
 `memglow_split: false` in its frontmatter (an explicit opt-out — a manual split still works, only
-the automatic one is off). The AI gets the note's headings (exact text,
+the automatic one is off). **`includeFolders`** (an array of folder prefixes relative to the KB
+root) is the other side of the same coin: when the KB root holds the memory folder ALONGSIDE
+other, unrelated content (a one-way-synced project's own docs, say) and only the memory itself
+should ever be touched, set it explicitly; left unset, it defaults to the folder that holds the
+index note (`indexNote`, e.g. `MEMORY.md` living under `memory/` scopes everything to
+`memory/**`), or to the whole KB root when the index note itself lives there. An explicit
+`includeFolders` always wins over that default. The AI gets the note's headings (exact text,
 level, ≈tokens) and a secret-masked preview of its untitled intro — never the whole body verbatim
 — and answers with a strict JSON plan (parts, each a few existing headings to move, a short
 English description and hook); a plan the engine refuses is retried once with its exact errors,
@@ -1239,10 +1245,13 @@ by hand (`buildFix()` still knows "replace-index-line"/"remove-line" for that) o
 `split_plan`'s own instruction.
 
 **Exclusions**: `excludeFolders` (an array of folder prefixes relative to the KB root, default
-`["archive"]`; `archiveFolder`, a single string, still works as a one-item alias) — shared with
-[auto-split](#auto-split) above, so a folder the owner wants left whole (a versioned work
-document, say) is never scanned, fixed, or reported as an orphan by either worker. A note's own
-`memglow_split: false` is honoured by both too.
+`["archive"]`; `archiveFolder`, a single string, still works as a one-item alias) and
+`includeFolders` (unset = scoped to the index note's own folder, see [auto-split](#auto-split)
+above for the exact default rule) — both shared with auto-split, so a folder the owner wants left
+whole (a versioned work document, say) is never scanned, fixed, or reported as an orphan by either
+worker, and content outside the memory itself (synced project docs living at the same KB root)
+never gets flagged as an "orphan" in the first place. A note's own `memglow_split: false` is
+honoured by both too.
 
 **AI judgement for the two genuinely ambiguous cases** — an R5 orphan (no obvious hub) and an R3
 note two or more hubs' own `## Parts` both list — off unless `structure.ai.enabled` **and** a
@@ -1259,12 +1268,18 @@ up on that note and logs it. At most `structure.ai.maxDecisionsPerScan` (default
 
 **Visibility**: `GET /api/maintenance` on the memory server's own HTTP port (same auth as every
 other request there) answers `{ autoSplit: {enabled, provider, model, keySet, thresholdTokens,
-pendingCount, lastScanAt, nextScanAt, recent}, structure: {enabled, ai, issues, lastScanAt,
-nextScanAt, recent} }` — never the key itself, only whether one resolved. The viewer's own
-Settings → Control panel shows it too (next to the existing "Memory server" health card) when
-`MEMGLOW_MEMORY_URL` points at it, and `memory_core`'s answer always ends with one line,
-`maintenance: N structure issue(s), M note(s) over threshold (auto-split on/off).`, win or lose,
-so the AI reading its own memory sees the state without a separate call.
+pendingCount, lastScanAt, nextScanAt, lastError, recent}, structure: {enabled, ai, issues,
+lastScanAt, nextScanAt, lastError, recent} }` — never the key itself, only whether one resolved.
+`lastError` is `null` until a worker's AI call fails with a bad credential (401/403/"invalid
+bearer token"/"failed to authenticate"/"unauthorized", any provider — `lib/ai-provider.js`'s
+`isAuthError()`): at that point the worker stops the rest of that scan outright (no point retrying
+every remaining candidate against the same dead key) and `lastError` becomes `{t, message}` —
+timestamp plus the provider's own (truncated) error text — and stays set until the process is
+restarted with a fixed credential. The viewer's own Settings → Control panel shows it too (next to
+the existing "Memory server" health card) when `MEMGLOW_MEMORY_URL` points at it — a worker's
+`lastError`, if any, as its own warning line — and `memory_core`'s answer always ends with one
+line, `maintenance: N structure issue(s), M note(s) over threshold (auto-split on/off).`, win or
+lose, so the AI reading its own memory sees the state without a separate call.
 
 #### Running the `claude-code` provider in Docker
 

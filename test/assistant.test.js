@@ -216,6 +216,24 @@ test("claude-code parser: stream-json deltas and result", () => {
   assert.strictEqual(ev2[0].ok, true);
 });
 
+test("claude-code parser (0.5.4 bug fix): is_error:true with subtype:\"success\" reports the actual result text (e.g. an auth failure), never the misleading subtype alone", () => {
+  const p = claudeCode._createParser();
+  const ev = p.push('{"type":"result","is_error":true,"subtype":"success","result":"Failed to authenticate. API Error: 401 Invalid bearer token"}\n');
+  assert.strictEqual(ev[0].ok, false);
+  assert.strictEqual(ev[0].error, "Failed to authenticate. API Error: 401 Invalid bearer token");
+  assert.notStrictEqual(ev[0].error, "success");
+  // No result text at all: still falls back to the subtype, trimmed/capped the same as before.
+  const p2 = claudeCode._createParser();
+  const ev2 = p2.push('{"type":"result","is_error":true,"subtype":"error_max_turns","result":""}\n');
+  assert.strictEqual(ev2[0].ok, false);
+  assert.strictEqual(ev2[0].error, "error_max_turns");
+  // A long result is capped at 300 characters.
+  const p3 = claudeCode._createParser();
+  const long = "x".repeat(400);
+  const ev3 = p3.push(JSON.stringify({ type: "result", is_error: true, subtype: "success", result: long }) + "\n");
+  assert.strictEqual(ev3[0].error.length, 300);
+});
+
 // ------------------------------------------------------------------ hostile proposals
 
 test("assistant: hostile or broken proposals are refused, nothing written", async () => {

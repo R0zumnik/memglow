@@ -57,6 +57,9 @@ var EN_CONTROL = {
   "control.autoSplitOff": "Auto-split: off",
   "control.structureOn": { one: "Structure guardian: on — {n} issue found", other: "Structure guardian: on — {n} issues found" },
   "control.structureOff": "Structure guardian: off",
+  "control.workerAutoSplit": "Auto-split",
+  "control.workerStructure": "Structure guardian",
+  "control.workerAuthError": "{worker}: stopped — auth error: {message}",
   "control.measuresEmpty": "No measurements yet.",
   "control.byClientTitle": "By AI tool (7 days)",
   "control.byLeverTitle": "By lever (7 days)",
@@ -295,7 +298,13 @@ function controlRenderMaintenanceWorkers(mm, T) {
     ? T("control.autoSplitOn", { n: as.pendingCount || 0, provider: as.provider || "?", model: as.model || "?" })
     : T("control.autoSplitOff");
   const stLine = st.enabled ? T("control.structureOn", { n: st.issues || 0 }) : T("control.structureOff");
-  return '<p class="mg-control__line">' + cEsc(asLine) + '</p><p class="mg-control__line">' + cEsc(stLine) + '</p>';
+  var out = '<p class="mg-control__line">' + cEsc(asLine) + '</p><p class="mg-control__line">' + cEsc(stLine) + '</p>';
+  // 0.5.4: a worker that already gave up on a bad credential for the rest of its process
+  // lifetime (see lib/ai-provider.js's isAuthError()) — shown so Florent notices instead of the
+  // worker silently doing nothing until the server restarts with a fixed key.
+  if (as.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerAutoSplit"), message: as.lastError.message || "?" })) + '</p>';
+  if (st.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerStructure"), message: st.lastError.message || "?" })) + '</p>';
+  return out;
 }
 
 /** The "Measures" section: per-AI-tool tokens relayed (GET /api/cost's clientTokens) + the proxy-seen badge. */

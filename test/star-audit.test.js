@@ -258,12 +258,38 @@ test("createStructureWorker (0.5.4): excludeFolders — a versioned-document fol
   } finally { cleanup(); }
 });
 
-test("structureSettings: off by default, MEMGLOW_AUTO_STRUCTURE=1 turns it on; excludeFolders shared resolution (archiveFolder alias, default)", () => {
+test("createStructureWorker (0.5.4 bug fix): SCOPE — a KB root with memory/ (the memory, with its index note) plus one-way-synced workspace/ and infra-acces/ folders — only memory/ is scanned, fixed, or flagged, by default", async () => {
+  const { root, srv, cleanup } = makeSrv({
+    "memory/MEMORY.md": "---\ntitle: MEMORY\ntype: index\n---\n\n- [[hub]] — the hub\n",
+    "memory/hub.md": "---\ntitle: hub\n---\n\n## Parts\n- [[loose]] — a loose note\n",
+    "memory/loose.md": "---\ntitle: loose\n---\n\nBody.\n",
+    "workspace/doc.md": "---\ntitle: doc\n---\n\nSome synced project doc, unrelated to the memory, never flagged as an orphan.\n",
+    "infra-acces/x.md": "---\ntitle: x\n---\n\nAnother synced doc.\n",
+  });
+  try {
+    const w = star.createStructureWorker({ store: srv.store, writer: srv.writer, config: { enabled: true }, indexNote: ["MEMORY", "index"] });
+    const applied = await w.scanOnce();
+    assert.ok(applied.some((a) => a.note === "loose"), "memory/ itself is still fixed normally");
+    const indexId = star.indexIdOf(srv.store, ["MEMORY", "index"]);
+    const notesAll = star.recordsFrom(srv.store.notes());
+    const issuesUnfiltered = star.audit({ notes: notesAll, indexId, archiveFolder: "archive" });
+    assert.ok(issuesUnfiltered.some((i) => i.rule === "R5" && (i.note === "doc" || i.note === "x")), "sanity: without scoping, the synced docs WOULD be flagged as orphans");
+    assert.ok(!applied.some((a) => a.note === "doc" || a.note === "x"), "but the worker itself never touches or flags them");
+    assert.strictEqual(fs.readFileSync(path.join(root, "workspace/doc.md"), "utf8"), "---\ntitle: doc\n---\n\nSome synced project doc, unrelated to the memory, never flagged as an orphan.\n");
+    assert.strictEqual(fs.readFileSync(path.join(root, "infra-acces/x.md"), "utf8"), "---\ntitle: x\n---\n\nAnother synced doc.\n");
+    const s = w.status();
+    assert.strictEqual(s.issues.byRule.R5 || 0, 0, "no orphan reported at all once scoped to memory/");
+  } finally { cleanup(); }
+});
+
+test("structureSettings: off by default, MEMGLOW_AUTO_STRUCTURE=1 turns it on; excludeFolders/includeFolders shared resolution (archiveFolder alias, default)", () => {
   assert.strictEqual(star.structureSettings({}, {}).enabled, false);
   assert.strictEqual(star.structureSettings({}, { MEMGLOW_AUTO_STRUCTURE: "1" }).enabled, true);
   assert.deepStrictEqual(star.structureSettings({}, {}).excludeFolders, ["archive"]);
   assert.deepStrictEqual(star.structureSettings({ archiveFolder: "memory/archive" }, {}).excludeFolders, ["memory/archive"]);
   assert.deepStrictEqual(star.structureSettings({ archiveFolder: "memory/archive", excludeFolders: ["a", "b"] }, {}).excludeFolders, ["a", "b"]);
+  assert.strictEqual(star.structureSettings({}, {}).includeFolders, null, "no explicit includeFolders: resolved at scan time instead");
+  assert.deepStrictEqual(star.structureSettings({ includeFolders: ["memory"] }, {}).includeFolders, ["memory"]);
 });
 
 // ------------------------------------------------------------------ AI judgement (R5 / ambiguous R3)
@@ -395,6 +421,50 @@ test("judgeIssues: a note claimed by 2+ hubs' own \"## Parts\" (ambiguous R3) is
     // only loose.md itself needs a change (part_of + Up); hub-a.md is untouched.
     assert.strictEqual(applied.length, 1);
     assert.match(fs.readFileSync(path.join(root, "memory/loose.md"), "utf8"), /part_of: hub-a/);
+  } finally { cleanup(); }
+});
+
+test("judgeIssues (0.5.4 bug fix): an auth error stops the REST of this call's candidates at once (never retried, never hammered per candidate), surfaced as .authError", async () => {
+  const { root, srv, cleanup } = makeSrv({
+    "memory/orphan1.md": "---\ntitle: orphan1\n---\n\nNobody links here.\n",
+    "memory/orphan2.md": "---\ntitle: orphan2\n---\n\nNobody links here either.\n",
+  });
+  try {
+    const cfg = star.structureSettings({ ai: { enabled: true } }, {});
+    const indexId = star.indexIdOf(srv.store, ["MEMORY", "index"]);
+    const notes = star.recordsFrom(srv.store.notes());
+    const issues = star.audit({ notes, indexId, archiveFolder: "archive" });
+    assert.strictEqual(issues.filter((i) => i.rule === "R5").length, 2);
+    let calls = 0;
+    const logs = [];
+    const applied = await star.judgeIssues({
+      store: srv.store, writer: srv.writer, cfg, env: {}, dataDir: null, log: (s) => logs.push(s), indexId, notes, issues,
+      aiRun: async () => { calls++; return { ok: false, error: "The API key was refused by api.anthropic.com (HTTP 401): check the key you set for memglow." }; },
+    });
+    assert.strictEqual(calls, 1, "no retry for an auth error, and the second orphan is never even attempted");
+    assert.ok(applied.authError, "surfaced on the returned array");
+    assert.match(applied.authError, /401/);
+    assert.ok(logs.some((l) => /auth error/.test(l)));
+    assert.strictEqual(fs.readFileSync(path.join(root, "memory/orphan1.md"), "utf8"), "---\ntitle: orphan1\n---\n\nNobody links here.\n", "nothing written");
+  } finally { cleanup(); }
+});
+
+test("createStructureWorker (0.5.4 bug fix): an auth error from the AI judgement pass becomes a persistent status().lastError, and the AI pass is skipped on every later scan", async () => {
+  const { srv, cleanup } = makeSrv({
+    "memory/orphan1.md": "---\ntitle: orphan1\n---\n\nNobody links here.\n",
+  });
+  try {
+    let calls = 0;
+    const w = star.createStructureWorker({
+      store: srv.store, writer: srv.writer, config: { enabled: true, ai: { enabled: true } },
+      aiRun: async () => { calls++; return { ok: false, error: "Failed to authenticate. API Error: 401 Invalid bearer token" }; },
+    });
+    await w.scanOnce();
+    assert.strictEqual(calls, 1);
+    assert.ok(w.status().lastError);
+    assert.match(w.status().lastError.message, /401|authenticate/);
+    await w.scanOnce();
+    assert.strictEqual(calls, 1, "a later scan's AI pass is skipped outright once a bad credential was seen");
   } finally { cleanup(); }
 });
 

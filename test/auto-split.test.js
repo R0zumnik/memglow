@@ -91,6 +91,112 @@ test("worker: debounce — a note just written is not split until idleMinutes ha
   } finally { cleanup(); }
 });
 
+test("worker (0.5.4 bug fix): a note found by the periodic SCAN waits idleMinutes from its own file mtime, not from when the scan ran", async () => {
+  const now0 = Date.parse("2026-02-01T12:00:00Z");
+  // Case A: modified 5 minutes before "now" — not eligible yet, not even 24 more minutes later;
+  // eligible once 30 full minutes have passed since that mtime.
+  {
+    const { root, srv, cleanup } = makeSrv({ "memory/big.md": bigNote() }, {});
+    try {
+      const abs = path.join(root, "memory/big.md");
+      const mtime = (now0 - 5 * 60000) / 1000;
+      fs.utimesSync(abs, mtime, mtime);
+      srv.store.scan();
+      let now = now0, aiCalls = 0;
+      const w = auto.createAutoSplitWorker({
+        store: srv.store, writer: srv.writer, now: () => now,
+        config: { enabled: true, thresholdTokens: 200, idleMinutes: 30, provider: "anthropic", apiKeyEnv: "FAKE" }, env: { FAKE: "k" },
+        aiRun: async () => { aiCalls++; return { ok: true, text: JSON.stringify({ parts: [{ slug: "big-alpha", description: "d", sections: ["Alpha"] }] }) }; },
+      });
+      await w.runScan();
+      assert.strictEqual(w.pendingCount(), 1);
+      await w.tick();
+      assert.strictEqual(aiCalls, 0, "5 minutes old: not idle yet (scan just ran, but that is not the clock that matters)");
+      now += 24 * 60000; // 29 minutes since mtime
+      await w.tick();
+      assert.strictEqual(aiCalls, 0, "still short of the full 30 minutes since the file's own mtime");
+      now += 2 * 60000; // 31 minutes since mtime
+      await w.tick();
+      assert.strictEqual(aiCalls, 1, "now idle long enough since the real last edit");
+    } finally { cleanup(); }
+  }
+  // Case B: modified 2 hours before "now" (the common case for most of an established KB on
+  // every restart) — already idle, eligible on the very first tick after the scan.
+  {
+    const { root, srv, cleanup } = makeSrv({ "memory/big.md": bigNote() }, {});
+    try {
+      const abs = path.join(root, "memory/big.md");
+      const mtime = (now0 - 2 * 3600000) / 1000;
+      fs.utimesSync(abs, mtime, mtime);
+      srv.store.scan();
+      let aiCalls = 0;
+      const w = auto.createAutoSplitWorker({
+        store: srv.store, writer: srv.writer, now: () => now0,
+        config: { enabled: true, thresholdTokens: 200, idleMinutes: 30, provider: "anthropic", apiKeyEnv: "FAKE" }, env: { FAKE: "k" },
+        aiRun: async () => { aiCalls++; return { ok: true, text: JSON.stringify({ parts: [{ slug: "big-alpha", description: "d", sections: ["Alpha"] }] }) }; },
+      });
+      await w.runScan();
+      await w.tick();
+      assert.strictEqual(aiCalls, 1, "2 hours old: already idle, eligible at once");
+    } finally { cleanup(); }
+  }
+});
+
+test("worker (0.5.4): runScan() re-seeing an already-pending note (a recent write) keeps the LATER of the write clock and the file's mtime", async () => {
+  const { root, srv, cleanup } = makeSrv({ "memory/big.md": bigNote() }, {});
+  try {
+    const abs = path.join(root, "memory/big.md");
+    let now = Date.parse("2026-02-01T12:00:00Z");
+    let aiCalls = 0;
+    const w = auto.createAutoSplitWorker({
+      store: srv.store, writer: srv.writer, now: () => now,
+      config: { enabled: true, thresholdTokens: 200, idleMinutes: 30, provider: "anthropic", apiKeyEnv: "FAKE" }, env: { FAKE: "k" },
+      aiRun: async () => { aiCalls++; return { ok: true, text: JSON.stringify({ parts: [{ slug: "big-alpha", description: "d", sections: ["Alpha"] }] }) }; },
+    });
+    // A write just registered it (since = now, very fresh) — but the file's mtime on disk is
+    // from HOURS ago (a write that predates this worker's own clock reference, or a filesystem
+    // that updates mtime lazily). runScan() re-seeing it must keep the FRESH ("now") signal, not
+    // let the older mtime make it look idle sooner than it really is.
+    const oldMtime = (now - 3 * 3600000) / 1000;
+    fs.utimesSync(abs, oldMtime, oldMtime);
+    srv.store.scan();
+    w.noteWritten(["memory/big.md"]);
+    await w.runScan();
+    now += 60000; // 1 minute later: nowhere near 30 minutes since the WRITE
+    await w.tick();
+    assert.strictEqual(aiCalls, 0, "the write's own fresh timestamp must win, not the stale mtime");
+    now += 30 * 60000; // now 31 minutes since the write
+    await w.tick();
+    assert.strictEqual(aiCalls, 1, "idle long enough since the write");
+  } finally { cleanup(); }
+});
+
+test("worker (0.5.4 bug fix): an auth error stops the rest of the scan at once (never retried, never hammered per candidate) and surfaces in status().lastError", async () => {
+  const { srv, cleanup } = makeSrv({ "memory/a.md": bigNote(), "memory/b.md": bigNote("b") }, {});
+  try {
+    let now = Date.parse("2026-03-01T00:00:00Z");
+    let aiCalls = 0;
+    const w = auto.createAutoSplitWorker({
+      store: srv.store, writer: srv.writer, now: () => now,
+      config: { enabled: true, thresholdTokens: 200, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, env: { FAKE: "k" },
+      aiRun: async () => { aiCalls++; return { ok: false, error: "Failed to authenticate. API Error: 401 Invalid bearer token" }; },
+    });
+    w.noteWritten(["memory/a.md", "memory/b.md"]);
+    assert.strictEqual(w.pendingCount(), 2);
+    await w.tick();
+    assert.strictEqual(aiCalls, 1, "no retry for an auth error — it is never going to fix itself");
+    assert.ok(w.status().lastError, "surfaced in status()");
+    assert.match(w.status().lastError.message, /401|bearer token/);
+    assert.strictEqual(typeof w.status().lastError.t, "number");
+    // The rest of this scan (the second candidate) is never even attempted.
+    now += 60000;
+    await w.tick();
+    await w.tick();
+    assert.strictEqual(aiCalls, 1, "stopped for good: every later tick is a no-op once a bad credential was seen");
+    assert.strictEqual(w.pendingCount(), 2, "both notes stay queued (informative), neither is dropped nor split");
+  } finally { cleanup(); }
+});
+
 test("worker: a refused plan is retried once with the engine's errors, then gives up and logs", async () => {
   const { srv, cleanup } = makeSrv({ "memory/big.md": bigNote() }, {});
   try {
@@ -190,6 +296,50 @@ test("underExcluded / sanitizeExcludeFolders: exact folder match, nested prefix 
   assert.deepStrictEqual(auto.sanitizeExcludeFolders(["a", "a", "b"], null), ["a", "b"]);
   assert.deepStrictEqual(auto.sanitizeExcludeFolders([], null), auto.DEFAULT_EXCLUDE_FOLDERS);
   assert.deepStrictEqual(auto.sanitizeExcludeFolders(["/a/", "b//"], null), ["a", "b"], "leading/trailing slashes trimmed");
+});
+
+test("underIncluded / sanitizeIncludeFolders / defaultIncludeFolders: no restriction by default, explicit list, index-note-folder default", () => {
+  // underIncluded: null/empty folders = everything in scope (opposite default from underExcluded).
+  assert.strictEqual(auto.underIncluded("workspace/doc.md", null), true);
+  assert.strictEqual(auto.underIncluded("workspace/doc.md", []), true);
+  assert.strictEqual(auto.underIncluded("memory/MEMORY.md", ["memory"]), true);
+  assert.strictEqual(auto.underIncluded("memory/sub/x.md", ["memory"]), true);
+  assert.strictEqual(auto.underIncluded("workspace/doc.md", ["memory"]), false);
+  assert.strictEqual(auto.underIncluded("memoryish/x.md", ["memory"]), false, "\"memoryish\" must not match the \"memory\" prefix");
+
+  assert.strictEqual(auto.sanitizeIncludeFolders(null), null);
+  assert.strictEqual(auto.sanitizeIncludeFolders([]), null);
+  assert.deepStrictEqual(auto.sanitizeIncludeFolders(["/memory/", "memory"]), ["memory"], "trimmed and deduped");
+
+  const fakeStore = { resolve: (name) => (name === "MEMORY" ? { dir: "memory" } : null) };
+  assert.deepStrictEqual(auto.defaultIncludeFolders(fakeStore, ["MEMORY", "index"]), ["memory"]);
+  const rootIndexStore = { resolve: (name) => (name === "MEMORY" ? { dir: "" } : null) };
+  assert.strictEqual(auto.defaultIncludeFolders(rootIndexStore, ["MEMORY", "index"]), null, "the index note at the KB root means everything is in scope");
+  const noIndexStore = { resolve: () => null };
+  assert.strictEqual(auto.defaultIncludeFolders(noIndexStore, ["MEMORY", "index"]), null);
+
+  assert.deepStrictEqual(auto.effectiveIncludeFolders({ includeFolders: ["a", "b"] }, fakeStore, ["MEMORY"]), ["a", "b"], "an explicit includeFolders always wins outright over the index-note default");
+});
+
+test("worker (0.5.4 bug fix): SCOPE — a KB root with memory/ (the memory, with its index note) plus one-way-synced workspace/ and infra-acces/ folders — only memory/ is ever touched or flagged, by default (no includeFolders needed)", async () => {
+  const { root, srv, cleanup } = makeSrv({
+    "memory/MEMORY.md": "---\ntitle: MEMORY\ntype: index\n---\n\n" + "padding ".repeat(400),
+    "memory/normal.md": bigNote(),
+    "workspace/doc.md": bigNote(),
+    "infra-acces/x.md": bigNote(),
+  }, {});
+  try {
+    const w = auto.createAutoSplitWorker({ store: srv.store, writer: srv.writer, config: { enabled: true, thresholdTokens: 200 }, indexNote: ["MEMORY", "index"] });
+    await w.runScan();
+    assert.strictEqual(w.pendingCount(), 1, "only memory/normal.md — workspace/ and infra-acces/ are out of scope entirely");
+    w.noteWritten(["workspace/doc.md", "infra-acces/x.md", "memory/normal.md"]);
+    assert.strictEqual(w.pendingCount(), 1, "a write to the synced docs is not queued either");
+
+    // An explicit includeFolders widens (or narrows) the scope outright.
+    const w2 = auto.createAutoSplitWorker({ store: srv.store, writer: srv.writer, config: { enabled: true, thresholdTokens: 200, includeFolders: ["workspace"] }, indexNote: ["MEMORY", "index"] });
+    await w2.runScan();
+    assert.strictEqual(w2.pendingCount(), 1, "explicit includeFolders wins: only workspace/ now");
+  } finally { cleanup(); }
 });
 
 test("worker: a real end-to-end split through the injected aiRun — the note is actually split on disk", async () => {

@@ -136,12 +136,16 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
   /** ISO 8601, or null — timestamps in the public answer are always strings, never raw epoch ms. */
   const iso = (ms) => (typeof ms === "number" ? new Date(ms).toISOString() : null);
   const recentOf = (w) => (w && w.recentEvents ? w.recentEvents().slice(-10).map((e) => ({ t: iso(e.t), kind: e.kind, note: e.note, detail: e.detail })) : []);
+  // 0.5.4: a bad credential (never fixed by retrying) a worker already gave up on for the rest
+  // of its process lifetime — {t: ISO string, message} | null. Never raw epoch ms, same as
+  // lastScanAt/nextScanAt below.
+  const errorOf = (e) => (e ? { t: iso(e.t), message: e.message } : null);
   function maintenanceStatus() {
-    const as = autoSplit && autoSplit.status ? autoSplit.status() : { enabled: false, provider: "", model: "", keySet: false, thresholdTokens: 0, pendingCount: 0, lastScanAt: null, nextScanAt: null };
-    const st = structure && structure.status ? structure.status() : { enabled: false, ai: { enabled: false, provider: "", model: "" }, issues: { total: 0, fixable: 0, needsReview: 0, byRule: {} }, lastScanAt: null, nextScanAt: null };
+    const as = autoSplit && autoSplit.status ? autoSplit.status() : { enabled: false, provider: "", model: "", keySet: false, thresholdTokens: 0, pendingCount: 0, lastScanAt: null, nextScanAt: null, lastError: null };
+    const st = structure && structure.status ? structure.status() : { enabled: false, ai: { enabled: false, provider: "", model: "" }, issues: { total: 0, fixable: 0, needsReview: 0, byRule: {} }, lastScanAt: null, nextScanAt: null, lastError: null };
     return {
-      autoSplit: { ...as, lastScanAt: iso(as.lastScanAt), nextScanAt: iso(as.nextScanAt), recent: recentOf(autoSplit) },
-      structure: { ...st, lastScanAt: iso(st.lastScanAt), nextScanAt: iso(st.nextScanAt), recent: recentOf(structure) },
+      autoSplit: { ...as, lastScanAt: iso(as.lastScanAt), nextScanAt: iso(as.nextScanAt), lastError: errorOf(as.lastError), recent: recentOf(autoSplit) },
+      structure: { ...st, lastScanAt: iso(st.lastScanAt), nextScanAt: iso(st.nextScanAt), lastError: errorOf(st.lastError), recent: recentOf(structure) },
     };
   }
 

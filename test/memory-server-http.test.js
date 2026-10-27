@@ -209,13 +209,15 @@ test("HTTP /api/maintenance (0.5.4): the auto-split/structure workers' status, g
     assert.strictEqual(r.status, 200);
     const j = await r.json();
     assert.deepStrictEqual(Object.keys(j).sort(), ["autoSplit", "structure"]);
-    assert.deepStrictEqual(Object.keys(j.autoSplit).sort(), ["enabled", "keySet", "lastScanAt", "model", "nextScanAt", "pendingCount", "provider", "recent", "thresholdTokens"]);
+    assert.deepStrictEqual(Object.keys(j.autoSplit).sort(), ["enabled", "keySet", "lastError", "lastScanAt", "model", "nextScanAt", "pendingCount", "provider", "recent", "thresholdTokens"]);
     assert.strictEqual(j.autoSplit.enabled, true);
     assert.strictEqual(j.autoSplit.provider, "anthropic");
     assert.strictEqual(j.autoSplit.keySet, false, "SOME_KEY is not actually set in the environment");
+    assert.strictEqual(j.autoSplit.lastError, null, "0.5.4: present but null until a worker actually hits a bad credential");
     assert.ok(Array.isArray(j.autoSplit.recent));
-    assert.deepStrictEqual(Object.keys(j.structure).sort(), ["ai", "enabled", "issues", "lastScanAt", "nextScanAt", "recent"]);
+    assert.deepStrictEqual(Object.keys(j.structure).sort(), ["ai", "enabled", "issues", "lastError", "lastScanAt", "nextScanAt", "recent"]);
     assert.strictEqual(j.structure.enabled, true);
+    assert.strictEqual(j.structure.lastError, null);
     assert.strictEqual(typeof j.structure.issues.total, "number");
     assert.ok(!JSON.stringify(j).includes("SOME_KEY"), "never the api key env var name's value, and no key anywhere in the answer");
   } finally { server.close(); srv.close(); kb.cleanup(); }
@@ -229,7 +231,32 @@ test("HTTP /api/maintenance (0.5.4): the auto-split/structure workers' status, g
     const j2 = await (await fetch(`http://127.0.0.1:${server2.address().port}/api/maintenance`)).json();
     assert.strictEqual(j2.autoSplit.enabled, false);
     assert.strictEqual(j2.structure.enabled, false);
+    assert.strictEqual(j2.autoSplit.lastError, null, "0.5.4: fallback default shape also carries the field");
+    assert.strictEqual(j2.structure.lastError, null);
   } finally { server2.close(); srv2.close(); kb2.cleanup(); }
+});
+
+test("HTTP /api/maintenance (0.5.4 bug fix): a worker's lastError (epoch ms + message) is reported as ISO + message, same shape as lastScanAt", async () => {
+  const kb = makeKb();
+  const srv = createMemoryServer({
+    root: kb.root, readOnly: false, watch: false, pollMs: 0,
+    autoSplit: { enabled: true, provider: "anthropic", apiKeyEnv: "SOME_KEY" },
+    structure: { enabled: true },
+  });
+  // Simulate what a worker does internally after isAuthError() fires: status() starts
+  // returning a lastError. We fake it here by monkey-patching status(), since driving a real
+  // auth error end-to-end through the AI provider is already covered by
+  // test/auto-split.test.js and test/star-audit.test.js at the worker level — this test only
+  // checks the HTTP layer's conversion/passthrough.
+  const t = Date.parse("2026-10-27T12:00:00Z");
+  const origAs = srv.autoSplit.status.bind(srv.autoSplit);
+  srv.autoSplit.status = () => ({ ...origAs(), lastError: { t, message: "Failed to authenticate. API Error: 401 Invalid bearer token" } });
+  const server = createHttpServer({ rpc: srv.rpc, store: srv.store, readOnly: false, autoSplit: srv.autoSplit, structure: srv.structure });
+  await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
+  try {
+    const j = await (await fetch(`http://127.0.0.1:${server.address().port}/api/maintenance`)).json();
+    assert.deepStrictEqual(j.autoSplit.lastError, { t: new Date(t).toISOString(), message: "Failed to authenticate. API Error: 401 Invalid bearer token" });
+  } finally { server.close(); srv.close(); kb.cleanup(); }
 });
 
 test("concurrency: 20 parallel searches all complete, even while another client's upload is stalled mid-body", async () => {

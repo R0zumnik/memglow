@@ -187,6 +187,18 @@ test("control.js: controlRenderMaintenanceWorkers (0.5.4) — auto-split/structu
   assert.match(offHtml, /Structure guardian: on — 1 issue found/);
 });
 
+test("control.js: controlRenderMaintenanceWorkers (0.5.4 bug fix) — a worker's lastError becomes a visible warning line, named per worker", () => {
+  const T = controlPage.defaultControlT;
+  const html = controlPage.controlRenderMaintenanceWorkers({
+    configured: true, ok: true,
+    autoSplit: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5", pendingCount: 1, lastError: { t: "2026-10-27T12:00:00.000Z", message: "Failed to authenticate. API Error: 401 Invalid bearer token" } },
+    structure: { enabled: true, issues: 0, lastError: null },
+  }, T);
+  assert.match(html, /mg-control__line--bad/);
+  assert.match(html, /Auto-split: stopped — auth error: Failed to authenticate\. API Error: 401 Invalid bearer token/);
+  assert.ok((html.match(/mg-control__line--bad/g) || []).length === 1, "only autoSplit has a lastError here, structure stays silent");
+});
+
 test("i18n: defaultT helpers resolve English outside a browser (Node require, no window)", () => {
   assert.strictEqual(appPage.defaultT("theme.index"), "Index");
   assert.strictEqual(appPage.defaultT("stats.notesWord", { n: 1 }), "note");

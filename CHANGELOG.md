@@ -138,6 +138,56 @@ excludeFolders), `test/auto-split.test.js` (+2, excludeFolders/underExcluded), `
 engine.test.js` (slug normalisation/prefixing/dedup, title == slug; 2 existing tests updated for
 the new normalise-don't-reject behaviour). Full suite (968 tests) green.
 
+Found running 0.5.4 in production on the real memory (not a copy, this time) — three more bugs:
+
+- **SCOPE: both workers scanned the whole KB root, not just the memory.** The production KB root
+  holds `memory/` (the actual memory, index at `memory/MEMORY.md`) alongside one-way-synced
+  project docs (`infra-acces/`, `workspace/`) that are files of OTHER projects, not memglow's own
+  notes — the structure guardian reported 120 "orphans" (every synced doc, none of them actually
+  wrong) and auto-split queued 5 synced `workspace/` documents (splitting a doc a sync job also
+  owns fights the sync). New `includeFolders: [folder, …]` — the mirror of `excludeFolders`,
+  shared the same way (`lib/auto-split.js`'s `sanitizeIncludeFolders()`/`underIncluded()`/
+  `defaultIncludeFolders()`/`effectiveIncludeFolders()`, reused by `lib/star-audit.js`). Unset, it
+  defaults to the folder that holds the index note (`indexNote`, e.g. `MEMORY.md` under `memory/`
+  → only `memory/**` is ever in scope); an index note at the KB root itself defaults to
+  everything, same as before. An explicit `includeFolders` always wins over the default.
+- **IDLE NOT RESPECTED for notes found by the periodic scan.** A note the daily scan picked up
+  could be split on the very next tick, even with `idleMinutes: 30` configured, because the scan
+  armed its debounce clock from "now" instead of the note's own file mtime — a note the scan had
+  just noticed (not one memglow itself had just written) got no quiet period at all. `runScan()`
+  now seeds `pending` from the note's real mtime, so eligibility is `(now − mtime) ≥ idleMinutes`
+  for a scan-found note; a write-triggered note still debounces from the moment of OUR OWN write
+  (unaffected). A note already pending from both triggers keeps the LATER of the two clocks (most
+  conservative: never split earlier than either trigger alone would allow).
+- **ERROR TEXT, and no circuit breaker on a bad credential.** The claude-code provider's parser
+  logged `{is_error:true, subtype:"success", result:"Failed to authenticate. API Error: 401
+  Invalid bearer token"}` as `"failed: success"` — `subtype` is the CLI's own *turn* classifier,
+  not an error reason, and was being used as one. `lib/assistant/providers/claude-code.js` now
+  reports the trimmed `result` text (≤300 chars) on `is_error`, falling back to `subtype` only
+  when `result` is empty. A bad/expired credential also used to be retried for every single
+  candidate of a scan (one HTTP 401 per note, uselessly). New `lib/ai-provider.js`'s
+  `isAuthError(message)` (401/403/"invalid bearer token"/"failed to authenticate"/"unauthorized",
+  provider-agnostic) is checked by both workers right after a failed AI call: on a match, the rest
+  of THAT scan stops immediately (no further candidates attempted) and a persistent
+  `status().lastError: {t, message}` is set (cleared only by a process restart, so a later manual
+  retry is still possible once the credential is fixed). Surfaced end to end: `/api/maintenance`
+  (`memory-server/http.js`, ISO timestamp, `null` in both fallback shapes too), `lib/setup.js`'s
+  `memoryMaintenanceStatus()` (added to its field allowlist, truncated/sanitised like every other
+  field it copies through), and the control panel card (`public/control.js`'s
+  `controlRenderMaintenanceWorkers()`, a `mg-control__line--bad` warning line per worker, i18n'd
+  in all 8 languages).
+
+Tests: `test/auto-split.test.js` (+6: `includeFolders` resolution/default, the exact
+memory/workspace/infra-acces production layout, scan-mtime idle debounce incl. a fake-clock
+5-minutes-ago/2-hours-ago pair, pending-merge takes the later clock, auth error stops the rest of
+a scan), `test/star-audit.test.js` (+4: same `includeFolders` scoping, an auth error stopping the
+rest of a `judgeIssues()` call and becoming a persistent `status().lastError`), `test/ai-
+provider.test.js` (+1: `isAuthError()`), `test/assistant.test.js` (+1, 3 sub-cases: claude-code
+parser reports `result` text / falls back to `subtype` on an empty result / caps at 300 chars),
+`test/memory-server-http.test.js` (+2: `lastError` in the `/api/maintenance` shape, ISO
+conversion), `test/setup.test.js` (`memoryMaintenanceStatus()` passes `lastError` through),
+`test/i18n.test.js` (+1: the panel's warning line + its i18n keys).
+
 ## 0.5.3 — 2026-10-23
 
 ### Added

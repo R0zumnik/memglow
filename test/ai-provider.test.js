@@ -172,3 +172,15 @@ test("claude-code: not on PATH — detect() unavailable, run() fails cleanly", a
   const r = await ai.run(cfg, { system: "s", prompt: "p" }, { env });
   assert.strictEqual(r.ok, false);
 });
+
+test("isAuthError (0.5.4 bug fix): recognises a bad credential from any provider's own phrasing, never a generic failure", () => {
+  assert.strictEqual(ai.isAuthError("Failed to authenticate. API Error: 401 Invalid bearer token"), true);
+  assert.strictEqual(ai.isAuthError("The API key was refused by api.anthropic.com (HTTP 401): check the key you set for memglow."), true);
+  assert.strictEqual(ai.isAuthError("host refused the request (HTTP 403): the key has no access to this model or API."), true);
+  assert.strictEqual(ai.isAuthError("Unauthorized"), true);
+  assert.strictEqual(ai.isAuthError("invalid api key"), true);
+  assert.strictEqual(ai.isAuthError("host had a server error (HTTP 500): try again later."), false);
+  assert.strictEqual(ai.isAuthError("the answer was cut off (max_tokens reached)"), false);
+  assert.strictEqual(ai.isAuthError(""), false);
+  assert.strictEqual(ai.isAuthError(undefined), false);
+});

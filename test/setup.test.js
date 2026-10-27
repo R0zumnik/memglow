@@ -379,8 +379,8 @@ test("setup: memoryMaintenanceStatus (0.5.4) — not configured, bad answer, a f
     if (lastAuth !== "Bearer s3cret") { res.writeHead(401, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: "nope" })); }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
-      autoSplit: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5", keySet: true, apiKeyEnv_should_never_leak: "sk-ant-should-never-appear", pendingCount: 3, lastScanAt: null, nextScanAt: null, thresholdTokens: 5000, recent: [] },
-      structure: { enabled: false, ai: { enabled: false, provider: "", model: "" }, issues: { total: 2, fixable: 1, needsReview: 1, byRule: { R5: 2 } }, lastScanAt: null, nextScanAt: null, recent: [] },
+      autoSplit: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5", keySet: true, apiKeyEnv_should_never_leak: "sk-ant-should-never-appear", pendingCount: 3, lastScanAt: null, nextScanAt: null, thresholdTokens: 5000, recent: [], lastError: { t: "2026-10-27T12:00:00.000Z", message: "Failed to authenticate. API Error: 401 Invalid bearer token" } },
+      structure: { enabled: false, ai: { enabled: false, provider: "", model: "" }, issues: { total: 2, fixable: 1, needsReview: 1, byRule: { R5: 2 } }, lastScanAt: null, nextScanAt: null, recent: [], lastError: null },
     }));
   });
   await new Promise((ok) => fake.listen(0, "127.0.0.1", ok));
@@ -391,8 +391,8 @@ test("setup: memoryMaintenanceStatus (0.5.4) — not configured, bad answer, a f
     const r = await setup.memoryMaintenanceStatus({ url, token: "s3cret" });
     assert.deepStrictEqual(r, {
       configured: true, ok: true,
-      autoSplit: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5", keySet: true, pendingCount: 3 },
-      structure: { enabled: false, issues: 2 },
+      autoSplit: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5", keySet: true, pendingCount: 3, lastError: { t: "2026-10-27T12:00:00.000Z", message: "Failed to authenticate. API Error: 401 Invalid bearer token" } },
+      structure: { enabled: false, issues: 2, lastError: null },
     });
     assert.ok(!JSON.stringify(r).includes("sk-ant-should-never-appear"), "only the few known-safe fields are ever copied through");
 

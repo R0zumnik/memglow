@@ -240,7 +240,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
   let autoSplitWorker = null;
   const onWrote = readOnly ? null : (rels) => { if (autoSplitWorker) autoSplitWorker.noteWritten(rels); };
   const writer = readOnly ? null : createWriter({ store, fsync, fsyncMode, fileMode, onWrite, onWriteDelayMs, log, hooks: writerHooks, onWrote, ...(maxFileBytes ? { maxFileBytes } : {}), ...(chownToParent != null ? { chownToParent } : {}) });
-  autoSplitWorker = createAutoSplitWorker({ store, writer, project, config: autoSplit || {}, dataDir, log });
+  autoSplitWorker = createAutoSplitWorker({ store, writer, project, config: autoSplit || {}, dataDir, log, indexNote });
   const structureWorker = createStructureWorker({ store, writer, config: structure || {}, dataDir, log, indexNote });
   const startupChecks = () => {
     if (!writer) return;
