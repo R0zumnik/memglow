@@ -1198,9 +1198,12 @@ scan (`scanHours`, default 24, 0 = write-triggered only; at most `maxSplitsPerSc
 per sweep) also finds a note that grew some other way. A queued note is only actually split once
 it has been quiet for `idleMinutes` — **never mid-conversation** — one note at a time, and it is
 re-read and compared right before applying: changed since it was queued, the attempt is abandoned
-(tried again once it is quiet again). Always skipped: the index note, anything under the archive
-folder, and a note with `memglow_split: false` in its frontmatter (an explicit opt-out — a manual
-split still works, only the automatic one is off). The AI gets the note's headings (exact text,
+(tried again once it is quiet again). Always skipped: the index note, anything under
+`excludeFolders` (an array of folder prefixes relative to the KB root, default `["archive"]`; the
+original single-string `archiveFolder` setting still works as a one-item alias — useful for a
+versioned work document, or any folder the owner wants left whole), and a note with
+`memglow_split: false` in its frontmatter (an explicit opt-out — a manual split still works, only
+the automatic one is off). The AI gets the note's headings (exact text,
 level, ≈tokens) and a secret-masked preview of its untitled intro — never the whole body verbatim
 — and answers with a strict JSON plan (parts, each a few existing headings to move, a short
 English description and hook); a plan the engine refuses is retried once with its exact errors,
@@ -1221,14 +1224,25 @@ Alongside auto-split, the memory server can also keep the memory's
 hubs and standalone notes, never a part; **R2** every part has `part_of:` and an `Up: [[hub]]`
 line; **R3** every hub's `## Parts` lists all its parts and nothing that isn't one; **R4** a part
 does not list its siblings; **R5** no orphan — every note is reachable from the index, is a part,
-or is named in a hub's `## Parts`.
+or is named in a hub's `## Parts`. **"Declared beats inferred, everywhere automatic"**: a note
+only counts as "a part" for R1/R2/R3's own automatic fixes when its OWN frontmatter declares
+`part_of:`/`parent:` — a body line that merely *looks* like a hub marker ("Up: [[Something]]", an
+ordinary cross-reference) is never enough on its own to drive an automatic change.
 
 **ADD-only, always** — the worker never deletes or rewrites a line it did not itself just add: it
-adds a missing `Up:`/`part_of:` line, appends a hub's forgotten bullet, or replaces an index line
-that points at a part by its hub (inserting the hub's own line, never removing the part's without
-putting something in its place). R4 (a part listing its siblings) is **reported only** — nothing
-is ever deleted automatically, not even an obviously-redundant sibling-listing line; that stays a
-human (or AI, see below) decision, applied by hand or through `split_plan`'s own instruction.
+adds a missing `Up:`/`part_of:` line, or appends a hub's forgotten bullet. **R1 is report-only
+(`fix: null`), unconditionally** — the index is never auto-edited: a note the index should not be
+listing is reported (with the hub it declares), never removed or rewritten automatically; the same
+goes for R4 (a part listing its siblings) — nothing is ever deleted, not even an
+obviously-redundant sibling-listing line. Both stay a human (or AI, see below) decision, applied
+by hand (`buildFix()` still knows "replace-index-line"/"remove-line" for that) or through
+`split_plan`'s own instruction.
+
+**Exclusions**: `excludeFolders` (an array of folder prefixes relative to the KB root, default
+`["archive"]`; `archiveFolder`, a single string, still works as a one-item alias) — shared with
+[auto-split](#auto-split) above, so a folder the owner wants left whole (a versioned work
+document, say) is never scanned, fixed, or reported as an orphan by either worker. A note's own
+`memglow_split: false` is honoured by both too.
 
 **AI judgement for the two genuinely ambiguous cases** — an R5 orphan (no obvious hub) and an R3
 note two or more hubs' own `## Parts` both list — off unless `structure.ai.enabled` **and** a

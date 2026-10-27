@@ -15,7 +15,7 @@ function tmp(prefix) { return fs.mkdtempSync(path.join(os.tmpdir(), prefix)); }
 
 function rec(id, text, folder = "") { return { id, label: id, text, folder }; }
 
-test("audit: R1 — the index links to a confirmed part; fix replaces the line with the hub (or drops it if the hub is already listed)", () => {
+test("audit: R1 — the index links to a DECLARED part (frontmatter part_of); report-only (fix: null), never auto-applied; buildFix still knows \"replace-index-line\" for an explicit caller", () => {
   const notes = [
     rec("MEMORY", "---\ntitle: MEMORY\n---\n\n# Index\n\n- [[hub]] — the hub\n- [[spoke]] — a part, should not be here\n"),
     rec("hub", "---\ntitle: hub\n---\n\n## Parts\n- [[spoke]] — the spoke\n"),
@@ -24,23 +24,54 @@ test("audit: R1 — the index links to a confirmed part; fix replaces the line w
   const issues = star.audit({ notes, indexId: "MEMORY" });
   const r1 = issues.filter((i) => i.rule === "R1");
   assert.strictEqual(r1.length, 1);
-  assert.strictEqual(r1[0].fix.type, "replace-index-line");
-  assert.strictEqual(r1[0].fix.hubAlreadyListed, true);
+  assert.strictEqual(r1[0].fix, null, "0.5.4: the worker never removes or rewrites an index line automatically");
+  assert.strictEqual(r1[0].part, "spoke");
+  assert.strictEqual(r1[0].hub, "hub");
+  assert.strictEqual(r1[0].hubAlreadyListed, true);
   const byId = new Map(notes.map((n) => [n.id, n]));
-  const built = star.buildFix(r1[0].fix, byId);
+  const built = star.buildFix({ type: "replace-index-line", index: "MEMORY", part: r1[0].part, hub: r1[0].hub, lineIndex: r1[0].lineIndex, hubAlreadyListed: r1[0].hubAlreadyListed }, byId);
   assert.doesNotMatch(built.after, /\[\[spoke\]\]/);
   assert.match(built.after, /\[\[hub\]\] — the hub/);
 
-  // Hub NOT already listed: the line is rewritten to point at it instead of dropped.
+  // Hub NOT already listed: the manually-built fix would rewrite the line to point at it instead
+  // of dropping it (still never done automatically).
   const notes2 = [
     rec("MEMORY", "---\ntitle: MEMORY\n---\n\n- [[spoke]] — a part, should not be here\n"),
     notes[1], notes[2],
   ];
   const issues2 = star.audit({ notes: notes2, indexId: "MEMORY" });
   const r1b = issues2.find((i) => i.rule === "R1");
-  assert.strictEqual(r1b.fix.hubAlreadyListed, false);
-  const built2 = star.buildFix(r1b.fix, new Map(notes2.map((n) => [n.id, n])));
+  assert.strictEqual(r1b.fix, null);
+  assert.strictEqual(r1b.hubAlreadyListed, false);
+  const built2 = star.buildFix({ type: "replace-index-line", index: "MEMORY", part: r1b.part, hub: r1b.hub, lineIndex: r1b.lineIndex, hubAlreadyListed: r1b.hubAlreadyListed }, new Map(notes2.map((n) => [n.id, n])));
   assert.match(built2.after, /\[\[hub\]\] — a part, should not be here/);
+});
+
+test("audit/createStructureWorker (0.5.4 bug fix): a note with an Up: line naming OTHER notes, but no frontmatter part_of, is never treated as a part — R1 does not even report it, and the index is left byte-identical end to end", async () => {
+  const indexText = "---\ntitle: MEMORY\n---\n\n- [[keyestudio]] — smart farm project\n";
+  // The real-world shape: an "Up:" line naming TWO other notes, no part_of anywhere.
+  const keyestudioText = "---\ntitle: keyestudio\n---\n\nUp: [[user-arthur]] and [[user-florent-profile]] both reference this.\n\nBody of the project note.\n";
+  const notes = [
+    rec("MEMORY", indexText),
+    rec("keyestudio", keyestudioText),
+    rec("user-arthur", "---\ntitle: user-arthur\n---\n\nBody.\n"),
+    rec("user-florent-profile", "---\ntitle: user-florent-profile\n---\n\nBody.\n"),
+  ];
+  const issues = star.audit({ notes, indexId: "MEMORY" });
+  assert.ok(!issues.some((i) => i.rule === "R1"), "keyestudio declares no part_of: not a part, so not an R1 violation at all, " + JSON.stringify(issues));
+
+  const { root, srv, cleanup } = makeSrv({
+    "memory/MEMORY.md": indexText,
+    "memory/keyestudio.md": keyestudioText,
+    "memory/user-arthur.md": "---\ntitle: user-arthur\n---\n\nBody.\n",
+    "memory/user-florent-profile.md": "---\ntitle: user-florent-profile\n---\n\nBody.\n",
+  });
+  try {
+    const w = star.createStructureWorker({ store: srv.store, writer: srv.writer, config: { enabled: true } });
+    await w.scanOnce();
+    assert.strictEqual(fs.readFileSync(path.join(root, "memory/MEMORY.md"), "utf8"), indexText, "the index is byte-identical: never touched");
+    assert.strictEqual(fs.readFileSync(path.join(root, "memory/keyestudio.md"), "utf8"), keyestudioText, "keyestudio itself is also untouched (no part_of was added to it either)");
+  } finally { cleanup(); }
 });
 
 test("audit: R2 — a confirmed part with no link back to its hub; fix adds an Up: line", () => {
@@ -66,7 +97,10 @@ test("audit: R3 (half 1) — a confirmed part the hub forgot to list; fix append
   assert.ok(r3);
   assert.strictEqual(r3.fix.type, "append-hub-parts-line");
   const built = star.buildFix(r3.fix, new Map(notes.map((n) => [n.id, n])));
-  assert.match(built.after, /## Parts\n- \[\[spoke\]\] — spoke\n/);
+  // 0.5.4 bug fix: exact byte match — a prior bug (joinHeadBody) inserted a SECOND blank line
+  // between the frontmatter fence and "Hub body…" (the body's own leading blank line, kept,
+  // PLUS one more from the join itself).
+  assert.strictEqual(built.after, "---\ntitle: hub\n---\n\nHub body, no Parts section yet.\n\n## Parts\n- [[spoke]] — spoke\n");
 });
 
 test("audit: R3 (half 2) — a hub's ## Parts names a note with no part_of; fix adds it, UNLESS two hubs both claim it", () => {
@@ -188,9 +222,48 @@ test("createStructureWorker: disabled by default is inert; enabled applies deter
   } finally { cleanup(); }
 });
 
-test("structureSettings: off by default, MEMGLOW_AUTO_STRUCTURE=1 turns it on", () => {
+test("createStructureWorker (0.5.4 bug fix): a scan of an already fully-compliant KB finds nothing and leaves every file byte-identical", async () => {
+  const notes = {
+    "memory/MEMORY.md": "---\ntitle: MEMORY\n---\n\n# Index\n\n## Work\n- [[hub]] — the hub\n",
+    "memory/hub.md": "---\ntitle: hub\n---\n\n# Hub\n\nSome intro text.\n\n## Parts\n- [[spoke]] — the spoke\n",
+    "memory/spoke.md": "---\ntitle: spoke\npart_of: hub\n---\n\nUp: [[hub]] — part of hub.\n\nBody.\n",
+  };
+  const { root, srv, cleanup } = makeSrv(notes);
+  try {
+    const before = {};
+    for (const rel of Object.keys(notes)) before[rel] = fs.readFileSync(path.join(root, rel), "utf8");
+    const w = star.createStructureWorker({ store: srv.store, writer: srv.writer, config: { enabled: true } });
+    const applied = await w.scanOnce();
+    assert.strictEqual(applied.length, 0, "already fully compliant: nothing to fix");
+    for (const rel of Object.keys(notes)) {
+      assert.strictEqual(fs.readFileSync(path.join(root, rel), "utf8"), before[rel], `${rel} must be byte-identical`);
+    }
+  } finally { cleanup(); }
+});
+
+test("createStructureWorker (0.5.4): excludeFolders — a versioned-document folder is never scanned, fixed, or reported as an orphan", async () => {
+  const versioned = "---\ntitle: design-spec\n---\n\nA versioned work document, left whole.\n";
+  const { root, srv, cleanup } = makeSrv({
+    "memory/project/work/initiatives/design-spec.md": versioned,
+    "memory/hub.md": "---\ntitle: hub\n---\n\n## Parts\n- [[loose]] — a loose note\n",
+    "memory/loose.md": "---\ntitle: loose\n---\n\nBody.\n",
+  });
+  try {
+    const w = star.createStructureWorker({ store: srv.store, writer: srv.writer, config: { enabled: true, excludeFolders: ["memory/project/work/initiatives"] } });
+    const applied = await w.scanOnce();
+    assert.strictEqual(fs.readFileSync(path.join(root, "memory/project/work/initiatives/design-spec.md"), "utf8"), versioned, "never touched");
+    assert.ok(!applied.some((a) => a.note === "design-spec"));
+    // The non-excluded loose note is still fixed normally.
+    assert.match(fs.readFileSync(path.join(root, "memory/loose.md"), "utf8"), /part_of: hub/);
+  } finally { cleanup(); }
+});
+
+test("structureSettings: off by default, MEMGLOW_AUTO_STRUCTURE=1 turns it on; excludeFolders shared resolution (archiveFolder alias, default)", () => {
   assert.strictEqual(star.structureSettings({}, {}).enabled, false);
   assert.strictEqual(star.structureSettings({}, { MEMGLOW_AUTO_STRUCTURE: "1" }).enabled, true);
+  assert.deepStrictEqual(star.structureSettings({}, {}).excludeFolders, ["archive"]);
+  assert.deepStrictEqual(star.structureSettings({ archiveFolder: "memory/archive" }, {}).excludeFolders, ["memory/archive"]);
+  assert.deepStrictEqual(star.structureSettings({ archiveFolder: "memory/archive", excludeFolders: ["a", "b"] }, {}).excludeFolders, ["a", "b"]);
 });
 
 // ------------------------------------------------------------------ AI judgement (R5 / ambiguous R3)

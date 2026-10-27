@@ -85,6 +85,59 @@
   --prefix`, `$HOME` falling back to a writable `claudeHome`/tmpfs (already handled by
   `lib/ai-provider.js` itself), the OAuth token file shared with the interactive assistant's own.
 
+### Fixed
+
+Found running 0.5.4 end to end on a copy of the real, 228-note memory (claude-code provider,
+haiku) — the zero-loss engine held; four structure/auto-split bugs did not:
+
+- **ADD-ONLY VIOLATION — R1 deleted index lines for notes that were never actually parts.** A
+  note whose body merely opened with an "Up: [[Arthur]] and [[Florent]]"-shaped cross-reference
+  line (no frontmatter `part_of:` anywhere) was treated as "a part" by `lib/hub-spoke.js`'s own
+  broader `confirmedHub` (which also trusts a body marker, not just frontmatter), and `lib/star-
+  audit.js`'s R1 then deleted/rewrote its line in the real index. Fixed two ways: (a) `lib/hub-
+  spoke.js` gained `declaredHubOfFrontmatter()` (frontmatter `part_of:`/`parent:` only, never a
+  body line) and `lib/star-audit.js`'s `declaredPartOfMap()` uses it so R1/R2/R3(half 1) only ever
+  treat a note as "a part" for an AUTOMATIC fix when it DECLARES it — "declared beats inferred,
+  everywhere automatic" (R4/R5 stay report-only regardless, so they keep using hub-spoke's
+  broader, inferred notion, which is still useful there); (b) R1 is now report-only (`fix: null`)
+  UNCONDITIONALLY — the worker never removes or rewrites an index line automatically, even for a
+  genuinely declared part; `buildFix()` still knows "replace-index-line" for an explicit/manual
+  caller. Regression test: a note with an `Up:` line naming two other notes, no `part_of`, listed
+  in the index → audit() does not even report it as R1, and a full worker scan leaves the index
+  byte-identical.
+- **Two stray blank lines inserted near the top of an index after an unrelated fix elsewhere in
+  it.** Every `buildFix()` case that rebuilds a note's body from its own original lines (`remove-
+  line`, `append-hub-parts-line`, `replace-index-line`, `append-index-section-line`) joined the
+  frontmatter head and the new body with `head + "\n" + body` — but `body` already carried ITS OWN
+  leading blank line from the original note, so the join added a SECOND one. New shared
+  `joinHeadBody(head, body)` strips the leading blank first and adds exactly one back, used by
+  every fix type (including `add-up-line`/`attach`, which already did this by hand — now via the
+  one shared helper). Regression tests: an exact byte-for-byte expected body for
+  `append-hub-parts-line`, and a full scan of an already-compliant KB that must leave every file
+  byte-identical.
+- **Exclusions**: auto-split took a versioned work document the owner wants left whole
+  (`…/initiatives-0-synthese-initiatives/design-spec.md`). New `excludeFolders: [folder, …]`
+  (default `["archive"]`), shared by `autoSplit` and `structure` (`lib/auto-split.js`'s
+  `sanitizeExcludeFolders()`/`underExcluded()`, reused by `lib/star-audit.js`); the original
+  single-string `archiveFolder` setting still works as a one-item alias, never merged with an
+  explicit `excludeFolders` (the explicit list always wins outright). `memglow_split: false` is
+  still honoured by both workers as before (now also pre-filtered the same way in the structure
+  guardian, not just auto-split).
+- **Naming**: the AI returned slugs with no `<hub>-` prefix (`initiatives-design-system` under hub
+  `initiatives-0-synthese-initiatives-design-spec`) and the part titles came out Title-Cased
+  ("Initiatives Silvae"). `lib/split-engine.js`'s `computeSplit()` now takes `hubId`/
+  `existingLower` and normalises every part's slug through `normalizeSlug()`/`kebabify()`: forced
+  kebab-case, prefixed with `<hub>-` when missing, deduped (a numbered suffix) against every other
+  known note AND every other part in the same plan — never rejected for a bad shape or a
+  collision anymore, always fixed. `buildPartText()`'s `title:` is now always the (normalised)
+  slug, byte for byte, never a Title-Cased guess.
+
+Tests: `test/hub-spoke.test.js` (`declaredHubOfFrontmatter`), `test/star-audit.test.js` (+6, R1
+report-only/declared-only, the keyestudio-shaped regression, byte-identity on a clean KB,
+excludeFolders), `test/auto-split.test.js` (+2, excludeFolders/underExcluded), `test/split-
+engine.test.js` (slug normalisation/prefixing/dedup, title == slug; 2 existing tests updated for
+the new normalise-don't-reject behaviour). Full suite (968 tests) green.
+
 ## 0.5.3 — 2026-10-23
 
 ### Added

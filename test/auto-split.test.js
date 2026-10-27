@@ -153,6 +153,45 @@ test("worker: skip rules — index note, archive folder, and memglow_split: fals
   } finally { cleanup(); }
 });
 
+test("worker: excludeFolders (0.5.4) — a list of folder prefixes, shared setting, archiveFolder kept as a one-item alias, a versioned-document folder is left whole", async () => {
+  // archiveFolder alone still becomes a one-item excludeFolders list.
+  const alias = auto.autoSplitSettings({ archiveFolder: "memory/archive" }, {});
+  assert.deepStrictEqual(alias.excludeFolders, ["memory/archive"]);
+  // excludeFolders, explicit, wins outright over archiveFolder (never merged).
+  const explicit = auto.autoSplitSettings({ archiveFolder: "memory/archive", excludeFolders: ["memory/work", "memory/project/x"] }, {});
+  assert.deepStrictEqual(explicit.excludeFolders, ["memory/work", "memory/project/x"]);
+  // default, neither given.
+  assert.deepStrictEqual(auto.autoSplitSettings({}, {}).excludeFolders, ["archive"]);
+  // env override (comma list).
+  assert.deepStrictEqual(auto.autoSplitSettings({}, { MEMGLOW_EXCLUDE_FOLDERS: "a, b ,c" }).excludeFolders, ["a", "b", "c"]);
+
+  const { srv, cleanup } = makeSrv({
+    "memory/project/work/ibs/initiatives/0-synthese-initiatives/design-spec.md": bigNote("versioned work document, never auto-split"),
+    "memory/normal.md": bigNote(),
+  }, {});
+  try {
+    const w = auto.createAutoSplitWorker({
+      store: srv.store, writer: srv.writer,
+      config: { enabled: true, thresholdTokens: 200, excludeFolders: ["memory/project/work/ibs/initiatives"] },
+    });
+    await w.runScan();
+    assert.strictEqual(w.pendingCount(), 1, "only normal.md — the versioned work document is excluded");
+    w.noteWritten(["memory/project/work/ibs/initiatives/0-synthese-initiatives/design-spec.md"]);
+    assert.strictEqual(w.pendingCount(), 1, "a write to it is not queued either");
+  } finally { cleanup(); }
+});
+
+test("underExcluded / sanitizeExcludeFolders: exact folder match, nested prefix match, never a partial name match, deduped", () => {
+  assert.strictEqual(auto.underExcluded("archive/old.md", ["archive"]), true);
+  assert.strictEqual(auto.underExcluded("archive/sub/old.md", ["archive"]), true);
+  assert.strictEqual(auto.underExcluded("archived/old.md", ["archive"]), false, "\"archived\" must not match the \"archive\" prefix");
+  assert.strictEqual(auto.underExcluded("notes/x.md", ["archive"]), false);
+  assert.strictEqual(auto.underExcluded("a/x.md", ["a", "b"]), true);
+  assert.deepStrictEqual(auto.sanitizeExcludeFolders(["a", "a", "b"], null), ["a", "b"]);
+  assert.deepStrictEqual(auto.sanitizeExcludeFolders([], null), auto.DEFAULT_EXCLUDE_FOLDERS);
+  assert.deepStrictEqual(auto.sanitizeExcludeFolders(["/a/", "b//"], null), ["a", "b"], "leading/trailing slashes trimmed");
+});
+
 test("worker: a real end-to-end split through the injected aiRun — the note is actually split on disk", async () => {
   const { root, srv, cleanup } = makeSrv({ "memory/big.md": bigNote() }, {});
   try {

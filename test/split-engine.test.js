@@ -81,20 +81,26 @@ test("computeSplit refusals: unknown heading, duplicate assignment (overlap), ba
   assert.strictEqual(overlap.ok, false);
   assert.match(overlap.errors.join(" "), /overlaps a section already assigned/);
 
+  // 0.5.4: a badly-shaped slug is normalised (kebab-ified), not rejected — missing "slug"
+  // entirely is still an error.
   const badSlug = engine.computeSplit(body, { parts: [{ slug: "Not_Kebab", description: "d", sections: ["Alpha"] }] });
-  assert.strictEqual(badSlug.ok, false);
-  assert.match(badSlug.errors[0], /kebab/);
+  assert.strictEqual(badSlug.ok, true, JSON.stringify(badSlug.errors));
+  assert.strictEqual(badSlug.parts[0].slug, "not-kebab");
+  const missingSlug = engine.computeSplit(body, { parts: [{ description: "d", sections: ["Alpha"] }] });
+  assert.strictEqual(missingSlug.ok, false);
+  assert.match(missingSlug.errors[0], /"slug" is required/);
 
   const empty = engine.computeSplit(body, { parts: [{ slug: "a", description: "d" }] });
   assert.strictEqual(empty.ok, false);
   assert.match(empty.errors[0], /no "sections" or "lines"/);
 
+  // 0.5.4: a slug used twice in the same plan is deduped (a numbered suffix), not rejected.
   const dup = engine.computeSplit(body, { parts: [
     { slug: "same", description: "d", sections: ["Alpha"] },
     { slug: "same", description: "d", sections: ["Beta"] },
   ] });
-  assert.strictEqual(dup.ok, false);
-  assert.match(dup.errors.join(" "), /used twice/);
+  assert.strictEqual(dup.ok, true, JSON.stringify(dup.errors));
+  assert.deepStrictEqual(dup.parts.map((p) => p.slug), ["same", "same-2"]);
 
   const twice = engine.computeSplit(body, { parts: [{ slug: "a", description: "d", sections: ["Alpha", "Alpha"] }] });
   assert.strictEqual(twice.ok, false);
@@ -125,7 +131,7 @@ test("splitNote (apply): hub frontmatter byte-identical, ## Parts created, parts
     assert.doesNotMatch(hubAfter, /Alpha body line/);
 
     const alphaText = fs.readFileSync(path.join(root, "memory/big-note-alpha.md"), "utf8");
-    assert.match(alphaText, /^---\ntitle: Big Note Alpha\ntype: note\npermalink: main\/memory\/big-note-alpha\nname: big-note-alpha\ntheme: knowledge\nsubtheme: tools\ndescription: Alpha stuff\npart_of: big-note\ntags:\n- ops\n- infra\n---\n/);
+    assert.match(alphaText, /^---\ntitle: big-note-alpha\ntype: note\npermalink: main\/memory\/big-note-alpha\nname: big-note-alpha\ntheme: knowledge\nsubtheme: tools\ndescription: Alpha stuff\npart_of: big-note\ntags:\n- ops\n- infra\n---\n/);
     assert.match(alphaText, /Up: \[\[big-note\]\] — split on 2026-10-27: Alpha stuff\./);
     assert.match(alphaText, /Alpha body line one\./);
     assert.match(alphaText, /nested detail of Alpha/);
@@ -160,17 +166,38 @@ test("splitNote: appends to an existing ## Parts section instead of creating a s
   } finally { cleanup(); }
 });
 
-test("splitNote: refusals — missing lines, slug already exists; nothing written on failure", async () => {
+test("splitNote: refusal — missing lines; nothing written on failure", async () => {
   const { root, srv, cleanup } = makeSrv({ "memory/big-note.md": BIG, "memory/taken.md": "---\ntitle: taken\n---\n\nAlready here.\n" });
   try {
     const noMatch = await engine.splitNote({ store: srv.store, writer: srv.writer, project: "main", identifier: "big-note", plan: { parts: [{ slug: "x", description: "d", lines: ["Not a real line in the note"] }] } });
     assert.strictEqual(noMatch.ok, false);
     assert.match(noMatch.errors[0], /found 0 eligible time/);
-
-    const existing = await engine.splitNote({ store: srv.store, writer: srv.writer, project: "main", identifier: "big-note", plan: { parts: [{ slug: "taken", description: "d", sections: ["Alpha"] }] } });
-    assert.strictEqual(existing.ok, false);
-    assert.match(existing.errors.join(" "), /already names an existing note/);
     assert.strictEqual(fs.readFileSync(path.join(root, "memory/big-note.md"), "utf8"), BIG, "hub untouched on refusal");
+  } finally { cleanup(); }
+});
+
+test("splitNote (0.5.4): a slug colliding with an existing note (after hub-prefixing) is deduped with a numbered suffix, never refused", async () => {
+  const { root, srv, cleanup } = makeSrv({ "memory/big-note.md": BIG, "memory/big-note-alpha.md": "---\ntitle: big-note-alpha\n---\n\nAn unrelated, pre-existing note with this exact name.\n" });
+  try {
+    const res = await engine.splitNote({ store: srv.store, writer: srv.writer, project: "main", identifier: "big-note", plan: { parts: [{ slug: "alpha", description: "Alpha stuff", sections: ["Alpha"] }] } });
+    assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+    assert.strictEqual(res.parts[0].slug, "big-note-alpha-2");
+    assert.strictEqual(fs.readFileSync(path.join(root, "memory/big-note-alpha.md"), "utf8"), "---\ntitle: big-note-alpha\n---\n\nAn unrelated, pre-existing note with this exact name.\n", "the pre-existing note is untouched");
+    assert.ok(fs.existsSync(path.join(root, "memory/big-note-alpha-2.md")));
+  } finally { cleanup(); }
+});
+
+test("splitNote (0.5.4): a slug missing the \"<hub>-\" prefix is normalised to have it; the part's title is always the slug, never Title-Cased", async () => {
+  const { root, srv, cleanup } = makeSrv({ "memory/initiatives-0-synthese.md": BIG.replace(/title: big-note/, "title: initiatives-0-synthese").replace(/permalink: main\/memory\/big-note/, "permalink: main/memory/initiatives-0-synthese") });
+  try {
+    const res = await engine.splitNote({
+      store: srv.store, writer: srv.writer, project: "main", identifier: "initiatives-0-synthese",
+      plan: { parts: [{ slug: "design-system", description: "Design system notes", sections: ["Alpha"] }, { slug: "silvae", description: "Silvae notes", sections: ["Beta"] }] },
+    });
+    assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+    assert.deepStrictEqual(res.parts.map((p) => p.slug).sort(), ["initiatives-0-synthese-design-system", "initiatives-0-synthese-silvae"]);
+    const designText = fs.readFileSync(path.join(root, "memory/initiatives-0-synthese-design-system.md"), "utf8");
+    assert.match(designText, /^---\ntitle: initiatives-0-synthese-design-system\n/, "title equals the (normalised) slug, not a Title-Cased guess");
   } finally { cleanup(); }
 });
 
