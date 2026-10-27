@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.5.4 — 2026-10-27
+
+### Added
+
+- **Zero-loss split engine (`lib/split-engine.js`)**: an internal module (not an MCP tool) that
+  applies an AI-decided split plan `{ parts: [{ slug, description, hook?, sections: [heading, …],
+  lines?: [line, …] }], hub_summary?, dry_run? }` safely and deterministically — the original note
+  becomes the hub (frontmatter kept byte-for-byte; body = kept lines + an optional summary + a
+  `## Parts` list, `- [[slug]] — hook`, appended to an existing one if there is one); each part is
+  a new note in the same folder (title, type, permalink, name, theme/subtheme copied from the hub,
+  description, `part_of:`, tags), body opening `Up: [[hub]] — split on <date>: <description>.`.
+  `sections` move a WHOLE section (its own subsections included — the next heading of the same or
+  a higher level ends it); `lines` move loose content not under any heading. Everything is
+  validated before anything is written (every heading/line resolved exactly once, no overlap, free
+  kebab slugs, non-empty parts) and, as a hard final check, zero-loss: every non-empty line
+  (`trimEnd`) of the original must appear in hub+parts at least as many times as before, refused
+  with the missing lines named otherwise. A hub that is ITSELF already a part (`part_of: X`) chains
+  its new parts to `X` instead, and their bullets go to `X`'s own `## Parts` — the hub being split
+  gets no `## Parts` of its own (lib/hub-spoke.js's "a spoke never lists siblings" rule). `dry_run`
+  returns exact previews and sizes, writing nothing. Writes through the same store/writer
+  write_note/edit_note use (same indexing, permalinks, fsync mode). `test/split-engine.test.js`.
+- **Automatic AI note splitting** (off by default, everywhere): the memory server (plain and
+  all-in-one, `--read-write` only) can decide BY ITSELF when a note has grown too large and split
+  it — `lib/auto-split.js`. Triggered by a write that leaves a note over the threshold (queued) and
+  by a periodic full scan (`scanHours`, default 24; `maxSplitsPerScan`, default 10); a queued note
+  is only actually split once quiet for `idleMinutes` (default 30, never mid-conversation), one at
+  a time, and the note is re-read and compared right before applying — changed since, the attempt
+  is abandoned. Skips the index note, anything under the archive folder, and a note whose
+  frontmatter has `memglow_split: false`. An AI (picked by the owner, see below) gets the note's
+  headings, sizes and a secret-masked preview and answers with a strict JSON plan; a refused plan
+  is retried once with the engine's own errors, then memglow gives up and logs it. Config:
+  `autoSplit: { enabled, thresholdTokens, idleMinutes, scanHours, maxSplitsPerScan, provider, model,
+  baseUrl, apiKeyEnv, apiKeyFile, command, claudeHome, timeoutMs }` in `memglow.config.json`
+  (`MEMGLOW_CONFIG`/`~/.memglow/` only, same trust boundary as every other memory-server setting)
+  and/or `MEMGLOW_AUTO_SPLIT=1` + the AI env vars below; `--levers` never turns it on by itself. No
+  provider/key configured → inert, one log line, never an error. `sizeWarning` (the MCP
+  proxy/all-in-one lever) now says "memglow will split it automatically…" instead of asking the AI
+  to, when this server's own worker is enabled for it. `test/auto-split.test.js`.
+- **A pluggable AI provider for memglow's own automated features** (`lib/ai-provider.js`), reused by
+  auto-split above (and the structure guardian below) — never a bespoke client per feature:
+  - `anthropic` — the Anthropic Messages API, your own key.
+  - `openai-compatible` — any OpenAI-compatible Chat Completions endpoint: OpenAI, Mistral,
+    OpenRouter, Groq, LM Studio, Ollama's own `/v1`… (base URL + optional key). Point it at
+    Gemini's own OpenAI-compatible endpoint too — not a separate client.
+  - `claude-code` — runs the `claude` CLI headless, no tool at all, with your Claude
+    **subscription** (`claude setup-token`, or an existing `claude` login) — reuses
+    `lib/assistant/providers/claude-code.js` as-is (same tool-denial flags, same restricted mode).
+  Env overrides: `MEMGLOW_AI_PROVIDER`, `MEMGLOW_AI_MODEL`, `MEMGLOW_AI_BASE_URL`,
+  `MEMGLOW_AI_API_KEY` (the key directly), `MEMGLOW_AI_API_KEY_FILE` (a key alone in a file, any
+  path — trimmed, refused if other users can read it). The key is never logged, never returned
+  beyond "set"/"not set". `test/ai-provider.test.js`.
+- **Star-structure guardian** (off by default, same worker/schedule family —
+  `maintenance.structure.enabled` / `MEMGLOW_AUTO_STRUCTURE=1`): `lib/star-audit.js`'s pure
+  `audit(notes, config)` detects where a memory drifts from the hub-and-spoke layout — R1 the index
+  lists a part instead of its hub, R2 a part with no `Up:`/link back to its hub, R3 a hub's
+  `## Parts` missing a confirmed part, or listing a note with no `part_of` that only ONE hub
+  claims, R4 a part's own pure sibling-listing line, R5 an orphan note reachable from nowhere —
+  built on top of `lib/hub-spoke.js`'s own detector, never reimplementing it. The mechanical fixes
+  (adding a missing `part_of`/`Up:` line, appending a hub's missing bullet, removing a pure sibling
+  line, replacing an index line that points at a part by its hub) are applied automatically,
+  through the store/writer, on the same schedule as auto-split; a case that needs judgement (no
+  obvious hub, two hubs claiming one note, …) is reported (`fix: null`) but not yet decided by an
+  AI — a future stage. Idempotent: a second scan after the fixes land finds nothing left.
+  `test/star-audit.test.js`.
+
 ## 0.5.3 — 2026-10-23
 
 ### Added

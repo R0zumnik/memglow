@@ -1152,6 +1152,83 @@ pairs>.jsonl --memory <your notes folder>` (provider configured as above) replay
 the lexical-engine duel earlier in this section. Committed generic, with no private data: both
 the pairs file and the notes folder are arguments, never built in.
 
+<a id="auto-split"></a>
+### Automatic AI note splitting (optional)
+
+Split big notes is normally something you (or the assistant, with `split_plan` — see
+[MCP server](#mcp-server)) decide and do. With `--read-write`, the memory server can instead
+decide and do it **by itself**: an AI you pick gets the note's headings and sizes, proposes a
+plan, and [`lib/split-engine.js`](#) (the same zero-loss engine `split_plan`'s own proposal is
+built from) applies it — **off by default everywhere**, it needs both `autoSplit.enabled` and a
+configured, reachable AI provider.
+
+```json
+{
+  "autoSplit": {
+    "enabled": true,
+    "thresholdTokens": 5000,
+    "idleMinutes": 30,
+    "scanHours": 24,
+    "provider": "anthropic",
+    "model": "claude-haiku-4-5",
+    "apiKeyFile": "/path/to/a/key-alone-file"
+  }
+}
+```
+
+(`memglow.config.json`, `MEMGLOW_CONFIG` or `~/.memglow/` only — same trust boundary as every
+other memory-server setting. `MEMGLOW_AUTO_SPLIT=1` turns it on without the file.)
+
+**Pick a provider** (`lib/ai-provider.js`, shared with the [structure guardian](#star-structure)
+below — reuses the exact same, already-reviewed HTTP/CLI plumbing the [optional interactive
+assistant](#assistant) uses, never a second client for the same API):
+
+| `provider` | What it needs | Notes |
+|---|---|---|
+| `claude-code` | nothing extra — your `claude` CLI, logged in (`claude setup-token` for a subscription token, or an existing login) | Runs `claude` headless, **no tool at all** — it only ever answers a plan. `command` overrides the binary (`MEMGLOW_AI_CLAUDE_BIN`); `model` an alias (`haiku`, default) or a full id. |
+| `anthropic` | an API key | `model` (default `claude-haiku-4-5`), `apiKeyEnv` (the NAME of an env var) or `apiKeyFile` (a key alone in a file — any path, trimmed, refused if group/other-readable), or `MEMGLOW_AI_API_KEY` / `MEMGLOW_AI_API_KEY_FILE` directly. |
+| `openai-compatible` | a base URL (+ a key unless local) | OpenAI, Mistral, OpenRouter, Groq, a local Ollama (`http://127.0.0.1:11434/v1`) or LM Studio (`http://127.0.0.1:1234/v1`) — set `baseUrl` and `model`. **Gemini**: its own OpenAI-compatible endpoint works here too (`https://generativelanguage.googleapis.com/v1beta/openai`) — not a separate client. |
+
+Env overrides (any provider): `MEMGLOW_AI_PROVIDER`, `MEMGLOW_AI_MODEL`, `MEMGLOW_AI_BASE_URL`,
+`MEMGLOW_AI_API_KEY` (the key itself), `MEMGLOW_AI_API_KEY_FILE` (a path). The key is never logged
+and never shown beyond "set" / "not set".
+
+**How it works**: a write that leaves a note over `thresholdTokens` queues it; a periodic full
+scan (`scanHours`, default 24, 0 = write-triggered only; at most `maxSplitsPerScan`, default 10,
+per sweep) also finds a note that grew some other way. A queued note is only actually split once
+it has been quiet for `idleMinutes` — **never mid-conversation** — one note at a time, and it is
+re-read and compared right before applying: changed since it was queued, the attempt is abandoned
+(tried again once it is quiet again). Always skipped: the index note, anything under the archive
+folder, and a note with `memglow_split: false` in its frontmatter (an explicit opt-out — a manual
+split still works, only the automatic one is off). The AI gets the note's headings (exact text,
+level, ≈tokens) and a secret-masked preview of its untitled intro — never the whole body verbatim
+— and answers with a strict JSON plan (parts, each a few existing headings to move, a short
+English description and hook); a plan the engine refuses is retried once with its exact errors,
+then memglow gives up on that note until it is reconsidered, logging either way. One call in
+flight at a time, with its own timeout (`timeoutMs`, default 180 s).
+
+<a id="star-structure"></a>
+### Star structure guardian (optional)
+
+Alongside auto-split, the memory server can also keep the memory's
+[hub-and-spoke](docs/hub-and-spoke.md) ("star") layout tidy by itself — **off by default**:
+`"maintenance": { "structure": { "enabled": true } }` in `memglow.config.json`, or
+`MEMGLOW_AUTO_STRUCTURE=1`. Same schedule family as auto-split (`scanHours`, default 24;
+`maxFixesPerScan`, default 10).
+
+`lib/star-audit.js`'s `audit()` is a pure, deterministic detector (built on top of
+`lib/hub-spoke.js`'s own one — never reimplemented) of five rules: **R1** the index lists only
+hubs and standalone notes, never a part; **R2** every part has `part_of:` and an `Up: [[hub]]`
+line; **R3** every hub's `## Parts` lists all its parts and nothing that isn't one; **R4** a part
+does not list its siblings; **R5** no orphan — every note is reachable from the index, is a part,
+or is named in a hub's `## Parts`. The mechanical cases are fixed automatically, through the same
+store/writer every write tool uses: adding a missing `Up:`/`part_of:` line, appending a hub's
+forgotten bullet, removing a pure sibling-listing line, replacing an index line that points at a
+part by its hub. A case that needs real judgement — an orphan with no obvious hub, two hubs both
+claiming one note, which index section a hub belongs under — is detected and reported (`fix:
+null`) but **not yet decided automatically**; that is left to a future stage. A second scan right
+after the fixes land finds nothing left to do.
+
 <a id="all-in-one"></a>
 ### All-in-one: one container
 
@@ -1282,7 +1359,7 @@ docker run -d --name memglow -p 127.0.0.1:4747:4747 \
   -v /path/to/notes:/memory:ro \
   -v memglow-data:/data \
   -e MEMGLOW_TOKEN=$(cat ~/.memglow/token) \
-  ghcr.io/r0zumnik/memglow:0.5.3
+  ghcr.io/r0zumnik/memglow:0.5.4
 ```
 
 `/data` keeps the Memory cost counts (note ids and numbers only) and the saved view (settings,
@@ -1291,7 +1368,7 @@ layout, camera) across restarts.
 Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
 then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
 
-Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.5.3`.
+Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.5.4`.
 
 The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
 container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.
