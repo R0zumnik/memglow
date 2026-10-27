@@ -25,6 +25,8 @@ const defaultsLib = require("../lib/defaults");
 const { createHttpServer } = require("./http");
 const { createAllInOne } = require("./all-in-one");
 const memoryCore = require("../lib/memory-core");
+const { createAutoSplitWorker, autoSplitSettings } = require("../lib/auto-split");
+const { createStructureWorker, structureSettings } = require("../lib/star-audit");
 
 const HELP = `memglow memory server ${SERVER_VERSION} (preview)
 
@@ -197,9 +199,32 @@ function resolveFsyncMode(o, env = process.env) {
   return { mode: "sync", source: "default" };
 }
 
+/**
+ * 0.5.4: the auto-split worker's own settings — "autoSplit" top-level key of memglow.config.json,
+ * allowCwd: false (same restricted trust boundary as every other memory-server setting: a notes
+ * folder that is itself an untrusted, cloned repository must never be able to turn this on, point
+ * it at an attacker's AI endpoint, or read an env var — only an explicit MEMGLOW_CONFIG or
+ * ~/.memglow/memglow.config.json, owned by the person running memglow, plus real env vars, apply).
+ */
+function resolveAutoSplit(env = process.env) {
+  let cfg = {};
+  try { cfg = defaultsLib.resolveConfigFiles({ env, allowCwd: false }).config || {}; } catch { cfg = {}; }
+  const raw = cfg && typeof cfg.autoSplit === "object" ? cfg.autoSplit : {};
+  return autoSplitSettings(raw, env);
+}
+
+/** Same trust boundary as resolveAutoSplit() above — "structure" top-level key, under "maintenance"
+ * too (maintenance.structure) for a caller that nests it there, env wins either way. */
+function resolveStructure(env = process.env) {
+  let cfg = {};
+  try { cfg = defaultsLib.resolveConfigFiles({ env, allowCwd: false }).config || {}; } catch { cfg = {}; }
+  const raw = (cfg.maintenance && typeof cfg.maintenance === "object" && cfg.maintenance.structure) || cfg.structure || {};
+  return structureSettings(raw, env);
+}
+
 function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 3000, watch = true, maxFileBytes, log = () => {},
   fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", structuredRead = true, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne, deferStart = false,
-  coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"] }) {
+  coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null }) {
   let tools = null, warmTimer = null, isReady = !deferStart;
   // The search index is rebuilt lazily by the next search anyway; warming it after a change is
   // coalesced (a burst of writes costs one rebuild, not one per write).
@@ -209,7 +234,14 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     warmTimer = setImmediate(() => { warmTimer = null; try { tools.warm(); } catch { /* next search rebuilds */ } });
   };
   const store = createStore({ root, project, pollMs, watch, log, ...(maxFileBytes ? { maxFileBytes } : {}), onChange });
-  const writer = readOnly ? null : createWriter({ store, fsync, fsyncMode, fileMode, onWrite, onWriteDelayMs, log, hooks: writerHooks, ...(maxFileBytes ? { maxFileBytes } : {}), ...(chownToParent != null ? { chownToParent } : {}) });
+  // 0.5.4: the auto-split worker (lib/auto-split.js) is built before the writer (it needs one),
+  // and the writer needs the worker's noteWritten() (it needs the other) — a late-bound callback
+  // breaks the cycle; `autoSplitWorker` is only ever read AFTER createAutoSplitWorker() below runs.
+  let autoSplitWorker = null;
+  const onWrote = readOnly ? null : (rels) => { if (autoSplitWorker) autoSplitWorker.noteWritten(rels); };
+  const writer = readOnly ? null : createWriter({ store, fsync, fsyncMode, fileMode, onWrite, onWriteDelayMs, log, hooks: writerHooks, onWrote, ...(maxFileBytes ? { maxFileBytes } : {}), ...(chownToParent != null ? { chownToParent } : {}) });
+  autoSplitWorker = createAutoSplitWorker({ store, writer, project, config: autoSplit || {}, dataDir, log });
+  const structureWorker = createStructureWorker({ store, writer, config: structure || {}, dataDir, log, indexNote });
   const startupChecks = () => {
     if (!writer) return;
     try { const w = ownershipWarning(require("fs").statSync(root)); if (w) log(w); } catch { /* no root: nothing to warn about */ }
@@ -234,6 +266,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
       .catch(() => { /* a request still gets the plain scan / a lazy index */ })
       .then(() => { isReady = true; });
   }
+  ready.then(() => { try { autoSplitWorker.start(); } catch { /* inert is the safe default */ } try { structureWorker.start(); } catch { /* inert is the safe default */ } });
   const rawRpc = createRpc({ tools, instructions: readOnly ? INSTRUCTIONS : INSTRUCTIONS_RW });
   const aio = allInOne ? createAllInOne({ rpc: rawRpc, root, log, store, ...(allInOne === true ? {} : allInOne) }) : null;
   const inner = aio ? aio.rpc : rawRpc;
@@ -243,7 +276,10 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     handle: (m, ctx) => (isReady ? inner.handle(m, ctx) : ready.then(() => inner.handle(m, ctx))),
     handleAny: (m, ctx) => (isReady ? inner.handleAny(m, ctx) : ready.then(() => inner.handleAny(m, ctx))),
   } : inner;
-  return { store, tools, rpc, rawRpc, aio, writer, ready, isReady: () => isReady, close: () => { if (warmTimer) { clearImmediate(warmTimer); warmTimer = null; } store.stop(); if (writer) writer.flushHook(); if (aio) aio.close(); } };
+  return {
+    store, tools, rpc, rawRpc, aio, writer, ready, isReady: () => isReady, autoSplit: autoSplitWorker, structure: structureWorker,
+    close: () => { if (warmTimer) { clearImmediate(warmTimer); warmTimer = null; } autoSplitWorker.stop(); structureWorker.stop(); store.stop(); if (writer) writer.flushHook(); if (aio) aio.close(); },
+  };
 }
 
 function runStdio(rpc, input = process.stdin, output = process.stdout, onEnd = () => process.exit(0), ready = null) {
@@ -310,13 +346,20 @@ function main(argv = process.argv.slice(2), env = process.env) {
   // fallback). Neither is required: absent, memory_core just has fewer matching tiers to use.
   const coreMap = memoryCore.readCoreMap(env, root);
   const dataDir = env.MEMGLOW_DATA_DIR ? path.resolve(env.MEMGLOW_DATA_DIR) : null;
+  const autoSplit = resolveAutoSplit(env);
+  const structure = resolveStructure(env);
   // 0.4.10.2: the port opens at once; the notes folder is loaded and indexed in the background
   // (requests meanwhile wait for it, they never fail).
   const srv = createMemoryServer({ root, project: o.project, readOnly: o.readOnly, pollMs: o.pollMs, watch: o.watch, log,
-    coreMap, dataDir, indexNote: o.indexNote.length ? o.indexNote : ["MEMORY", "index"],
+    coreMap, dataDir, indexNote: o.indexNote.length ? o.indexNote : ["MEMORY", "index"], autoSplit, structure,
     fsync: o.fsync, fsyncMode: fsyncInfo.mode, fileMode: o.fileMode, serveFiles: o.serveFiles, structuredRead: o.structuredRead, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
-    allInOne: o.levers ? { env, name: o.name || "memglow-memory", source: o.source } : false, deferStart: true });
+    // 0.5.4: when BOTH --levers and autoSplit are on, sizeWarning's hint (lib/proxy-levers.js)
+    // tells the AI memglow will split the note itself, instead of asking it to call split_plan —
+    // this env var is the only channel: it must never leak to a standalone MCP proxy in front of
+    // an unrelated memory server, which has no such worker.
+    allInOne: o.levers ? { env: autoSplit.enabled ? { ...env, MEMGLOW_PROXY_AUTOSPLIT_IDLE_MINUTES: String(autoSplit.idleMinutes) } : env, name: o.name || "memglow-memory", source: o.source } : false, deferStart: true });
   if (fsyncInfo.warning) log(fsyncInfo.warning);
+  if (autoSplit.enabled && o.readOnly) log("memglow memory server: autoSplit is enabled in the config but the server is read-only (--read-write is required): staying inert");
   srv.ready.then(() => {
     const st = srv.store.stats();
     log(`memglow memory server ${SERVER_VERSION}: ${st.notes} notes indexed from ${root} in ${Date.now() - t0} ms (project "${o.project}", ${o.readOnly ? "read-only" : "read-write, fsync " + fsyncInfo.mode + (fsyncInfo.source !== "default" ? " (" + fsyncInfo.source + ")" : "")}${st.watching ? ", watching" : ""})`);

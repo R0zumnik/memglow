@@ -58,7 +58,7 @@ const NEW_FILE_MODE = 0o660;
 const FSYNC_MODES = ["sync", "deferred", "none"];
 const FSYNC_PARALLEL = 8;
 
-function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, newFileMode = NEW_FILE_MODE, maxFileBytes = 4 * 1024 * 1024, onWrite = "", onWriteDelayMs = 10000, log = () => {}, hooks = {}, chownToParent = isRoot() }) {
+function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, newFileMode = NEW_FILE_MODE, maxFileBytes = 4 * 1024 * 1024, onWrite = "", onWriteDelayMs = 10000, log = () => {}, hooks = {}, chownToParent = isRoot(), onWrote = null }) {
   const root = store.root;
   const realRoot = () => store.realRoot();
   let tail = Promise.resolve();
@@ -497,6 +497,10 @@ function createWriter({ store, fsync = true, fsyncMode = null, fileMode = null, 
     counters.writes++;
     counters.lastWriteAt = Date.now();
     scheduleHook(rels);
+    // 0.5.4 (auto-split, lib/auto-split.js): the one place every write lands, whichever tool or
+    // internal module made it (write_note/edit_note/move_note, or lib/split-engine.js's own
+    // writes) — never let a listener's own error break a write that already succeeded.
+    if (onWrote) { try { onWrote(rels); } catch (e) { log(`memglow memory server: onWrote listener failed: ${e.message}`); } }
   }
 
   return {

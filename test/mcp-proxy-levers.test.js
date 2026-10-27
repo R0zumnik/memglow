@@ -117,7 +117,7 @@ test("defaults (0.4.2.2): only sizeWarning fires — searchDetails/suggestions a
 
     const b = await c.call("read_note", { identifier: "big" });
     const tb = texts(b);
-    assert.match(tb[0], /^⚠ memglow: this note is ≈\d+ tokens \(threshold 1000\)\. Consider offering the user to split it into smaller notes within the same theme "Projects"; memglow's `split_plan` tool can propose sections\.$/);
+    assert.match(tb[0], /^⚠ memglow: this note is ≈\d+ tokens \(threshold 1000\) \(theme "Projects"\)\. Split it now: call `split_plan` for a proposal, group its sections by topic into a few parts, and use your memory tool to create them with short English descriptions\.$/);
     assert.strictEqual(tb[1], rawNote(fx, "projects/big"));
     const again = texts(await c.call("read_note", { identifier: "big" }));
     assert.strictEqual(again[0], rawNote(fx, "projects/big"), "warned only once per note and session");
@@ -182,7 +182,7 @@ test("write crossing the threshold is flagged; unknown tools and errors pass thr
     const small = texts(await c.call("edit_note", { identifier: "carol", operation: "append", content: "short" }));
     assert.strictEqual(small.length, 1, "still small: no warning");
     const w = texts(await c.call("edit_note", { identifier: "carol", operation: "append", content: "x".repeat(6000) }));
-    assert.match(w[0], /^⚠ memglow: this note is now ≈\d+ tokens \(threshold 1000\)\..*"People"/);
+    assert.match(w[0], /^⚠ memglow: this note is now ≈\d+ tokens \(threshold 1000\) \(theme "People"\)\./);
     assert.match(w[1], /^# Edited note/);
     const w2 = texts(await c.call("edit_note", { identifier: "carol", operation: "append", content: "y" }));
     assert.strictEqual(w2.length, 1, "once per note and session");
@@ -854,6 +854,17 @@ test("hideUnsupportedTools: client-matching helpers mirror basic-memory's client
   assert.strictEqual(L.clientInfoAllowed(null, allow), false);
 });
 
+test("sizeWarning 0.5.4: autoSplitIdleMinutes (set only by the memory server's own all-in-one wiring) switches the hint from \"split it now\" to \"memglow will split it automatically\"", () => {
+  const cfg = L.proxyConfig({ MEMGLOW_HOME: path.join(os.tmpdir(), "memglow-as-" + process.pid), MEMGLOW_LARGE_NOTE_TOKENS: "200", MEMGLOW_PROXY_AUTOSPLIT_IDLE_MINUTES: "30" });
+  assert.strictEqual(cfg.autoSplitIdleMinutes, 30);
+  const engine = L.createLevers({ config: cfg, index: L.createNoteIndex(cfg), savings: L.createSavings({ ...cfg, savingsFile: false, log: false }) });
+  engine.clientMessage({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_note", arguments: { identifier: "x" } } });
+  const big = { jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: "z".repeat(4000) }] } };
+  const r = engine.serverMessage(big);
+  assert.match(r.msg.result.content[0].text, /memglow will split it automatically once it has been quiet for 30 minute\(s\) — no action needed\.$/);
+  assert.strictEqual(L.proxyConfig({ MEMGLOW_HOME: path.join(os.tmpdir(), "memglow-as2-" + process.pid) }).autoSplitIdleMinutes, 0, "off by default");
+});
+
 test("engine: no notes folder → levers needing metadata stay silent; a failing lever never breaks the relay", () => {
   const cfg = L.proxyConfig({ MEMGLOW_HOME: path.join(os.tmpdir(), "memglow-none-" + process.pid), MEMGLOW_LARGE_NOTE_TOKENS: "200" });
   const engine = L.createLevers({ config: cfg, index: L.createNoteIndex(cfg), savings: L.createSavings({ ...cfg, savingsFile: false, log: false }) });
@@ -864,7 +875,7 @@ test("engine: no notes folder → levers needing metadata stay silent; a failing
   engine.clientMessage({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "read_note", arguments: { identifier: "x" } } });
   const big = { jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "z".repeat(4000) }] } };
   const r = engine.serverMessage(big);
-  assert.match(r.msg.result.content[0].text, /^⚠ memglow: this note is ≈1000 tokens \(threshold 200\)\. Consider offering the user to split it into smaller notes; /);
+  assert.match(r.msg.result.content[0].text, /^⚠ memglow: this note is ≈1000 tokens \(threshold 200\)\. Split it now: call `split_plan`/);
   assert.strictEqual(r.msg.result.content[1], big.result.content[0]);
   // a server-to-client request reusing one of our ids is not mistaken for the answer
   engine.clientMessage({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "read_note", arguments: { identifier: "y" } } });
