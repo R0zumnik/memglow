@@ -106,7 +106,7 @@ const dirOf = (rel) => { const d = path.posix.dirname(rel); return d === "." ? "
 // (`--serve-files any`), the behaviour before 0.4.9.1.
 const SERVE_EXT = new Set([".md", ".txt", ".json", ".csv", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf"]);
 
-function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"] }) {
+function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null }) {
   // Optional, local-first semantic search (lib/store/semantic.js) — self-configuring from env /
   // memglow.config.json, OFF unless a provider is actually set there (see that module's header
   // comment). `semanticIn` (tests): pass an engine to control it directly, or `null` to force it
@@ -648,6 +648,22 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     return format === "json" ? jsonResult({ available: false, message: msg }) : textResult(msg);
   }
 
+  /**
+   * "maintenance: N structure issue(s), M note(s) over threshold (auto-split on/off)." — one
+   * line, only when BOTH workers were handed to createTools() (always true in production,
+   * memory-server/memglow-memory-server.js; "" for any caller/test that does not pass them, so
+   * memory_core's output is unchanged unless this feature is actually wired in). Never a secret:
+   * `status()` itself never returns the API key, only counts and on/off/provider/model.
+   */
+  function maintenanceLine() {
+    if (!autoSplit || typeof autoSplit.status !== "function" || !structure || typeof structure.status !== "function") return "";
+    const as = autoSplit.status();
+    const st = structure.status();
+    const issues = st.issues.total;
+    const over = as.pendingCount;
+    return `maintenance: ${issues} structure issue${issues === 1 ? "" : "s"}, ${over} note${over === 1 ? "" : "s"} over threshold (auto-split ${as.enabled ? "on" : "off"}).`;
+  }
+
   function memory_core(args) {
     const format = fmtOf(args.output_format);
     const idx = findIndexNote();
@@ -667,8 +683,10 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     }
     const hubIds = hubEntryIds(entries, idx.title);
     const built = memoryCore.buildMemoryCore({ cwd, projectHints, tree, entries, notesById, coreMap, budgetTokens, hubIds, dataDir });
-    if (format === "json") return jsonResult({ ...built.meta, text: built.text });
-    return textResult(built.text);
+    const ml = maintenanceLine();
+    const text = ml ? built.text.replace(/\n*$/, "\n") + ml + "\n" : built.text;
+    if (format === "json") return jsonResult({ ...built.meta, text });
+    return textResult(text);
   }
 
   function memory_index_level(args) {

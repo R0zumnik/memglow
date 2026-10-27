@@ -53,6 +53,10 @@ var EN_CONTROL = {
   "control.memoryServerTokenYes": "token required",
   "control.memoryServerTokenNo": "no token required",
   "control.memoryServerFsync": "writes: fsync {mode}",
+  "control.autoSplitOn": { one: "Auto-split: on — {provider} {model}, {n} note pending", other: "Auto-split: on — {provider} {model}, {n} notes pending" },
+  "control.autoSplitOff": "Auto-split: off",
+  "control.structureOn": { one: "Structure guardian: on — {n} issue found", other: "Structure guardian: on — {n} issues found" },
+  "control.structureOff": "Structure guardian: off",
   "control.measuresEmpty": "No measurements yet.",
   "control.byClientTitle": "By AI tool (7 days)",
   "control.byLeverTitle": "By lever (7 days)",
@@ -275,6 +279,25 @@ function controlRenderMemoryServer(ms, T) {
   return '<p class="mg-control__line">' + cEsc(T("control.memoryServerOk", { mode: mode, notes: ms.notes != null ? ms.notes : "?", version: ms.version || "?" })) + ' · ' + cEsc(tok) + fsb + "</p>";
 }
 
+/**
+ * 0.5.4: the memory server's own built-in auto-split / structure-guardian workers (GET
+ * /api/maintenance, through lib/setup.js's memoryMaintenanceStatus — same MEMGLOW_MEMORY_URL,
+ * same optional token). `mm` = null/`{configured:false}` (not reachable, or the same
+ * MEMGLOW_MEMORY_URL as `ms` above is simply not set) → nothing rendered, same as the "Memory
+ * server" card itself staying silent. Never a secret: only "keySet" (true/false), never a key.
+ */
+function controlRenderMaintenanceWorkers(mm, T) {
+  T = T || defaultControlT;
+  if (!mm || !mm.configured || !mm.ok) return "";
+  const as = mm.autoSplit || { enabled: false };
+  const st = mm.structure || { enabled: false };
+  const asLine = as.enabled
+    ? T("control.autoSplitOn", { n: as.pendingCount || 0, provider: as.provider || "?", model: as.model || "?" })
+    : T("control.autoSplitOff");
+  const stLine = st.enabled ? T("control.structureOn", { n: st.issues || 0 }) : T("control.structureOff");
+  return '<p class="mg-control__line">' + cEsc(asLine) + '</p><p class="mg-control__line">' + cEsc(stLine) + '</p>';
+}
+
 /** The "Measures" section: per-AI-tool tokens relayed (GET /api/cost's clientTokens) + the proxy-seen badge. */
 function controlRenderMeasures(clientTokens, proxySeen, now, T) {
   T = T || defaultControlT;
@@ -305,12 +328,12 @@ function controlRender(data, T, vals) {
   T = T || defaultControlT;
   vals = vals || {};
   var setup = data.setup || {};
-  var c = setup.control || { proxy: { levers: [], caps: [] }, maintenance: {}, memoryServer: { configured: false }, proxySeen: null };
+  var c = setup.control || { proxy: { levers: [], caps: [] }, maintenance: {}, memoryServer: { configured: false }, memoryMaintenance: { configured: false }, proxySeen: null };
   var out = "";
   out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionSavings")) + '</h3>' +
     '<form id="mg-control-proxy-form">' + controlRenderLevers(c.proxy, T, vals.proxy) + '</form></section>';
   out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionMaintenance")) + '</h3>' + controlRenderMaintenance(c.maintenance, data.maintenance, setup.tuning, Date.now(), T, vals.maint) + '</section>';
-  out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionMemoryServer")) + '</h3>' + controlRenderMemoryServer(c.memoryServer, T) + '</section>';
+  out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionMemoryServer")) + '</h3>' + controlRenderMemoryServer(c.memoryServer, T) + controlRenderMaintenanceWorkers(c.memoryMaintenance, T) + '</section>';
   out += '<section class="mg-control__section"><h3>' + cEsc(T("control.sectionMeasures")) + '</h3>' + controlRenderMeasures(data.cost && data.cost.clientTokens, c.proxySeen, Date.now(), T) + '</section>';
   return out;
 }
@@ -321,7 +344,7 @@ if (typeof module !== "undefined" && module.exports) {
     controlAgo: controlAgo, controlSourceText: controlSourceText, controlLeverRow: controlLeverRow,
     controlRenderLevers: controlRenderLevers, controlCollectProxy: controlCollectProxy,
     controlRenderMaintenance: controlRenderMaintenance, controlCollectMaintTuning: controlCollectMaintTuning,
-    controlRenderMemoryServer: controlRenderMemoryServer, controlRenderMeasures: controlRenderMeasures,
+    controlRenderMemoryServer: controlRenderMemoryServer, controlRenderMaintenanceWorkers: controlRenderMaintenanceWorkers, controlRenderMeasures: controlRenderMeasures,
     controlRender: controlRender,
   };
 }

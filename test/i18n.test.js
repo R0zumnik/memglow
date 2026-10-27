@@ -169,6 +169,24 @@ test("i18n: app.js/cost.js/assistant.js/zones.js English fallbacks match public/
   }
 });
 
+test("control.js: controlRenderMaintenanceWorkers (0.5.4) — auto-split/structure lines, silent when not configured/reachable, never a secret", () => {
+  const T = controlPage.defaultControlT;
+  assert.strictEqual(controlPage.controlRenderMaintenanceWorkers(null, T), "");
+  assert.strictEqual(controlPage.controlRenderMaintenanceWorkers({ configured: false }, T), "");
+  assert.strictEqual(controlPage.controlRenderMaintenanceWorkers({ configured: true, ok: false, error: "unreachable" }, T), "");
+  const html = controlPage.controlRenderMaintenanceWorkers({
+    configured: true, ok: true,
+    autoSplit: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5", keySet: true, pendingCount: 2 },
+    structure: { enabled: false, issues: 0 },
+  }, T);
+  assert.match(html, /Auto-split: on — anthropic claude-haiku-4-5, 2 notes pending/);
+  assert.match(html, /Structure guardian: off/);
+  assert.ok(!/<input|<select|<button/.test(html), "a read-only view, never a control");
+  const offHtml = controlPage.controlRenderMaintenanceWorkers({ configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: true, issues: 1 } }, T);
+  assert.match(offHtml, /Auto-split: off/);
+  assert.match(offHtml, /Structure guardian: on — 1 issue found/);
+});
+
 test("i18n: defaultT helpers resolve English outside a browser (Node require, no window)", () => {
   assert.strictEqual(appPage.defaultT("theme.index"), "Index");
   assert.strictEqual(appPage.defaultT("stats.notesWord", { n: 1 }), "note");

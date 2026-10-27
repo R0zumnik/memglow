@@ -366,6 +366,41 @@ test("setup: memoryServerStatus — not configured, unreachable, and a fake /hea
   } finally { fake.close(); }
 });
 
+test("setup: memoryMaintenanceStatus (0.5.4) — not configured, bad answer, a fake /api/maintenance, never the key, and 401 without the right token", async () => {
+  assert.deepStrictEqual(await setup.memoryMaintenanceStatus({ url: "" }), { configured: false });
+  assert.deepStrictEqual(await setup.memoryMaintenanceStatus({ url: "not a url" }), { configured: true, ok: false, error: "bad-url" });
+  const unreachable = await setup.memoryMaintenanceStatus({ url: "http://127.0.0.1:1", timeoutMs: 300 });
+  assert.deepStrictEqual(unreachable, { configured: true, ok: false, error: "unreachable" });
+
+  let lastAuth = null;
+  const fake = http.createServer((req, res) => {
+    lastAuth = req.headers.authorization;
+    if (req.url === "/no-key/api/maintenance") { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ not: "the right shape" })); }
+    if (lastAuth !== "Bearer s3cret") { res.writeHead(401, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: "nope" })); }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      autoSplit: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5", keySet: true, apiKeyEnv_should_never_leak: "sk-ant-should-never-appear", pendingCount: 3, lastScanAt: null, nextScanAt: null, thresholdTokens: 5000, recent: [] },
+      structure: { enabled: false, ai: { enabled: false, provider: "", model: "" }, issues: { total: 2, fixable: 1, needsReview: 1, byRule: { R5: 2 } }, lastScanAt: null, nextScanAt: null, recent: [] },
+    }));
+  });
+  await new Promise((ok) => fake.listen(0, "127.0.0.1", ok));
+  try {
+    const url = `http://127.0.0.1:${fake.address().port}/healthz`;
+    const unauthed = await setup.memoryMaintenanceStatus({ url });
+    assert.deepStrictEqual(unauthed, { configured: true, ok: false, error: "http-401" });
+    const r = await setup.memoryMaintenanceStatus({ url, token: "s3cret" });
+    assert.deepStrictEqual(r, {
+      configured: true, ok: true,
+      autoSplit: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5", keySet: true, pendingCount: 3 },
+      structure: { enabled: false, issues: 2 },
+    });
+    assert.ok(!JSON.stringify(r).includes("sk-ant-should-never-appear"), "only the few known-safe fields are ever copied through");
+
+    const bad = await setup.memoryMaintenanceStatus({ url: `http://127.0.0.1:${fake.address().port}/no-key`, token: "s3cret" });
+    assert.deepStrictEqual(bad, { configured: true, ok: false, error: "bad-answer" });
+  } finally { fake.close(); }
+});
+
 test("setup: GET /api/setup never blocks on a slow /healthz, caches the memory-server status for the window, refreshes in the background (0.4.7.6, minor 5)", async () => {
   let hits = 0;
   let delayMs = 1500; // close to (but under) memoryServerStatus's own 2 s timeout

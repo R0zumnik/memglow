@@ -146,3 +146,20 @@ test("memory_core: a coreMap target that is NOT listed in the index is still res
     srv.close();
   } finally { kb.cleanup(); }
 });
+
+test("memory_core (0.5.4): a one-line \"maintenance: …\" summary from the auto-split/structure workers, on by default (both workers always exist, inert unless configured)", () => {
+  const kb = makeHubKb();
+  try {
+    const off = createMemoryServer({ root: kb.root, watch: false, pollMs: 0 });
+    const outOff = off.tools.call("memory_core", {}).content[0].text;
+    assert.match(outOff, /maintenance: 0 structure issues, 0 notes over threshold \(auto-split off\)\.\n$/);
+    off.close();
+
+    const on = createMemoryServer({ root: kb.root, watch: false, pollMs: 0, readOnly: false, autoSplit: { enabled: true, thresholdTokens: 50 }, structure: { enabled: true } });
+    const outOn = on.tools.call("memory_core", {}).content[0].text;
+    assert.match(outOn, /maintenance: \d+ structure issues?, \d+ notes? over threshold \(auto-split on\)\.\n$/);
+    const json = JSON.parse(on.tools.call("memory_core", { output_format: "json" }).content[0].text);
+    assert.match(json.text, /maintenance: /);
+    on.close();
+  } finally { kb.cleanup(); }
+});

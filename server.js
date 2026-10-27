@@ -480,11 +480,11 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
     });
   }
   /** Never throws (see try/catch below): a bad publicSetup() call must never crash a request. */
-  const setupNow = (req, memoryServer) => {
+  const setupNow = (req, memoryServer, memoryMaintenance) => {
     try {
       return setupLib.publicSetup({
         config, saved: setupStore.read(), env: runEnv, dataDir, memglowHome, req, usage,
-        maintenanceGeneratedAt: maintenanceStore.read().generatedAt, memoryServer, proxySeen,
+        maintenanceGeneratedAt: maintenanceStore.read().generatedAt, memoryServer, memoryMaintenance, proxySeen,
       });
     } catch (e) { console.error("[memglow] /api/setup: publicSetup failed:", e.message); return { error: "not available" }; }
   };
@@ -511,6 +511,24 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
   function memoryServerNow() {
     if (Date.now() - memoryServerCacheAt > MEMORY_SERVER_CACHE_MS) refreshMemoryServerInBackground();
     return memoryServerCache;
+  }
+  // 0.5.4: the memory server's own auto-split / structure-guardian status (GET /api/maintenance)
+  // — same cache, same background-refresh shape as memoryServerNow() above, just a second
+  // endpoint on the same (optional) MEMGLOW_MEMORY_URL.
+  let memoryMaintenanceCache = { configured: false };
+  let memoryMaintenanceCacheAt = 0;
+  let memoryMaintenanceRefreshing = false;
+  function refreshMemoryMaintenanceInBackground() {
+    if (memoryMaintenanceRefreshing) return;
+    memoryMaintenanceRefreshing = true;
+    setupLib.memoryMaintenanceStatus({ url: runEnv.MEMGLOW_MEMORY_URL, token: runEnv.MEMGLOW_MEMORY_TOKEN, fetchImpl })
+      .then((mm) => { memoryMaintenanceCache = mm; })
+      .catch(() => { memoryMaintenanceCache = { configured: false }; })
+      .finally(() => { memoryMaintenanceCacheAt = Date.now(); memoryMaintenanceRefreshing = false; });
+  }
+  function memoryMaintenanceNow() {
+    if (Date.now() - memoryMaintenanceCacheAt > MEMORY_SERVER_CACHE_MS) refreshMemoryMaintenanceInBackground();
+    return memoryMaintenanceCache;
   }
   /** Hosts a key may be sent to, per provider, with the settings in effect now. */
   const destinations = () => Object.fromEntries(setupLib.PROVIDER_IDS.map((id) => {
@@ -673,7 +691,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
         // before the scheduler has actually started (maintenanceEnsureStarted — real deployments
         // have already started it by the time any request arrives).
         maintenanceScheduler.setEveryHours(config.maintenanceEveryHours);
-        return json(res, 200, setupNow(req, memoryServerNow()));
+        return json(res, 200, setupNow(req, memoryServerNow(), memoryMaintenanceNow()));
       });
     }
     // A secret (API key, Claude Code subscription token): its own route, its own rules. Saving one
@@ -839,7 +857,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       return json(res, 200, { ...z, themes: zonesLib.overview(config, memory.costNotes(), z.labels) });
     }
     if (p === "/api/view") return json(res, 200, view.publicView(views.read()));
-    if (p === "/api/setup") return json(res, 200, setupNow(req, memoryServerNow()));
+    if (p === "/api/setup") return json(res, 200, setupNow(req, memoryServerNow(), memoryMaintenanceNow()));
     if (p.startsWith("/api/note/")) {
       let id;
       try { id = decodeURIComponent(p.slice("/api/note/".length)); }

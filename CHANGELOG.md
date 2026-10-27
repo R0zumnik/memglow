@@ -57,13 +57,33 @@
   lists a part instead of its hub, R2 a part with no `Up:`/link back to its hub, R3 a hub's
   `## Parts` missing a confirmed part, or listing a note with no `part_of` that only ONE hub
   claims, R4 a part's own pure sibling-listing line, R5 an orphan note reachable from nowhere —
-  built on top of `lib/hub-spoke.js`'s own detector, never reimplementing it. The mechanical fixes
-  (adding a missing `part_of`/`Up:` line, appending a hub's missing bullet, removing a pure sibling
-  line, replacing an index line that points at a part by its hub) are applied automatically,
-  through the store/writer, on the same schedule as auto-split; a case that needs judgement (no
-  obvious hub, two hubs claiming one note, …) is reported (`fix: null`) but not yet decided by an
-  AI — a future stage. Idempotent: a second scan after the fixes land finds nothing left.
-  `test/star-audit.test.js`.
+  built on top of `lib/hub-spoke.js`'s own detector, never reimplementing it. **ADD-only,
+  always**: the worker adds a missing `part_of`/`Up:` line, appends a hub's missing bullet, or
+  replaces an index line that points at a part by its hub (inserting the hub's line, never
+  deleting the part's without putting something in its place) — it never deletes a note's own
+  line automatically; R4 is reported only (`fix: null`), even when the sibling-listing line is
+  "pure" (`buildFix({type:"remove-line"})` still exists for an explicit caller). **AI judgement**
+  (`structure.ai.enabled` + a configured provider, same `lib/ai-provider.js`): for an R5 orphan or
+  an R3 note two-or-more hubs' own `## Parts` both list, the AI gets the note (masked, first ~40
+  lines), the candidate hubs (id + description) and the index's own section headings, and answers
+  `{"action":"attach"|"index"|"leave", …}` — validated (hub/section must be one of the ones
+  listed), applied with ADD-only fixes, one retry on an invalid/unparseable answer, then logged
+  either way; at most `maxDecisionsPerScan` (default 10) per scan. Idempotent: a second scan after
+  the fixes land finds nothing left. `test/star-audit.test.js` (29 tests, including the mock-AI
+  judgement cases: attach, index, leave, invalid hub, invalid section, the ambiguous-R3 case).
+- **`GET /api/maintenance`** (memory server's own HTTP port, same auth as every other request
+  there): `{ autoSplit: {enabled, provider, model, keySet, thresholdTokens, pendingCount,
+  lastScanAt, nextScanAt, recent}, structure: {enabled, ai, issues, lastScanAt, nextScanAt,
+  recent} }` — never the key itself. The viewer's Settings → Control panel shows it (next to the
+  existing "Memory server" health card, `lib/setup.js`'s `memoryMaintenanceStatus()`,
+  `public/control.js`'s `controlRenderMaintenanceWorkers()`, 8 languages), and `memory_core`'s
+  answer always ends with `maintenance: N structure issue(s), M note(s) over threshold (auto-split
+  on/off).`. `test/memory-server-http.test.js`, `test/setup.test.js`, `test/i18n.test.js`,
+  `test/memory-server-core.test.js`.
+- README: "Running the `claude-code` provider in Docker" (auto-split/structure guardian, a
+  read-only `node:22-alpine` container) — the binary mounted from an external `npm install
+  --prefix`, `$HOME` falling back to a writable `claudeHome`/tmpfs (already handled by
+  `lib/ai-provider.js` itself), the OAuth token file shared with the interactive assistant's own.
 
 ## 0.5.3 — 2026-10-23
 

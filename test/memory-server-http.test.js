@@ -191,6 +191,47 @@ test("HTTP /healthz: minor 7 (0.4.7.6) — with a token configured, an UNAUTHENT
   } finally { server2.close(); srv2.close(); kb2.cleanup(); }
 });
 
+test("HTTP /api/maintenance (0.5.4): the auto-split/structure workers' status, gated like every other request, never the key", async () => {
+  const kb = makeKb();
+  const srv = createMemoryServer({
+    root: kb.root, readOnly: false, watch: false, pollMs: 0,
+    autoSplit: { enabled: true, thresholdTokens: 300, provider: "anthropic", apiKeyEnv: "SOME_KEY" },
+    structure: { enabled: true },
+  });
+  const server = createHttpServer({ rpc: srv.rpc, store: srv.store, token: "s3cret", readOnly: false, autoSplit: srv.autoSplit, structure: srv.structure });
+  await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
+  const url = `http://127.0.0.1:${server.address().port}/api/maintenance`;
+  try {
+    const unauthed = await fetch(url);
+    assert.strictEqual(unauthed.status, 401, "same gating as every other request here — not a free-for-all like /healthz");
+
+    const r = await fetch(url, { headers: { authorization: "Bearer s3cret" } });
+    assert.strictEqual(r.status, 200);
+    const j = await r.json();
+    assert.deepStrictEqual(Object.keys(j).sort(), ["autoSplit", "structure"]);
+    assert.deepStrictEqual(Object.keys(j.autoSplit).sort(), ["enabled", "keySet", "lastScanAt", "model", "nextScanAt", "pendingCount", "provider", "recent", "thresholdTokens"]);
+    assert.strictEqual(j.autoSplit.enabled, true);
+    assert.strictEqual(j.autoSplit.provider, "anthropic");
+    assert.strictEqual(j.autoSplit.keySet, false, "SOME_KEY is not actually set in the environment");
+    assert.ok(Array.isArray(j.autoSplit.recent));
+    assert.deepStrictEqual(Object.keys(j.structure).sort(), ["ai", "enabled", "issues", "lastScanAt", "nextScanAt", "recent"]);
+    assert.strictEqual(j.structure.enabled, true);
+    assert.strictEqual(typeof j.structure.issues.total, "number");
+    assert.ok(!JSON.stringify(j).includes("SOME_KEY"), "never the api key env var name's value, and no key anywhere in the answer");
+  } finally { server.close(); srv.close(); kb.cleanup(); }
+
+  // Neither worker configured at all: a harmless, all-false/empty shape, never a crash.
+  const kb2 = makeKb();
+  const srv2 = createMemoryServer({ root: kb2.root, readOnly: true, watch: false, pollMs: 0 });
+  const server2 = createHttpServer({ rpc: srv2.rpc, store: srv2.store, readOnly: true, autoSplit: srv2.autoSplit, structure: srv2.structure });
+  await new Promise((ok) => server2.listen(0, "127.0.0.1", ok));
+  try {
+    const j2 = await (await fetch(`http://127.0.0.1:${server2.address().port}/api/maintenance`)).json();
+    assert.strictEqual(j2.autoSplit.enabled, false);
+    assert.strictEqual(j2.structure.enabled, false);
+  } finally { server2.close(); srv2.close(); kb2.cleanup(); }
+});
+
 test("concurrency: 20 parallel searches all complete, even while another client's upload is stalled mid-body", async () => {
   const s = await start();
   try {

@@ -250,7 +250,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     const col = store.collisions();
     if (twins.length || col.length) log(`memglow memory server: ${twins.length + col.length} note(s) present under several paths or permalinks (an interrupted move?) — see basic_memory_diagnostics`);
   };
-  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, log, coreMap, dataDir, indexNote, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove } });
+  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, log, coreMap, dataDir, indexNote, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove }, autoSplit: autoSplitWorker, structure: structureWorker });
   let ready;
   if (!deferStart) {
     store.start();
@@ -372,7 +372,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
     const m = /^(?:\[?([^\]]*)\]?:)?(\d+)$/.exec(o.listen.trim());
     if (!m) { process.stderr.write(`memglow-memory-server: bad --listen "${o.listen}" (expected HOST:PORT)\n`); return 2; }
     const host = m[1] || "127.0.0.1", port = Number(m[2]);
-    const server = createHttpServer({ rpc: srv.rpc, store: srv.store, log, allowOrigins: o.allowOrigins, token: o.token, readOnly: o.readOnly, fsyncMode: srv.writer ? srv.writer.fsyncMode : null });
+    const server = createHttpServer({ rpc: srv.rpc, store: srv.store, log, allowOrigins: o.allowOrigins, token: o.token, readOnly: o.readOnly, fsyncMode: srv.writer ? srv.writer.fsyncMode : null, autoSplit: srv.autoSplit, structure: srv.structure });
     server.once("error", (e) => { process.stderr.write(`memglow-memory-server: cannot listen on ${host}:${port}: ${e.message}\n`); srv.close(); process.exit(1); });
     server.listen(port, host, () => log(`memglow memory server: listening on http://${host}:${server.address().port}/mcp`));
     // Writes in progress — and, with --fsync-mode deferred, their pending fsyncs — finish first

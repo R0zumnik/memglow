@@ -1221,13 +1221,72 @@ Alongside auto-split, the memory server can also keep the memory's
 hubs and standalone notes, never a part; **R2** every part has `part_of:` and an `Up: [[hub]]`
 line; **R3** every hub's `## Parts` lists all its parts and nothing that isn't one; **R4** a part
 does not list its siblings; **R5** no orphan — every note is reachable from the index, is a part,
-or is named in a hub's `## Parts`. The mechanical cases are fixed automatically, through the same
-store/writer every write tool uses: adding a missing `Up:`/`part_of:` line, appending a hub's
-forgotten bullet, removing a pure sibling-listing line, replacing an index line that points at a
-part by its hub. A case that needs real judgement — an orphan with no obvious hub, two hubs both
-claiming one note, which index section a hub belongs under — is detected and reported (`fix:
-null`) but **not yet decided automatically**; that is left to a future stage. A second scan right
-after the fixes land finds nothing left to do.
+or is named in a hub's `## Parts`.
+
+**ADD-only, always** — the worker never deletes or rewrites a line it did not itself just add: it
+adds a missing `Up:`/`part_of:` line, appends a hub's forgotten bullet, or replaces an index line
+that points at a part by its hub (inserting the hub's own line, never removing the part's without
+putting something in its place). R4 (a part listing its siblings) is **reported only** — nothing
+is ever deleted automatically, not even an obviously-redundant sibling-listing line; that stays a
+human (or AI, see below) decision, applied by hand or through `split_plan`'s own instruction.
+
+**AI judgement for the two genuinely ambiguous cases** — an R5 orphan (no obvious hub) and an R3
+note two or more hubs' own `## Parts` both list — off unless `structure.ai.enabled` **and** a
+[provider](#auto-split) resolves (same `lib/ai-provider.js`, same env vars, independently
+configurable from `autoSplit`'s own). The AI gets the note's title/description/first ~40 lines
+(secret-masked), the candidate hubs (id + description) and the index's own section headings, and
+answers strict JSON: `{"action":"attach","hub":…,"hook":…}` (adds `part_of:` + an `Up:` line to
+the note, and the hub's own bullet — all three are additions), `{"action":"index","section":…,
+"hook":…}` (one new bullet at the end of that index section — nothing else in the index moves or
+is removed), or `{"action":"leave"}` (never guesses). Validated (the hub must be a confirmed hub
+or a stand-alone note already in the index; the section must be one of the index's own headings)
+before anything is applied; an invalid or unparseable answer is retried once, then memglow gives
+up on that note and logs it. At most `structure.ai.maxDecisionsPerScan` (default 10) per scan.
+
+**Visibility**: `GET /api/maintenance` on the memory server's own HTTP port (same auth as every
+other request there) answers `{ autoSplit: {enabled, provider, model, keySet, thresholdTokens,
+pendingCount, lastScanAt, nextScanAt, recent}, structure: {enabled, ai, issues, lastScanAt,
+nextScanAt, recent} }` — never the key itself, only whether one resolved. The viewer's own
+Settings → Control panel shows it too (next to the existing "Memory server" health card) when
+`MEMGLOW_MEMORY_URL` points at it, and `memory_core`'s answer always ends with one line,
+`maintenance: N structure issue(s), M note(s) over threshold (auto-split on/off).`, win or lose,
+so the AI reading its own memory sees the state without a separate call.
+
+#### Running the `claude-code` provider in Docker
+
+Unlike the [interactive assistant's own Claude Code provider](#docker-claude-code) (a dedicated
+`--build-arg CLAUDE_CODE=1` image variant, installed at build time), the memory server's own
+auto-split/structure-guardian image is meant to stay small and its container's root filesystem is
+often **read-only** in production (`docker run --read-only`, or a Kubernetes `readOnlyRootFilesystem:
+true`). `lib/assistant/providers/claude-code.js` (reused as-is by `lib/ai-provider.js`) needs three
+things, each of which fits a read-only container without rebuilding the image:
+
+1. **The `claude` binary itself.** Install it once into a directory you mount in, rather than
+   baking it into the image:
+   ```bash
+   mkdir -p ./claude-install && npm install --prefix ./claude-install @anthropic-ai/claude-code
+   docker run --read-only -v "$PWD/claude-install:/opt/claude:ro" \
+     -e MEMGLOW_AI_CLAUDE_BIN=/opt/claude/node_modules/.bin/claude \
+     … memglow-memory-server --read-write …
+   ```
+   `autoSplit.command` / `structure.ai.command` (or the shared `MEMGLOW_AI_CLAUDE_BIN` env var)
+   point the provider at that path instead of searching `PATH`.
+2. **A writable `$HOME`.** Claude Code writes its own config/cache under `$HOME/.claude`; a
+   read-only root filesystem has none. `lib/ai-provider.js` already checks this itself — when
+   `process.env.HOME` is not writable, it falls back to `claudeHome` (default
+   `os.tmpdir()/memglow-claude`, which on a container is the `/tmp` tmpfs memglow already needs
+   nothing special for) and sets the CLI's `HOME` to that for the one call, never touching the
+   process's own. Mount a small tmpfs explicitly if you want it isolated from the rest of `/tmp`:
+   `docker run --read-only --tmpfs /tmp:size=64m,mode=1777 …`.
+3. **The sign-in token.** Same mechanism as the interactive assistant's own Claude Code provider
+   (see [Claude Code subscription in Docker](#docker-claude-code)): run `claude setup-token` on a
+   machine where you are signed in, and pass the printed token as `CLAUDE_CODE_OAUTH_TOKEN` — or
+   write it alone to `<MEMGLOW_DATA_DIR>/claude-code-oauth-token` (mode 600; the same file the
+   interactive assistant's own page-saved token uses, read from the SAME `MEMGLOW_DATA_DIR`
+   volume, so one sign-in powers both). Never on the command line, never baked into the image.
+
+The memory server's own data volume (`MEMGLOW_DATA_DIR`, already needed for its counters) is
+enough for (3); (1) and (2) are each one extra mount, no image rebuild.
 
 <a id="all-in-one"></a>
 ### All-in-one: one container

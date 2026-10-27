@@ -103,7 +103,7 @@ function sessionKeyFor(req, sid, payload, propose, hdrSid) {
   return connKey(req.socket);
 }
 
-function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, allowOrigins = [], token = "", readOnly = true, fsyncMode = null }) {
+function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, allowOrigins = [], token = "", readOnly = true, fsyncMode = null, autoSplit = null, structure = null }) {
   const origins = new Set((allowOrigins || []).map((o) => String(o).trim().replace(/\/+$/, "").toLowerCase()).filter(Boolean));
   const sessions = new Map(); // id → { version, lastSeen }
 
@@ -131,6 +131,18 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
       for (const [k] of old) sessions.delete(k);
     }
     sessions.set(id, { version, lastSeen: Date.now() });
+  }
+
+  /** ISO 8601, or null — timestamps in the public answer are always strings, never raw epoch ms. */
+  const iso = (ms) => (typeof ms === "number" ? new Date(ms).toISOString() : null);
+  const recentOf = (w) => (w && w.recentEvents ? w.recentEvents().slice(-10).map((e) => ({ t: iso(e.t), kind: e.kind, note: e.note, detail: e.detail })) : []);
+  function maintenanceStatus() {
+    const as = autoSplit && autoSplit.status ? autoSplit.status() : { enabled: false, provider: "", model: "", keySet: false, thresholdTokens: 0, pendingCount: 0, lastScanAt: null, nextScanAt: null };
+    const st = structure && structure.status ? structure.status() : { enabled: false, ai: { enabled: false, provider: "", model: "" }, issues: { total: 0, fixable: 0, needsReview: 0, byRule: {} }, lastScanAt: null, nextScanAt: null };
+    return {
+      autoSplit: { ...as, lastScanAt: iso(as.lastScanAt), nextScanAt: iso(as.nextScanAt), recent: recentOf(autoSplit) },
+      structure: { ...st, lastScanAt: iso(st.lastScanAt), nextScanAt: iso(st.nextScanAt), recent: recentOf(structure) },
+    };
   }
 
   const server = http.createServer((req, res) => {
@@ -176,6 +188,11 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
     if (!authed) {
       return send(res, 401, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "Unauthorized: a valid Authorization: Bearer token is required" } }, { "www-authenticate": "Bearer" });
     }
+    // 0.5.4: the auto-split / star-structure workers' own status, for the viewer's control panel
+    // (lib/setup.js's own memoryMaintenanceStatus(), same shape as the memoryServerStatus() /
+    // healthz pattern) and anyone else that wants it — same auth as every other request here,
+    // never the API key itself (only "keySet": true/false).
+    if (p === "/api/maintenance" && req.method === "GET") return send(res, 200, maintenanceStatus());
     if (p !== mcpPath && !(p === "/" && mcpPath === "/")) {
       return send(res, 404, { jsonrpc: "2.0", id: null, error: { code: -32000, message: `Not found: ${url.pathname} (the MCP endpoint is ${mcpPath})` } });
     }
