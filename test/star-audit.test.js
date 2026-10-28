@@ -612,3 +612,52 @@ test("R4 (0.5.5 bug fix): the AI's verdict is cached by content hash + lineIndex
     assert.strictEqual(w2.status().r4Verdicts[0].action, "keep", "the cached verdict is still reported");
   } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+// ------------------------------------------------------------------ AI judgement (0.5.5 bug fix C — theme-matched attach)
+
+test("judgeIssues (0.5.5 bug fix): \"attach\" is only ever offered a theme-matching hub when both the orphan and the hub declare a theme — a mismatched hub is never even in the candidate list", () => {
+  const { srv, cleanup } = makeSrv({
+    "memory/MEMORY.md": "---\ntitle: MEMORY\n---\n\n## Tech\n- [[hub-tech]] — the tech hub\n\n## Family\n- [[hub-family]] — the family hub\n",
+    "memory/hub-tech.md": "---\ntitle: hub-tech\ntheme: tech\n---\n\n## Parts\n- [[spoke-tech]] — a tech spoke\n",
+    "memory/spoke-tech.md": "---\ntitle: spoke-tech\npart_of: hub-tech\ntheme: tech\n---\n\nUp: [[hub-tech]] — part of hub-tech.\n\nBody.\n",
+    "memory/hub-family.md": "---\ntitle: hub-family\ntheme: family\n---\n\n## Parts\n- [[spoke-family]] — a family spoke\n",
+    "memory/spoke-family.md": "---\ntitle: spoke-family\npart_of: hub-family\ntheme: family\n---\n\nUp: [[hub-family]] — part of hub-family.\n\nBody.\n",
+    "memory/orphan-nas.md": "---\ntitle: orphan-nas\ntheme: tech\ndescription: A NAS configuration note\n---\n\nNobody links here, and it links nowhere.\n",
+  });
+  try {
+    const indexId = star.indexIdOf(srv.store, ["MEMORY", "index"]);
+    const notes = star.recordsFrom(srv.store.notes());
+    const byId = new Map(notes.map((r) => [r.id, r]));
+    const { hubs } = star.candidatesFor(notes, indexId, byId);
+    assert.deepStrictEqual(hubs.map((h) => ({ id: h.id, theme: h.theme })).sort((a, b) => a.id < b.id ? -1 : 1),
+      [{ id: "hub-family", theme: "family" }, { id: "hub-tech", theme: "tech" }]);
+    const noteTheme = star.themeOf(byId.get("orphan-nas"));
+    assert.strictEqual(noteTheme, "tech");
+    const eligible = hubs.filter((h) => !noteTheme || !h.theme || h.theme === noteTheme);
+    assert.deepStrictEqual(eligible.map((h) => h.id), ["hub-tech"], "hub-family (different theme) is excluded outright, never offered to the AI");
+  } finally { cleanup(); }
+});
+
+test("judgeIssues (0.5.5 bug fix): a theme-mismatched \"attach\" answer is REFUSED (not in validHubs) and retried — the AI never gets its wrong attach applied", async () => {
+  const { root, srv, cleanup } = makeSrv({
+    "memory/MEMORY.md": "---\ntitle: MEMORY\n---\n\n## Tech\n- [[hub-tech]] — the tech hub\n\n## Family\n- [[hub-family]] — the family hub\n",
+    "memory/hub-tech.md": "---\ntitle: hub-tech\ntheme: tech\n---\n\n## Parts\n- [[spoke-tech]] — a tech spoke\n",
+    "memory/spoke-tech.md": "---\ntitle: spoke-tech\npart_of: hub-tech\ntheme: tech\n---\n\nUp: [[hub-tech]] — part of hub-tech.\n\nBody.\n",
+    "memory/hub-family.md": "---\ntitle: hub-family\ntheme: family\n---\n\n## Parts\n- [[spoke-family]] — a family spoke\n",
+    "memory/spoke-family.md": "---\ntitle: spoke-family\npart_of: hub-family\ntheme: family\n---\n\nUp: [[hub-family]] — part of hub-family.\n\nBody.\n",
+    "memory/orphan-nas.md": "---\ntitle: orphan-nas\ntheme: tech\ndescription: A NAS configuration note\n---\n\nNobody links here, and it links nowhere.\n",
+  });
+  try {
+    const cfg = star.structureSettings({ ai: { enabled: true, maxDecisionsPerScan: 10 } }, {});
+    const indexId = star.indexIdOf(srv.store, ["MEMORY", "index"]);
+    const notes = star.recordsFrom(srv.store.notes());
+    const issues = star.audit({ notes, indexId, archiveFolder: "archive" });
+    let calls = 0;
+    const aiRun = async () => { calls++; return { ok: true, text: JSON.stringify({ action: "attach", hub: "hub-family", hook: "a NAS note" }) }; };
+    const applied = await star.judgeIssues({ store: srv.store, writer: srv.writer, cfg, env: {}, dataDir: null, log: () => {}, indexId, notes, issues, aiRun });
+    assert.strictEqual(applied.length, 0, "never attached to the wrong-theme hub");
+    assert.strictEqual(calls, 2, "refused and retried once, same as any other invalid answer");
+    assert.strictEqual(fs.readFileSync(path.join(root, "memory/orphan-nas.md"), "utf8"),
+      "---\ntitle: orphan-nas\ntheme: tech\ndescription: A NAS configuration note\n---\n\nNobody links here, and it links nowhere.\n");
+  } finally { cleanup(); }
+});

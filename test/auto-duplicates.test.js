@@ -215,3 +215,30 @@ test("worker (0.5.5): every verdict is cached by the PAIR's content hash across 
     assert.strictEqual(w2.status().reported.length, 1, "but the cached verdict is still reported this scan");
   } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test("findDuplicatePairs (0.5.5 bug fix): ignores generic words (memglow, project, note, dates, bare numbers) in the overlap — the real-KB false positive no longer matches even with those words shared", () => {
+  const notes = [
+    { id: "feedback-autonomy-and-safety", label: "Feedback: autonomy and safety", description: "Notes on the memglow project, dated 2026-09-01, entry 2" },
+    { id: "project-memglow-v04-strategy", label: "Project memglow v0.4 strategy", description: "Notes on the memglow project, dated 2026-09-02, entry 3" },
+  ];
+  // Every shared word here ("notes", "memglow", "project", "dated", the dates/numbers) is
+  // generic — with them filtered out, there is nothing left to share.
+  assert.deepStrictEqual(dup.findDuplicatePairs(notes), []);
+});
+
+test("findDuplicatePairs (0.5.5 bug fix): requires the SAME declared theme when BOTH notes set one — a strong word overlap is not enough across declared themes", () => {
+  const notes = [
+    { id: "reference-ha-automations", label: "Home Assistant Automations Reference", description: "Automation triggers and conditions reference", theme: "home-assistant" },
+    { id: "project-automations-journal", label: "Automations Journal Project", description: "Automation triggers and conditions, project journal", theme: "project" },
+  ];
+  assert.deepStrictEqual(dup.findDuplicatePairs(notes), [], "different declared themes: excluded outright, whatever the word overlap");
+  const sameTheme = notes.map((n) => ({ ...n, theme: "home-assistant" }));
+  assert.strictEqual(dup.findDuplicatePairs(sameTheme).length, 1, "same declared theme: the pair is found as before");
+});
+
+test("significantWordsOf: drops GENERIC_WORDS and bare numbers/dates, keeps everything else", () => {
+  const words = dup.significantWordsOf({ id: "x", label: "Espresso memglow 2026-09-01 Project Notes", description: "42 grind" });
+  assert.ok(words.includes("espresso") && words.includes("grind"));
+  assert.ok(!words.includes("memglow") && !words.includes("project") && !words.includes("notes"));
+  assert.ok(!words.some((w) => /^\d+$/.test(w) || /^\d{4}-\d{2}-\d{2}$/.test(w)));
+});

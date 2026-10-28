@@ -69,3 +69,14 @@ test("a malformed or missing file on disk is treated as empty, never throws", ()
     assert.strictEqual(c.size(), 0);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("0.5.5 bug fix: set() writes to disk SYNCHRONOUSLY — the file is correct immediately, with no flush() call at all (robust against an abrupt process exit)", () => {
+  const dir = tmpDir();
+  try {
+    const c = createVerdictCache({ dataDir: dir, file: "x.json" });
+    c.set("k", "left");
+    // No flush() here on purpose.
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, "x.json"), "utf8"));
+    assert.strictEqual(raw.entries.k.v, "left");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

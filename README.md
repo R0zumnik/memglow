@@ -1264,7 +1264,11 @@ the note, and the hub's own bullet — all three are additions), `{"action":"ind
 is removed), or `{"action":"leave"}` (never guesses). Validated (the hub must be a confirmed hub
 or a stand-alone note already in the index; the section must be one of the index's own headings)
 before anything is applied; an invalid or unparseable answer is retried once, then memglow gives
-up on that note and logs it. At most `structure.ai.maxDecisionsPerScan` (default 10) per scan.
+up on that note and logs it. **A hub is only ever offered as an "attach" target when its own
+`theme` equals the orphan note's `theme`, when BOTH declare one** — a tech note is never attached
+to a family-admin hub just because it has no obvious home; with no theme-matching hub, the AI
+still has the index-placement fallback or "leave". At most `structure.ai.maxDecisionsPerScan`
+(default 10) per scan.
 
 **Visibility**: `GET /api/maintenance` on the memory server's own HTTP port (same auth as every
 other request there) answers `{ autoSplit: {enabled, provider, model, keySet, thresholdTokens,
@@ -1290,32 +1294,38 @@ lose, so the AI reading its own memory sees the state without a separate call.
 
 A third worker alongside auto-split/structure, same family — **off by default**:
 `"maintenance": { "archive": { "enabled": true } }` or `MEMGLOW_AUTO_ARCHIVE=1`, plus a
-[provider](#auto-split) (shared config shape, independently configurable). A cheap, AI-FREE code
-pre-filter runs first: a note only becomes a candidate at all when at least one of its TOP-LEVEL
-sections has a most-recent date older than `keepDays` AND those old sections' combined size
-reaches `minTokens` (default 400) — everything else is skipped silently, no AI call, no log line.
-Eligible candidates are then ranked by their old-tokens total, biggest first, and
-**`maxChecksPerScan` (default 5) caps the AI calls themselves** for this spent budget
-(`maxActionsPerScan` separately caps archives actually applied — the two used to be conflated,
-so a scan with nothing to apply yet asked the AI about every single note). For each one asked,
-the AI is shown the note's outline (`[S1]`-style ids, the MOST RECENT date found in a heading or
-its text) and `keepDays`, and picks sections that are clearly obsolete — a closed incident, a
-superseded version, an old dated entry — or none, never guessing. **Both `keepDays` and
-`minTokens` are also enforced IN CODE** on the AI's own answer, not merely asked of it: a chosen
-section whose own most recent date is newer than the `keepDays` cutoff is dropped, and the
-remaining chosen sections' combined size must still reach `minTokens` — never archive a dated
-entry that is not actually old enough, or a handful of lines into a brand-new note, whatever the
-AI answered. Sections are selected by their outline INDEX (the `[S#]` id itself), never by
-heading text, so a note with two identically-worded headings works fine. Chosen sections then move
-VERBATIM into a sibling note `<slug>-archive` (appended to if it already exists, else created with
-`part_of` pointing at the note's own hub, or the note itself, and an `Up:` line); the source note
-gets one new line, ADD only: `Archived sections: see [[<slug>-archive]].`. A "nothing eligible"
-verdict (from the AI itself) is also cached by the note's own CONTENT HASH (never re-asked until
-the note actually changes, surviving a restart). This is independent of — and complements — the
-existing [dormancy-based archive tier](#archive) (usage counters, no AI): that one finds content
-nobody has *read*, this one finds content that is *obviously stale on its own terms*. Config:
-`maintenance.archive: { enabled, keepDays, minTokens, idleMinutes, scanHours, maxChecksPerScan,
-maxActionsPerScan, provider, model, … }`. `test/auto-archive.test.js`.
+[provider](#auto-split) (shared config shape, independently configurable). **Scope defaults to
+`includeFolders: ["memory/project"]`** — never `feedback/`, `user/`, `reference/` by default
+(standing rules and reference material are not a project journal to prune); set
+`maintenance.archive.includeFolders` to widen or change it. A cheap, AI-FREE code pre-filter runs
+first: a note only becomes a candidate at all when at least one of its TOP-LEVEL sections has a
+most-recent date older than `keepDays` AND those old sections' combined size reaches `minTokens`
+(default 400) — everything else is skipped silently, no AI call, no log line. Eligible candidates
+are then ranked by their old-tokens total, biggest first, and **`maxChecksPerScan` (default 5)
+caps the AI calls themselves** for this spent budget (`maxActionsPerScan` separately caps
+archives actually applied — the two used to be conflated, so a scan with nothing to apply yet
+asked the AI about every single note). For each one asked, the AI is shown the note's outline
+(`[S1]`-style ids, the MOST RECENT date found in a heading or its text) and `keepDays`, and picks
+sections that are clearly obsolete — a closed incident, a superseded version, an old dated entry
+— or none, never guessing. **`keepDays`, `minTokens` and `maxShare` are all also enforced IN
+CODE** on the AI's own answer, not merely asked of it: a chosen section whose own most recent
+date is newer than the `keepDays` cutoff is dropped; the remaining chosen sections' combined size
+must still reach `minTokens`; and that same combined size must not exceed `maxShare` (default
+0.7, i.e. 70%) of the note's own total body size — never archive a dated entry that is not
+actually old enough, a handful of lines into a brand-new note, or nearly the whole note (which is
+already, functionally, an archive). Sections are selected by their outline INDEX (the `[S#]` id
+itself), never by heading text, so a note with two identically-worded headings works fine. Chosen
+sections then move VERBATIM into a sibling note `<slug>-archive` (appended to if it already
+exists, else created with `part_of` pointing at the note's own hub, or the note itself, and an
+`Up:` line); the source note gets one new line, ADD only: `Archived sections: see
+[[<slug>-archive]].`. A "nothing eligible" verdict (from the AI itself) is also cached by the
+note's own CONTENT HASH, written to disk at once (never debounced — survives even an abrupt
+process exit) — never re-asked until the note actually changes, surviving a restart. This is
+independent of — and complements — the existing [dormancy-based archive tier](#archive) (usage
+counters, no AI): that one finds content nobody has *read*, this one finds content that is
+*obviously stale on its own terms*. Config: `maintenance.archive: { enabled, keepDays, minTokens,
+maxShare, idleMinutes, scanHours, maxChecksPerScan, maxActionsPerScan, includeFolders, provider,
+model, … }`. `test/auto-archive.test.js`.
 
 <a id="auto-duplicates"></a>
 ### Duplicate notes (optional)
@@ -1323,13 +1333,17 @@ maxActionsPerScan, provider, model, … }`. `test/auto-archive.test.js`.
 Same family again — **off by default**: `"maintenance": { "duplicates": { "enabled": true } }` or
 `MEMGLOW_AUTO_DUPLICATES=1`. Candidate pairs are found cheaply from title/description word overlap
 (reusing — but with a stricter threshold than — the MCP proxy's own `duplicateHint` helper, tuned
-for a different purpose), excluding a pair where one note is `part_of` the other (a hub and its
-own part — never "duplicates"), then the AI confirms each remaining pair with `{"duplicate":
+for a different purpose; a short `GENERIC_WORDS` list — "memglow", "project", "note", … — and any
+bare number or date-shaped token are dropped from the overlap first, too common across unrelated
+notes to mean anything on their own), excluding a pair where one note is `part_of` the other (a
+hub and its own part — never "duplicates") or where both declare a DIFFERENT `theme`, then the AI
+confirms each remaining pair with `{"duplicate":
 true|false, "keep": "a"|"b", "reason": "…"}`. **`maxChecksPerScan` (default 5) caps the AI CALLS
 themselves** — independent of `maxActionsPerScan` (which only ever caps applied merges, and so
 never limits anything at all while `autoMerge` is off, the default). Every verdict, duplicate or
-not, is cached by the pair's own content hash (never re-asked about two unchanged notes, surviving
-a restart). **Default: report only** — every verdict lands in `GET /api/maintenance`'s
+not, is cached by the pair's own content hash, written to disk at once (never debounced — never
+re-asked about two unchanged notes, surviving even an abrupt process exit). **Default: report
+only** — every verdict lands in `GET /api/maintenance`'s
 `duplicates.reported` and the control panel, nothing is ever written. `maintenance.duplicates.
 autoMerge: true` (its own flag, off by default even with detection on; env
 `MEMGLOW_AUTO_DUPLICATES_MERGE`) additionally appends the other note's body under a `## Merged

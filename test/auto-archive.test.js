@@ -79,7 +79,7 @@ test("worker: create-vs-append, zero-loss, and idempotent re-ask suppression —
     // dedicated test below uses the tiny default-size fixture on purpose).
     const w = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" },
-      config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
       aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ sections: ["S2"], reason: "closed incident" }) }; },
     });
     await w.scanOnce();
@@ -97,7 +97,7 @@ test("worker: create-vs-append, zero-loss, and idempotent re-ask suppression —
     srv.store.refreshNote && srv.store.refreshNote("memory/ops.md");
     const w2 = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" },
-      config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
       aiRun: async () => ({ ok: true, text: JSON.stringify({ sections: ["S2"], reason: "also closed" }) }),
     });
     await w2.scanOnce();
@@ -112,11 +112,11 @@ test("worker (0.5.5 bug fix): a note with TWO IDENTICAL headings — archiving w
     "## Status", "Current and fine, " + "word ".repeat(100), "",
     "## Status", "2020-01-01: an old, closed incident. " + "word ".repeat(100), "",
   ].join("\n");
-  const { srv, cleanup } = makeSrv({ "memory/dup.md": dupHeadingNote }, { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  const { srv, cleanup } = makeSrv({ "memory/dup.md": dupHeadingNote }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
   try {
     const w = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" },
-      config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
       aiRun: async () => ({ ok: true, text: JSON.stringify({ sections: ["S2"], reason: "closed, second Status section" }) }),
     });
     const applied = await w.scanOnce();
@@ -130,11 +130,11 @@ test("worker (0.5.5 bug fix): a note with TWO IDENTICAL headings — archiving w
 });
 
 test("worker (0.5.5 bug fix): minTokens — never archives a handful of lines into a brand-new note", async () => {
-  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }); // default minTokens: 400
+  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" }); // default minTokens: 400
   try {
     const w = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" },
-      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, // minTokens defaults to 400
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" }, // minTokens defaults to 400
       aiRun: async () => ({ ok: true, text: JSON.stringify({ sections: ["S2"], reason: "closed incident" }) }),
     });
     const applied = await w.scanOnce();
@@ -149,13 +149,13 @@ test("worker (0.5.5 bug fix): keepDays is enforced IN CODE — a section dated m
     "## Current status", "Still going. " + "word ".repeat(200), "",
     "## 2026-10-01 Recent incident", "28 days ago — not old enough for a 60-day keepDays. " + "word ".repeat(200), "",
   ].join("\n");
-  const { srv, cleanup } = makeSrv({ "memory/ops2.md": recent }, { enabled: true, idleMinutes: 0, keepDays: 60, provider: "anthropic", apiKeyEnv: "FAKE" });
+  const { srv, cleanup } = makeSrv({ "memory/ops2.md": recent }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], keepDays: 60, provider: "anthropic", apiKeyEnv: "FAKE" });
   try {
     // now() fixed at 2026-10-29 — the incident (2026-10-01) is 28 days old, well under keepDays.
     const now = () => Date.parse("2026-10-29T00:00:00Z");
     const w = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" }, now,
-      config: { enabled: true, idleMinutes: 0, keepDays: 60, provider: "anthropic", apiKeyEnv: "FAKE" },
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], keepDays: 60, provider: "anthropic", apiKeyEnv: "FAKE" },
       aiRun: async () => ({ ok: true, text: JSON.stringify({ sections: ["S2"], reason: "AI mistakenly thinks this is old" }) }),
     });
     const applied = await w.scanOnce();
@@ -166,32 +166,32 @@ test("worker (0.5.5 bug fix): keepDays is enforced IN CODE — a section dated m
 
 test("worker (0.5.5): \"left\" verdicts are cached by CONTENT HASH across a worker restart — a daily scan of an unchanged note costs no AI call past the first", async () => {
   const dataDir = tmp("memglow-auto-archive-cache-");
-  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" });
   try {
     let calls = 0;
     const aiRun = async () => { calls++; return { ok: true, text: JSON.stringify({ sections: [], reason: "nothing obsolete" }) }; };
     // minTokens: 0 — this test is about the restart cache, not the size pre-filter (its own test
     // covers that); NOTE's ~15-token old section would otherwise never clear the pre-filter at all.
-    const w1 = archive.createArchiveWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
+    const w1 = archive.createArchiveWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
     await w1.scanOnce();
     w1.stop(); // flushes the cache to disk
     assert.strictEqual(calls, 1);
 
     // A BRAND NEW worker instance (simulating a process restart), same data dir, same content.
-    const w2 = archive.createArchiveWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
+    const w2 = archive.createArchiveWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
     await w2.scanOnce();
     assert.strictEqual(calls, 1, "cached across the restart: no new AI call for unchanged content");
   } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
 test("worker: the AI finds nothing obsolete — left alone, nothing written, and never re-asked again until the note itself changes", async () => {
-  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" });
   try {
     let calls = 0;
     // minTokens: 0 — about re-ask suppression, not the size pre-filter.
     const w = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" },
-      config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
       aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ sections: [], reason: "nothing obsolete" }) }; },
     });
     const applied = await w.scanOnce();
@@ -203,11 +203,11 @@ test("worker: the AI finds nothing obsolete — left alone, nothing written, and
 });
 
 test("worker: an auth error stops the scan and is surfaced in status().lastError, never retried", async () => {
-  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" });
   try {
     const w = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" },
-      config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
       aiRun: async () => ({ ok: false, error: "401 unauthorized: invalid api key" }),
     });
     await w.scanOnce();
@@ -228,13 +228,13 @@ test("oldSectionsTotal: sums only TOP-LEVEL sections (disjoint, never double-cou
 test("worker (0.5.5 bug fix): the AI-free pre-filter skips a note with nothing old+big enough — SILENTLY, zero AI calls", async () => {
   // Same tiny fixture every other test in this file uses: a ~15-token old section never clears
   // the default minTokens (400) — the second real-KB bug: the AI used to be asked anyway.
-  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" });
   try {
     let calls = 0;
     const logs = [];
     const w = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" }, log: (s) => logs.push(s),
-      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, // default minTokens: 400
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" }, // default minTokens: 400
       aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ sections: ["S2"], reason: "x" }) }; },
     });
     const applied = await w.scanOnce();
@@ -251,12 +251,12 @@ test("worker (0.5.5 bug fix): maxChecksPerScan caps the AI CALLS themselves (def
   ].join("\n");
   const notesFiles = {};
   for (let i = 0; i < 7; i++) notesFiles[`memory/ops${i}.md`] = big(`ops${i}`, "2020-01-01");
-  const { srv, cleanup } = makeSrv(notesFiles, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  const { srv, cleanup } = makeSrv(notesFiles, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" });
   try {
     let calls = 0;
     const w = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" },
-      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, // maxChecksPerScan defaults to 5
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" }, // maxChecksPerScan defaults to 5
       aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ sections: [], reason: "nothing obsolete after all" }) }; },
     });
     await w.scanOnce();
@@ -273,16 +273,85 @@ test("worker (0.5.5 bug fix): eligible candidates are ordered by old-tokens DESC
   const { srv, cleanup } = makeSrv({
     "memory/small-old.md": noteWith("small-old", 150), // clears minTokens, smaller old-tokens total
     "memory/big-old.md": noteWith("big-old", 400), // clears minTokens, bigger old-tokens total
-  }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" });
   try {
     const seen = [];
     const w = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" },
-      config: { enabled: true, idleMinutes: 0, maxChecksPerScan: 1, provider: "anthropic", apiKeyEnv: "FAKE" }, // only ONE AI call allowed
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], maxChecksPerScan: 1, provider: "anthropic", apiKeyEnv: "FAKE" }, // only ONE AI call allowed
       aiRun: async (prompt) => { seen.push(prompt); return { ok: true, text: JSON.stringify({ sections: [], reason: "x" }) }; },
     });
     await w.scanOnce();
     assert.strictEqual(seen.length, 1);
     assert.match(seen[0], /"big-old"/, "the bigger old-tokens candidate is asked first when the budget only allows one");
+  } finally { cleanup(); }
+});
+
+test("archiveSettings (0.5.5 bug fix): includeFolders defaults to [\"memory/project\"] — never feedback/, user/, reference/ — configurable via maintenance.archive.includeFolders", () => {
+  assert.deepStrictEqual(archive.archiveSettings({}, {}).includeFolders, archive.DEFAULT_INCLUDE_FOLDERS);
+  assert.deepStrictEqual(archive.archiveSettings({}, {}).includeFolders, ["memory/project"]);
+  assert.deepStrictEqual(archive.archiveSettings({ includeFolders: ["memory/custom"] }, {}).includeFolders, ["memory/custom"]);
+  assert.deepStrictEqual(archive.archiveSettings({}, { MEMGLOW_INCLUDE_FOLDERS: "memory/other" }).includeFolders, ["memory/other"]);
+});
+
+test("worker (0.5.5 bug fix): default scope — a feedback/ note is never a candidate, even with an old+big section; a memory/project/ note still is", async () => {
+  const feedbackNote = ["---", "title: feedback-x", "theme: feedback", "---", "",
+    "## Current status", "Still going.", "",
+    "## 2020-01-01 Old incident", "word ".repeat(500), "",
+  ].join("\n");
+  const root = tmp("memglow-auto-archive-scope-");
+  const feedbackAbs = path.join(root, "memory/feedback/feedback-x.md");
+  const projectAbs = path.join(root, "memory/project/ops.md");
+  fs.mkdirSync(path.dirname(feedbackAbs), { recursive: true }); fs.writeFileSync(feedbackAbs, feedbackNote);
+  fs.mkdirSync(path.dirname(projectAbs), { recursive: true }); fs.writeFileSync(projectAbs, NOTE);
+  const srv = createMemoryServer({ root, readOnly: false, watch: false, pollMs: 0, fsync: false, archive: { enabled: false } });
+  try {
+    let calls = 0;
+    // No includeFolders given: the new default (["memory/project"]) applies.
+    const w = archive.createArchiveWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" },
+      config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ sections: ["S2"], reason: "closed" }) }; },
+    });
+    const applied = await w.scanOnce();
+    assert.deepStrictEqual(applied, ["memory/project/ops.md"], "only the memory/project/ note is in scope by default");
+    assert.strictEqual(fs.readFileSync(feedbackAbs, "utf8"), feedbackNote, "feedback/ untouched");
+    assert.strictEqual(calls, 1, "only one AI call: the feedback/ note was never even a candidate");
+  } finally { srv.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("worker (0.5.5 bug fix): maxShare (default 0.7) — never moves more than this share of the note's own body, even if minTokens/keepDays both clear", async () => {
+  const mostlyOld = ["---", "title: journal", "theme: project", "---", "",
+    "## Current status", "A little still active. " + "word ".repeat(20), "",
+    "## 2020-01-01 Old log", "word ".repeat(500), "",
+  ].join("\n");
+  const { srv, cleanup } = makeSrv({ "memory/project/journal.md": mostlyOld }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    const w = archive.createArchiveWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" },
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" }, // maxShare defaults to 0.7
+      aiRun: async () => ({ ok: true, text: JSON.stringify({ sections: ["S2"], reason: "closed" }) }),
+    });
+    const applied = await w.scanOnce();
+    assert.deepStrictEqual(applied, [], "the old section is ~96% of the body — over maxShare, never archived");
+    assert.strictEqual(fs.readFileSync(path.join(srv.store.root, "memory/project/journal.md"), "utf8"), mostlyOld);
+    assert.strictEqual(fs.existsSync(path.join(srv.store.root, "memory/project/journal-archive.md")), false);
+  } finally { cleanup(); }
+});
+
+test("worker (0.5.5 bug fix): maxShare allows a section that is a smaller, genuine fraction of the body", async () => {
+  const mostlyCurrent = ["---", "title: journal2", "theme: project", "---", "",
+    "## Current status", "word ".repeat(500), "",
+    "## 2020-01-01 Old log", "word ".repeat(100), "",
+  ].join("\n");
+  const { srv, cleanup } = makeSrv({ "memory/project/journal2.md": mostlyCurrent }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    const w = archive.createArchiveWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" },
+      config: { enabled: true, idleMinutes: 0, minTokens: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" },
+      aiRun: async () => ({ ok: true, text: JSON.stringify({ sections: ["S2"], reason: "closed" }) }),
+    });
+    const applied = await w.scanOnce();
+    assert.deepStrictEqual(applied, ["memory/project/journal2.md"], "~17% of the body: well under maxShare");
   } finally { cleanup(); }
 });

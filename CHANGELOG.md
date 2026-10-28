@@ -105,6 +105,44 @@ default thresholds on a real KB in one pass). Fixed:
 - Eligible candidates are ranked by their old-tokens total, biggest first, so a capped budget of
   AI calls is spent where the gain is largest.
 
+Fourth real-KB run (E2E on a KB copy): the verdict caches were reported not to survive a real
+process restart (the same duplicate pairs / R4 verdict re-asked). Reproduced for real — spawning
+`memory-server/memglow-memory-server.js` TWICE as actual OS processes, same `--root` and
+`MEMGLOW_DATA_DIR`, a real local mock AI server counting calls, stopped with a real `SIGTERM`
+between runs (`test/verdict-cache-restart.test.js`) — and fixed two real bugs it surfaced, plus
+hardened the cache itself:
+
+- **`lib/auto-duplicates.js`'s `buildPrompt(a, b)`**: `a`/`b` are real store note records in
+  production (never the slim `{id,label,…}` shape the pure unit tests use), so `a.label`/`a.id`
+  were always `undefined` — every real duplicate-pair prompt literally read `Note A: "undefined"
+  (id: undefined)`. New `idOf()`/`labelOf()` accept either shape.
+- **`lib/verdict-cache.js`**: `set()` now writes to disk SYNCHRONOUSLY, immediately — no more
+  2-second debounce (borrowed from `lib/learned-aliases.js`'s much higher-frequency store, where
+  batching makes sense; a maintenance verdict is written once per AI decision, far rarer, so
+  there is no real cost to writing it at once). Nothing is ever left only in memory waiting for a
+  timer, so a verdict now survives even an abrupt process exit moments after the decision.
+  `flush()`/`stop()` stay as harmless no-ops for every existing caller.
+
+Plus four guards from the same E2E run:
+
+- **ARCHIVE scope**: `includeFolders` now defaults to `["memory/project"]` (configurable via
+  `maintenance.archive.includeFolders`) — never `feedback/`, `user/`, `reference/` (standing
+  rules and reference material, not a project journal to prune); it had archived two
+  `feedback-*` notes.
+- **ARCHIVE `maxShare`** (default 0.7): the chosen sections' combined size must not exceed this
+  share of the note's own total body size — a note that is almost entirely old content is
+  already, functionally, an archive; it had emptied a whole journal note into a new `-archive`
+  sibling.
+- **STRUCTURE AI attach**: only ever offered a hub whose frontmatter `theme` equals the orphan
+  note's own `theme`, when BOTH are set (`lib/star-audit.js`'s new `themeOf()`) — a mismatched
+  hub is excluded from the candidate list before the AI ever sees it, never merely asked not to
+  pick it; it had attached a tech/NAS note to a family-admin hub. Falls back to index placement
+  or "leave" when no theme-matching hub exists.
+- **DUPLICATES pre-filter**: also requires the SAME declared `theme` when BOTH notes set one, and
+  ignores a `GENERIC_WORDS` list (`memglow`, `project`, `note`, …) and bare numbers/dates in the
+  word overlap — it was still pairing `project-memglow-v04-strategy` with unrelated `feedback-*`/
+  `reference-ha-*` notes on nothing but those generic, near-universal words.
+
 ## 0.5.4 — 2026-10-27
 
 ### Added
