@@ -395,3 +395,17 @@ test("worker: status() — never the key, reports provider/model/pending/lastSca
     assert.strictEqual(s1.nextScanAt, s1.lastScanAt + auto.DEFAULTS.scanHours * 3600000);
   } finally { cleanup(); }
 });
+
+test("resolveSectionRefs: section ids and masked headings map to the real heading text (0.5.4.2, seen in production)", () => {
+  const { resolveSectionRefs, buildPrompt } = require("../lib/auto-split");
+  const raw = "---\ntitle: n\n---\n\nIntro.\n\n## Plain one\n\nA.\n\n## Fix token sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\nB.\n\n## Third\n\nC.\n";
+  const prompt = buildPrompt({ raw, title: "n", slug: "n" }, { thresholdTokens: 5000 });
+  assert.match(prompt, /\[S1\] ## Plain one/);
+  assert.match(prompt, /\[S2\] ## .*line hidden/); // the secret-looking heading is masked in what the AI sees
+  assert.doesNotMatch(prompt, /sk-ant-api03/);
+  const masked = /\[S2\] ## (.*) \(≈/.exec(prompt)[1];
+  const plan = { parts: [{ slug: "a", description: "d", sections: ["S2", "S3"] }, { slug: "b", description: "d", sections: [masked, "Plain one", "Unknown"] }] };
+  const out = resolveSectionRefs(plan, raw);
+  assert.deepStrictEqual(out.parts[0].sections, ["Fix token sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "Third"]);
+  assert.deepStrictEqual(out.parts[1].sections, ["Fix token sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "Plain one", "Unknown"]);
+});
