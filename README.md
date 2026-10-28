@@ -1297,31 +1297,37 @@ A third worker alongside auto-split/structure, same family — **off by default*
 [provider](#auto-split) (shared config shape, independently configurable). **Scope defaults to
 `includeFolders: ["memory/project"]`** — never `feedback/`, `user/`, `reference/` by default
 (standing rules and reference material are not a project journal to prune); set
-`maintenance.archive.includeFolders` to widen or change it. A cheap, AI-FREE code pre-filter runs
-first: a note only becomes a candidate at all when at least one of its TOP-LEVEL sections has a
-most-recent date older than `keepDays` AND those old sections' combined size reaches `minTokens`
-(default 400) — everything else is skipped silently, no AI call, no log line. Eligible candidates
-are then ranked by their old-tokens total, biggest first, and **`maxChecksPerScan` (default 5)
-caps the AI calls themselves** for this spent budget (`maxActionsPerScan` separately caps
-archives actually applied — the two used to be conflated, so a scan with nothing to apply yet
-asked the AI about every single note). For each one asked, the AI is shown the note's outline
-(`[S1]`-style ids, the MOST RECENT date found in a heading or its text) and `keepDays`, and picks
-sections that are clearly obsolete — a closed incident, a superseded version, an old dated entry
-— or none, never guessing. **`keepDays`, `minTokens` and `maxShare` are all also enforced IN
-CODE** on the AI's own answer, not merely asked of it: a chosen section whose own most recent
-date is newer than the `keepDays` cutoff is dropped; the remaining chosen sections' combined size
-must still reach `minTokens`; and that same combined size must not exceed `maxShare` (default
-0.7, i.e. 70%) of the note's own total body size — never archive a dated entry that is not
-actually old enough, a handful of lines into a brand-new note, or nearly the whole note (which is
-already, functionally, an archive). Sections are selected by their outline INDEX (the `[S#]` id
-itself), never by heading text, so a note with two identically-worded headings works fine. Chosen
-sections then move VERBATIM into a sibling note `<slug>-archive` (appended to if it already
-exists, else created with `part_of` pointing at the note's own hub, or the note itself, and an
-`Up:` line); the source note gets one new line, ADD only: `Archived sections: see
-[[<slug>-archive]].`. A "nothing eligible" verdict (from the AI itself) is also cached by the
-note's own CONTENT HASH, written to disk at once (never debounced — survives even an abrupt
-process exit) — never re-asked until the note actually changes, surviving a restart. This is
-independent of — and complements — the existing [dormancy-based archive tier](#archive) (usage
+`maintenance.archive.includeFolders` to widen or change it. **A section's age is a date in its
+OWN HEADING LINE ONLY** ("## 2026-08-14 …", "### 2026-08-14: …", "## Fix (2026-08-14)") — never
+a date merely cited in its body text (a release date, a quoted date, …): a section whose heading
+carries no date of its own is NEVER eligible, however old its body text reads. A cheap, AI-FREE
+code pre-filter runs first: a note only becomes a candidate at all when at least one of its
+TOP-LEVEL sections has a heading date older than `keepDays` AND those old sections' combined size
+reaches `minTokens` (default 400) — everything else is skipped silently, no AI call, no log line.
+Eligible candidates are then ranked by their old-tokens total, biggest first, and
+**`maxChecksPerScan` (default 5) caps the AI calls themselves** for this spent budget
+(`maxActionsPerScan` separately caps archives actually applied — the two used to be conflated,
+so a scan with nothing to apply yet asked the AI about every single note). For each one asked,
+the AI is shown the note's outline (`[S1]`-style ids, the heading's own date if it has one) and
+`keepDays`, and picks sections that are clearly obsolete — a closed incident, a superseded
+version, an old dated entry — or none, never guessing. **`keepDays`, `minTokens` and `maxShare`
+are all also enforced IN CODE** on the AI's own answer, not merely asked of it: a chosen section
+with no heading date, or one newer than the `keepDays` cutoff, is dropped; the remaining chosen
+sections' combined size must still reach `minTokens`; and that same combined size must not
+exceed `maxShare` (default 0.7, i.e. 70%) of the note's own total body size — never archive a
+dated entry that is not actually old enough (or not dated at all in its own heading), a handful
+of lines into a brand-new note, or nearly the whole note (which is already, functionally, an
+archive). Sections are selected by their outline INDEX (the `[S#]` id itself), never by heading
+text, so a note with two identically-worded headings works fine. Chosen sections then move
+VERBATIM into a sibling note `<slug>-archive` (appended to if it already exists, else created
+with `part_of` pointing at the note's own hub, or the note itself, and an `Up:` line); the source
+note gets one new line, ADD only: `Archived sections: see [[<slug>-archive]].`. A "nothing
+eligible" verdict (from the AI itself) is also cached by the note's own CONTENT HASH, written to
+disk at once (never debounced — survives even an abrupt process exit) — never re-asked until the
+note actually changes, surviving a restart; a cache hit is SILENT (no per-note log line — one
+optional summary line per scan, "N cached verdicts reused", covers the whole worker family,
+below). This is independent of — and complements — the existing [dormancy-based archive
+tier](#archive) (usage
 counters, no AI): that one finds content nobody has *read*, this one finds content that is
 *obviously stale on its own terms*. Config: `maintenance.archive: { enabled, keepDays, minTokens,
 maxShare, idleMinutes, scanHours, maxChecksPerScan, maxActionsPerScan, includeFolders, provider,

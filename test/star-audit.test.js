@@ -661,3 +661,21 @@ test("judgeIssues (0.5.5 bug fix): a theme-mismatched \"attach\" answer is REFUS
       "---\ntitle: orphan-nas\ntheme: tech\ndescription: A NAS configuration note\n---\n\nNobody links here, and it links nowhere.\n");
   } finally { cleanup(); }
 });
+
+test("R4 (0.5.5 bug fix): cache hits are SILENT — no per-note log line, but one summary line per scan", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-r4-silent-"));
+  const { srv, cleanup } = makeR4Kb();
+  try {
+    const aiRun = async () => ({ ok: true, text: JSON.stringify({ action: "keep", reason: "useful reading order" }) });
+    const w1 = star.createStructureWorker({ store: srv.store, writer: srv.writer, dataDir, config: { enabled: true, ai: { enabled: true, maxDecisionsPerScan: 10 } }, aiRun });
+    await w1.scanOnce();
+    w1.stop();
+
+    const logs = [];
+    const w2 = star.createStructureWorker({ store: srv.store, writer: srv.writer, dataDir, log: (s) => logs.push(s), config: { enabled: true, ai: { enabled: true, maxDecisionsPerScan: 10 } }, aiRun });
+    await w2.scanOnce();
+    assert.ok(!logs.some((l) => /AI judgement \(R4\) for/.test(l)), "no per-line judgement log for a cache hit");
+    assert.ok(logs.some((l) => /1 cached R4 verdict reused/.test(l)), "one summary line for the scan");
+    assert.strictEqual(w2.status().r4Verdicts[0].action, "keep", "the panel/API still reflects the current scan");
+  } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+});

@@ -143,6 +143,23 @@ Plus four guards from the same E2E run:
   word overlap — it was still pairing `project-memglow-v04-strategy` with unrelated `feedback-*`/
   `reference-ha-*` notes on nothing but those generic, near-universal words.
 
+A 2-run E2E on 71e6a4d confirmed the caches hold across restarts with zero lines lost, and
+surfaced two last fixes:
+
+- **ARCHIVE false positive (important)**: a section's date was taken from anywhere in its TEXT
+  (heading + body), so a note written TODAY — "## Firmware staged (sha256 verified on both
+  sides)" — got archived purely because its BODY cited old firmware release dates
+  (2025-04-03, 2026-03-28, …). A body date is content, not when the section itself was written.
+  New rule, conservative: a section's age is a date in its OWN HEADING LINE ONLY ("## 2026-08-14
+  …", "### 2026-08-14: …", "## Fix (2026-08-14)"); a section with NO heading date is NEVER
+  eligible — not assumed old, not assumed recent, simply out of scope. Enforced in the cheap
+  pre-filter (`oldSectionsTotal`) and in the keepDays check on the AI's own picks; the AI is only
+  ever shown a heading's own date in its outline, never one merely cited in the body.
+- **Cache hits are now SILENT**: a duplicates / R4 / archive verdict read from the cache no
+  longer adds its own log line or event (it looked exactly like a fresh AI call) — each worker
+  now logs at most one summary line per scan, "N cached verdict(s) reused", only when there was
+  at least one hit.
+
 ## 0.5.4 — 2026-10-27
 
 ### Added

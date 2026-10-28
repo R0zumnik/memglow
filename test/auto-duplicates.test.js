@@ -242,3 +242,24 @@ test("significantWordsOf: drops GENERIC_WORDS and bare numbers/dates, keeps ever
   assert.ok(!words.includes("memglow") && !words.includes("project") && !words.includes("notes"));
   assert.ok(!words.some((w) => /^\d+$/.test(w) || /^\d{4}-\d{2}-\d{2}$/.test(w)));
 });
+
+test("worker (0.5.5 bug fix): cache hits are SILENT — no per-pair log line, but one summary line per scan", async () => {
+  const dataDir = tmp("memglow-auto-dup-silent-");
+  const { srv, cleanup } = makeSrv({
+    "memory/coffee-a.md": note("Espresso Grind Timing Notes", "Grind size and timing notes for espresso brewing", "", "Body A."),
+    "memory/coffee-b.md": note("Espresso Grind Timing Guide", "Grind size and timing guide for espresso brewing", "", "Body B."),
+  }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    const aiRun = async () => ({ ok: true, text: JSON.stringify({ duplicate: false, keep: "a", reason: "related but distinct" }) });
+    const w1 = dup.createDuplicatesWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
+    await w1.scanOnce();
+    w1.stop();
+
+    const logs = [];
+    const w2 = dup.createDuplicatesWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, log: (s) => logs.push(s), config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
+    await w2.scanOnce();
+    assert.ok(!logs.some((l) => /not-duplicate/.test(l)), "no per-pair log line for a cache hit");
+    assert.ok(logs.some((l) => /1 cached verdict reused/.test(l)), "one summary line for the scan");
+    assert.strictEqual(w2.status().reported.length, 1, "the panel/API still reflects the current scan");
+  } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+});

@@ -38,13 +38,17 @@ test("archiveSettings: off by default, env MEMGLOW_AUTO_ARCHIVE=1 turns it on", 
   assert.strictEqual(explicitOff.enabled, false);
 });
 
-test("outline: [S#] ids, levels and the MOST RECENT date found (not merely the first)", () => {
+test("outline: [S#] ids, levels and the MOST RECENT date found IN THE HEADING LINE ONLY (never the body)", () => {
   const out = archive.outline("## 2020-01-01 Old incident\nResolved.\n\n## Current\nStill going.\n");
   assert.strictEqual(out.length, 2);
   assert.strictEqual(out[0].date, "2020-01-01");
   assert.strictEqual(out[1].date, null);
-  const multi = archive.outline("## Log\nStarted 2020-01-01, revisited 2024-06-15, closed 2026-09-01.\n");
-  assert.strictEqual(multi[0].date, "2026-09-01", "the latest date wins, not the first");
+  const multi = archive.outline("## Revised 2020-01-01, then 2024-06-15, then 2026-09-01\nBody.\n");
+  assert.strictEqual(multi[0].date, "2026-09-01", "several dates IN THE HEADING: the latest wins, not the first");
+  // 0.5.5 bug fix (fourth real-KB run): a date cited in the BODY is content, not the section's
+  // own age — a heading with no date of its own stays date-less, however old the body reads.
+  const bodyDates = archive.outline("## Firmware staged (sha256 verified on both sides)\nReleased 2025-04-03, then 2026-03-28; staged today.\n");
+  assert.strictEqual(bodyDates[0].date, null, "the heading itself has no date — body dates never count");
 });
 
 test("resolveIndices: \"S<n>\" ids resolve to 0-based INDICES (never heading text), in outline order; unknown/duplicate ids dropped", () => {
@@ -107,10 +111,14 @@ test("worker: create-vs-append, zero-loss, and idempotent re-ask suppression —
   } finally { srv.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("worker (0.5.5 bug fix): a note with TWO IDENTICAL headings — archiving works by index, never refused as ambiguous", async () => {
+test("worker (0.5.5 bug fix): TWO IDENTICAL headings, BOTH with a heading date — archiving works by index, never refused as ambiguous", async () => {
+  // Both headings are byte-identical ("## 2020-01-01 Status") — moveSections() (text-based)
+  // would refuse this outright as ambiguous; moveSectionsByIndex() picks the SECOND one (S2)
+  // by position alone. Each heading carries its own date (the new heading-only rule), so both
+  // are independently eligible — this test is about the index resolution, not keepDays.
   const dupHeadingNote = ["---", "title: dup", "theme: knowledge", "---", "",
-    "## Status", "Current and fine, " + "word ".repeat(100), "",
-    "## Status", "2020-01-01: an old, closed incident. " + "word ".repeat(100), "",
+    "## 2020-01-01 Status", "Still relevant today, " + "word ".repeat(100), "",
+    "## 2020-01-01 Status", "An old, closed incident. " + "word ".repeat(100), "",
   ].join("\n");
   const { srv, cleanup } = makeSrv({ "memory/dup.md": dupHeadingNote }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
   try {
@@ -122,8 +130,8 @@ test("worker (0.5.5 bug fix): a note with TWO IDENTICAL headings — archiving w
     const applied = await w.scanOnce();
     assert.deepStrictEqual(applied, ["memory/dup.md"]);
     const srcText = fs.readFileSync(path.join(srv.store.root, "memory/dup.md"), "utf8");
-    assert.match(srcText, /Current and fine/, "the FIRST \"## Status\" (index 0 / S1) stays");
-    assert.doesNotMatch(srcText, /old, closed incident/, "the SECOND \"## Status\" (index 1 / S2) moved, by index, not by text");
+    assert.match(srcText, /Still relevant today/, "the FIRST \"## 2020-01-01 Status\" (index 0 / S1) stays");
+    assert.doesNotMatch(srcText, /old, closed incident/, "the SECOND \"## 2020-01-01 Status\" (index 1 / S2) moved, by index, not by text");
     const archiveText = fs.readFileSync(path.join(srv.store.root, "memory/dup-archive.md"), "utf8");
     assert.match(archiveText, /old, closed incident/);
   } finally { cleanup(); }
@@ -354,4 +362,47 @@ test("worker (0.5.5 bug fix): maxShare allows a section that is a smaller, genui
     const applied = await w.scanOnce();
     assert.deepStrictEqual(applied, ["memory/project/journal2.md"], "~17% of the body: well under maxShare");
   } finally { cleanup(); }
+});
+
+test("worker (0.5.5 bug fix, fourth real-KB run): a heading with NO date, whose body cites old dates, is NEVER eligible — even if the AI picks it", async () => {
+  const firmwareNote = ["---", "title: project-zigbee-coordinator-firmware", "theme: project", "---", "",
+    "## Firmware staged (sha256 verified on both sides)",
+    "Released 2025-04-03, then 2026-03-28; staged and verified today. " + "word ".repeat(200), "",
+  ].join("\n");
+  const { srv, cleanup } = makeSrv({ "memory/project/firmware.md": firmwareNote }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    let calls = 0;
+    const w = archive.createArchiveWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" },
+      // minTokens left at its 0.7-default-adjacent default (not 0): the point is that the
+      // pre-filter finds NOTHING with a heading date at all (oldTokens stays 0), regardless of
+      // minTokens's own value.
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" },
+      aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ sections: ["S1"], reason: "looks old from the cited dates" }) }; },
+    });
+    const applied = await w.scanOnce();
+    assert.strictEqual(calls, 0, "the AI-free pre-filter already finds nothing with a heading date — never even asks");
+    assert.deepStrictEqual(applied, []);
+    assert.strictEqual(fs.readFileSync(path.join(srv.store.root, "memory/project/firmware.md"), "utf8"), firmwareNote, "untouched — body-cited dates never make a dateless heading eligible");
+    assert.strictEqual(fs.existsSync(path.join(srv.store.root, "memory/project/firmware-archive.md")), false);
+  } finally { cleanup(); }
+});
+
+test("worker (0.5.5 bug fix): cache hits are SILENT — no per-note log line, but one summary line per scan", async () => {
+  const dataDir = tmp("memglow-auto-archive-silent-");
+  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    const aiRun = async () => ({ ok: true, text: JSON.stringify({ sections: [], reason: "nothing obsolete" }) });
+    // minTokens: 0 — NOTE's own old section is tiny; this test needs the AI actually asked (and
+    // its "left" verdict cached), not pre-filtered out before ever reaching it.
+    const w1 = archive.createArchiveWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, minTokens: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
+    await w1.scanOnce();
+    w1.stop();
+
+    const logs = [];
+    const w2 = archive.createArchiveWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, log: (s) => logs.push(s), config: { enabled: true, idleMinutes: 0, minTokens: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
+    await w2.scanOnce();
+    assert.ok(!logs.some((l) => /\bleft\b/.test(l)), "no per-note \"left\" log line for a cache hit");
+    assert.ok(logs.some((l) => /1 cached verdict reused/.test(l)), "one summary line for the scan");
+  } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
