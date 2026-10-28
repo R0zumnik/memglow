@@ -208,14 +208,21 @@ test("HTTP /api/maintenance (0.5.4): the auto-split/structure workers' status, g
     const r = await fetch(url, { headers: { authorization: "Bearer s3cret" } });
     assert.strictEqual(r.status, 200);
     const j = await r.json();
-    assert.deepStrictEqual(Object.keys(j).sort(), ["autoSplit", "structure"]);
+    // 0.5.5 (A, B): "archive"/"duplicates" are always present (a harmless, all-false fallback
+    // shape when the server was not given those workers at all — same pattern as the
+    // "neither worker configured" case right below).
+    assert.deepStrictEqual(Object.keys(j).sort(), ["archive", "autoSplit", "duplicates", "structure"]);
     assert.deepStrictEqual(Object.keys(j.autoSplit).sort(), ["enabled", "keySet", "lastError", "lastScanAt", "model", "nextScanAt", "pendingCount", "provider", "recent", "thresholdTokens"]);
+    assert.strictEqual(j.archive.enabled, false);
+    assert.strictEqual(j.duplicates.enabled, false);
     assert.strictEqual(j.autoSplit.enabled, true);
     assert.strictEqual(j.autoSplit.provider, "anthropic");
     assert.strictEqual(j.autoSplit.keySet, false, "SOME_KEY is not actually set in the environment");
     assert.strictEqual(j.autoSplit.lastError, null, "0.5.4: present but null until a worker actually hits a bad credential");
     assert.ok(Array.isArray(j.autoSplit.recent));
-    assert.deepStrictEqual(Object.keys(j.structure).sort(), ["ai", "enabled", "issues", "lastError", "lastScanAt", "nextScanAt", "recent"]);
+    // 0.5.5 (C): "r4Verdicts" — the AI's {action,reason} verdict for every R4 issue asked about
+    // in the most recent scan (report-only unless structure.ai.allowSiblingLineRemoval).
+    assert.deepStrictEqual(Object.keys(j.structure).sort(), ["ai", "enabled", "issues", "lastError", "lastScanAt", "nextScanAt", "r4Verdicts", "recent"]);
     assert.strictEqual(j.structure.enabled, true);
     assert.strictEqual(j.structure.lastError, null);
     assert.strictEqual(typeof j.structure.issues.total, "number");

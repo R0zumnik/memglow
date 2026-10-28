@@ -34,6 +34,7 @@ const { createWriteTools, ArgError } = require("./write-tools");
 const { WriteError } = require("./writer");
 const { EditError } = require("../lib/store/note-edit");
 const searchMeta = require("../lib/search-meta");
+const { createAliasStore, usageBoostSettings } = require("../lib/learned-aliases");
 const { idsInText } = require("../lib/agent-core");
 
 // 0.4.10.5: a title / snippet / query that could hold a note reference of its own (a path, a
@@ -106,13 +107,25 @@ const dirOf = (rel) => { const d = path.posix.dirname(rel); return d === "." ? "
 // (`--serve-files any`), the behaviour before 0.4.9.1.
 const SERVE_EXT = new Set([".md", ".txt", ".json", ".csv", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf"]);
 
-function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null }) {
+function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, searchUsage: searchUsageIn }) {
   // Optional, local-first semantic search (lib/store/semantic.js) — self-configuring from env /
   // memglow.config.json, OFF unless a provider is actually set there (see that module's header
   // comment). `semanticIn` (tests): pass an engine to control it directly, or `null` to force it
   // off whatever the environment says.
   const semantic = semanticIn !== undefined ? semanticIn : createSemanticSearch({ store, log });
-  const engine = createSearch(store, semantic);
+  // 0.5.5 (E): usage-aware search — a READ-ONLY view of lib/learned-aliases.js's own store (the
+  // MCP proxy, in the SAME shared data folder, is the only writer: this server passes
+  // learnAliases:false/aliases:false, only usageBoost:true). `searchUsageIn` (tests): pass `null`
+  // to force it off, an object to control it directly, or leave undefined for the real one built
+  // from `dataDir` + `search.usageBoost` settings ("default ON only if data exists": `available()`
+  // alone is not enough — an empty store must still behave as a true no-op, enforced by
+  // usageBoosts() itself returning an empty Map with no entries).
+  const searchUsageCfg = searchUsageIn !== undefined ? searchUsageIn : usageBoostSettings({}, process.env);
+  const aliasStore = searchUsageCfg && searchUsageCfg.enabled && dataDir
+    ? createAliasStore({ dataDir, learnAliases: false, aliases: false, usageBoost: true, usageBoostHalfLifeDays: searchUsageCfg.halfLifeDays, usageBoostCap: searchUsageCfg.cap })
+    : null;
+  const searchUsage = aliasStore && aliasStore.available() ? { boostsFor: (words, now) => aliasStore.usageBoosts(words, now) } : null;
+  const engine = createSearch(store, semantic, searchUsage);
   const writes = !readOnly && writer ? createWriteTools({ store, writer, project, ...writeOptions }) : null;
   const projectId = stableId("memglow-project:" + project);
 

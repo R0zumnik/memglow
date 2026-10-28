@@ -44,6 +44,7 @@ const { createMemory, maskSecrets } = require("../lib/memory");
 const { createCounters } = require("../lib/counters");
 const memoryRules = require("../lib/memory-rules");
 const { estimateTokens, sectionsOf, packSections, dayOf, daysBefore, WINDOW_DAYS } = require("../lib/cost");
+const splitEngine = require("../lib/split-engine");
 const { rankRelated } = require("../lib/related");
 const organise = require("../lib/organise");
 const hubSpoke = require("../lib/hub-spoke");
@@ -269,11 +270,25 @@ function toolSplitPlan(ctx, args) {
   // never drops or re-estimates a section, it only groups the numbers `sections` already has.
   const sections = sectionsOf(body);
   const parts = packSections(sections, ctx.config.splitChunkTokens).map((p, i) => ({ part: i + 1, tokens: p.tokens, titles: p.titles.filter(Boolean) }));
+  // 0.5.5 (D — unify grouping): `sections`/`split`/`copyPrompt` above are UNCHANGED (lib/cost.js's
+  // own flat packSections — back-compat, pinned by test/mcp-server.test.js's exact total/title
+  // checks). `enginePlan` is the SAME heuristic lib/auto-split.js's worker builds its own plans
+  // from, computed and VALIDATED through lib/split-engine.js's computeSplit (zero-loss, slug
+  // freedom against every other known note) — the exact plan shape split_apply/the auto-split
+  // worker already expect, with every "[S1]"-style id already resolved to real heading text (this
+  // heuristic never emits one in the first place). `null` whenever that heuristic finds nothing
+  // useful to propose (no headings, or a single section) — never a hard error for a plain caller.
+  const existingLower = new Set(ctx.memory.graph().nodes.map((nd) => String(nd.id || "").toLowerCase()).filter(Boolean));
+  let enginePlan = null;
+  try {
+    const g = splitEngine.greedyEnginePlan(body, { hubId: rec.id, existingLower, chunkTokens: ctx.config.splitChunkTokens });
+    if (g && g.ok) enginePlan = { parts: g.parts };
+  } catch { enginePlan = null; }
   return {
     summary: `"${rec.label}" is ≈${rec.tokens} tokens (over ${large}): split into ${parts.length} part(s) of ≈${ctx.config.splitChunkTokens} tokens each.`,
     data: {
       id: rec.id, label: rec.label, tokens: rec.tokens, threshold: large, chunkTokens: ctx.config.splitChunkTokens,
-      sections, split: parts, copyPrompt: buildCopyPrompt(rec, parts, ctx.config.splitChunkTokens),
+      sections, split: parts, copyPrompt: buildCopyPrompt(rec, parts, ctx.config.splitChunkTokens), enginePlan,
     },
   };
 }

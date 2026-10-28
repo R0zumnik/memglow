@@ -27,6 +27,9 @@ const { createAllInOne } = require("./all-in-one");
 const memoryCore = require("../lib/memory-core");
 const { createAutoSplitWorker, autoSplitSettings } = require("../lib/auto-split");
 const { createStructureWorker, structureSettings } = require("../lib/star-audit");
+const { createArchiveWorker, archiveSettings } = require("../lib/auto-archive");
+const { createDuplicatesWorker, duplicatesSettings } = require("../lib/auto-duplicates");
+const { usageBoostSettings } = require("../lib/learned-aliases");
 
 const HELP = `memglow memory server ${SERVER_VERSION} (preview)
 
@@ -222,9 +225,33 @@ function resolveStructure(env = process.env) {
   return structureSettings(raw, env);
 }
 
+/** Same trust boundary — "maintenance.archive" top-level key. */
+function resolveArchive(env = process.env) {
+  let cfg = {};
+  try { cfg = defaultsLib.resolveConfigFiles({ env, allowCwd: false }).config || {}; } catch { cfg = {}; }
+  const raw = (cfg.maintenance && typeof cfg.maintenance === "object" && cfg.maintenance.archive) || {};
+  return archiveSettings(raw, env);
+}
+
+/** Same trust boundary — "maintenance.duplicates" top-level key. */
+function resolveDuplicates(env = process.env) {
+  let cfg = {};
+  try { cfg = defaultsLib.resolveConfigFiles({ env, allowCwd: false }).config || {}; } catch { cfg = {}; }
+  const raw = (cfg.maintenance && typeof cfg.maintenance === "object" && cfg.maintenance.duplicates) || {};
+  return duplicatesSettings(raw, env);
+}
+
+/** Same trust boundary — "search.usageBoost" top-level key (E — usage-aware search). */
+function resolveSearchUsage(env = process.env) {
+  let cfg = {};
+  try { cfg = defaultsLib.resolveConfigFiles({ env, allowCwd: false }).config || {}; } catch { cfg = {}; }
+  const raw = (cfg.search && typeof cfg.search === "object" && cfg.search.usageBoost) || {};
+  return usageBoostSettings(raw, env);
+}
+
 function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 3000, watch = true, maxFileBytes, log = () => {},
   fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", structuredRead = true, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne, deferStart = false,
-  coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null }) {
+  coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, archive = null, duplicates = null, searchUsage = null }) {
   let tools = null, warmTimer = null, isReady = !deferStart;
   // The search index is rebuilt lazily by the next search anyway; warming it after a change is
   // coalesced (a burst of writes costs one rebuild, not one per write).
@@ -242,6 +269,10 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
   const writer = readOnly ? null : createWriter({ store, fsync, fsyncMode, fileMode, onWrite, onWriteDelayMs, log, hooks: writerHooks, onWrote, ...(maxFileBytes ? { maxFileBytes } : {}), ...(chownToParent != null ? { chownToParent } : {}) });
   autoSplitWorker = createAutoSplitWorker({ store, writer, project, config: autoSplit || {}, dataDir, log, indexNote });
   const structureWorker = createStructureWorker({ store, writer, config: structure || {}, dataDir, log, indexNote });
+  // 0.5.5 (A, B — PRUNE STALE → ARCHIVE, DUPLICATES): same shape as the two workers above —
+  // OFF by default, inert without `writer`/`store`, started/stopped alongside them.
+  const archiveWorker = createArchiveWorker({ store, writer, config: archive || {}, dataDir, log, indexNote });
+  const duplicatesWorker = createDuplicatesWorker({ store, writer, config: duplicates || {}, dataDir, log, indexNote });
   const startupChecks = () => {
     if (!writer) return;
     try { const w = ownershipWarning(require("fs").statSync(root)); if (w) log(w); } catch { /* no root: nothing to warn about */ }
@@ -250,7 +281,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     const col = store.collisions();
     if (twins.length || col.length) log(`memglow memory server: ${twins.length + col.length} note(s) present under several paths or permalinks (an interrupted move?) — see basic_memory_diagnostics`);
   };
-  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, log, coreMap, dataDir, indexNote, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove }, autoSplit: autoSplitWorker, structure: structureWorker });
+  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, log, coreMap, dataDir, indexNote, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove }, autoSplit: autoSplitWorker, structure: structureWorker, searchUsage });
   let ready;
   if (!deferStart) {
     store.start();
@@ -266,7 +297,12 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
       .catch(() => { /* a request still gets the plain scan / a lazy index */ })
       .then(() => { isReady = true; });
   }
-  ready.then(() => { try { autoSplitWorker.start(); } catch { /* inert is the safe default */ } try { structureWorker.start(); } catch { /* inert is the safe default */ } });
+  ready.then(() => {
+    try { autoSplitWorker.start(); } catch { /* inert is the safe default */ }
+    try { structureWorker.start(); } catch { /* inert is the safe default */ }
+    try { archiveWorker.start(); } catch { /* inert is the safe default */ }
+    try { duplicatesWorker.start(); } catch { /* inert is the safe default */ }
+  });
   const rawRpc = createRpc({ tools, instructions: readOnly ? INSTRUCTIONS : INSTRUCTIONS_RW });
   const aio = allInOne ? createAllInOne({ rpc: rawRpc, root, log, store, ...(allInOne === true ? {} : allInOne) }) : null;
   const inner = aio ? aio.rpc : rawRpc;
@@ -277,8 +313,8 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     handleAny: (m, ctx) => (isReady ? inner.handleAny(m, ctx) : ready.then(() => inner.handleAny(m, ctx))),
   } : inner;
   return {
-    store, tools, rpc, rawRpc, aio, writer, ready, isReady: () => isReady, autoSplit: autoSplitWorker, structure: structureWorker,
-    close: () => { if (warmTimer) { clearImmediate(warmTimer); warmTimer = null; } autoSplitWorker.stop(); structureWorker.stop(); store.stop(); if (writer) writer.flushHook(); if (aio) aio.close(); },
+    store, tools, rpc, rawRpc, aio, writer, ready, isReady: () => isReady, autoSplit: autoSplitWorker, structure: structureWorker, archive: archiveWorker, duplicates: duplicatesWorker,
+    close: () => { if (warmTimer) { clearImmediate(warmTimer); warmTimer = null; } autoSplitWorker.stop(); structureWorker.stop(); archiveWorker.stop(); duplicatesWorker.stop(); store.stop(); if (writer) writer.flushHook(); if (aio) aio.close(); },
   };
 }
 
@@ -348,10 +384,13 @@ function main(argv = process.argv.slice(2), env = process.env) {
   const dataDir = env.MEMGLOW_DATA_DIR ? path.resolve(env.MEMGLOW_DATA_DIR) : null;
   const autoSplit = resolveAutoSplit(env);
   const structure = resolveStructure(env);
+  const archive = resolveArchive(env);
+  const duplicates = resolveDuplicates(env);
+  const searchUsage = resolveSearchUsage(env);
   // 0.4.10.2: the port opens at once; the notes folder is loaded and indexed in the background
   // (requests meanwhile wait for it, they never fail).
   const srv = createMemoryServer({ root, project: o.project, readOnly: o.readOnly, pollMs: o.pollMs, watch: o.watch, log,
-    coreMap, dataDir, indexNote: o.indexNote.length ? o.indexNote : ["MEMORY", "index"], autoSplit, structure,
+    coreMap, dataDir, indexNote: o.indexNote.length ? o.indexNote : ["MEMORY", "index"], autoSplit, structure, archive, duplicates, searchUsage,
     fsync: o.fsync, fsyncMode: fsyncInfo.mode, fileMode: o.fileMode, serveFiles: o.serveFiles, structuredRead: o.structuredRead, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
     // 0.5.4: when BOTH --levers and autoSplit are on, sizeWarning's hint (lib/proxy-levers.js)
     // tells the AI memglow will split the note itself, instead of asking it to call split_plan —
@@ -372,7 +411,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
     const m = /^(?:\[?([^\]]*)\]?:)?(\d+)$/.exec(o.listen.trim());
     if (!m) { process.stderr.write(`memglow-memory-server: bad --listen "${o.listen}" (expected HOST:PORT)\n`); return 2; }
     const host = m[1] || "127.0.0.1", port = Number(m[2]);
-    const server = createHttpServer({ rpc: srv.rpc, store: srv.store, log, allowOrigins: o.allowOrigins, token: o.token, readOnly: o.readOnly, fsyncMode: srv.writer ? srv.writer.fsyncMode : null, autoSplit: srv.autoSplit, structure: srv.structure });
+    const server = createHttpServer({ rpc: srv.rpc, store: srv.store, log, allowOrigins: o.allowOrigins, token: o.token, readOnly: o.readOnly, fsyncMode: srv.writer ? srv.writer.fsyncMode : null, autoSplit: srv.autoSplit, structure: srv.structure, archive: srv.archive, duplicates: srv.duplicates });
     server.once("error", (e) => { process.stderr.write(`memglow-memory-server: cannot listen on ${host}:${port}: ${e.message}\n`); srv.close(); process.exit(1); });
     server.listen(port, host, () => log(`memglow memory server: listening on http://${host}:${server.address().port}/mcp`));
     // Writes in progress — and, with --fsync-mode deferred, their pending fsyncs — finish first

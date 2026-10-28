@@ -503,3 +503,91 @@ test("createStructureWorker: status() reports issue counts by rule, lastScan/nex
     assert.ok(events.some((e) => e.kind === "fix" && e.note === "loose"));
   } finally { cleanup(); }
 });
+
+// ------------------------------------------------------------------ AI judgement (0.5.5, Part C — R4 sibling lines)
+
+function makeR4Kb() {
+  return makeSrv({
+    "memory/hub.md": "---\ntitle: hub\n---\n\n## Parts\n- [[a]] — a\n- [[b]] — b\n- [[c]] — c\n",
+    "memory/a.md": "---\ntitle: a\npart_of: hub\n---\n\nUp: [[hub]] — part of hub.\n\n- See also: [[b]], [[c]]\n\nBody of a.\n",
+    "memory/b.md": "---\ntitle: b\npart_of: hub\n---\n\nUp: [[hub]] — part of hub.\n\nBody of b.\n",
+    "memory/c.md": "---\ntitle: c\npart_of: hub\n---\n\nUp: [[hub]] — part of hub.\n\nBody of c.\n",
+  });
+}
+
+test("structureSettings: allowSiblingLineRemoval defaults false; env MEMGLOW_STRUCTURE_ALLOW_SIBLING_REMOVAL=1 turns it on", () => {
+  assert.strictEqual(star.structureSettings({}, {}).ai.allowSiblingLineRemoval, false);
+  assert.strictEqual(star.structureSettings({ ai: { allowSiblingLineRemoval: true } }, {}).ai.allowSiblingLineRemoval, true);
+  assert.strictEqual(star.structureSettings({}, { MEMGLOW_STRUCTURE_ALLOW_SIBLING_REMOVAL: "1" }).ai.allowSiblingLineRemoval, true);
+  assert.strictEqual(star.structureSettings({ ai: { allowSiblingLineRemoval: true } }, { MEMGLOW_STRUCTURE_ALLOW_SIBLING_REMOVAL: "0" }).ai.allowSiblingLineRemoval, false, "env wins");
+});
+
+test("R4 (default, allowSiblingLineRemoval off): the AI's verdict is recorded in status().r4Verdicts, but the line is NEVER removed", async () => {
+  const { root, srv, cleanup } = makeR4Kb();
+  try {
+    const w = star.createStructureWorker({
+      store: srv.store, writer: srv.writer,
+      config: { enabled: true, ai: { enabled: true, maxDecisionsPerScan: 10 } }, // allowSiblingLineRemoval not set: false
+      aiRun: async (prompt) => { assert.match(prompt, /See also/); return { ok: true, text: JSON.stringify({ action: "remove", reason: "already in hub's Parts" }) }; },
+    });
+    await w.scanOnce();
+    const a = fs.readFileSync(path.join(root, "memory/a.md"), "utf8");
+    assert.match(a, /See also/, "report-only by default: the pure sibling line is still there");
+    const st = w.status();
+    assert.strictEqual(st.r4Verdicts.length, 1);
+    assert.strictEqual(st.r4Verdicts[0].note, "a");
+    assert.strictEqual(st.r4Verdicts[0].action, "remove");
+  } finally { cleanup(); }
+});
+
+test("R4 (allowSiblingLineRemoval: true) + AI says \"remove\" on a PURE line — the ONE deletion this worker may ever make", async () => {
+  const { root, srv, cleanup } = makeR4Kb();
+  try {
+    const w = star.createStructureWorker({
+      store: srv.store, writer: srv.writer,
+      config: { enabled: true, ai: { enabled: true, maxDecisionsPerScan: 10, allowSiblingLineRemoval: true } },
+      aiRun: async () => ({ ok: true, text: JSON.stringify({ action: "remove", reason: "already in hub's Parts" }) }),
+    });
+    const applied = await w.scanOnce();
+    assert.ok(applied.some((x) => x.rule === "R4" && x.fix === "remove-line"));
+    const a = fs.readFileSync(path.join(root, "memory/a.md"), "utf8");
+    assert.doesNotMatch(a, /See also/);
+    assert.match(a, /Body of a\./);
+  } finally { cleanup(); }
+});
+
+test("R4 (allowSiblingLineRemoval: true) + AI says \"keep\" — never removed, verdict still recorded", async () => {
+  const { root, srv, cleanup } = makeR4Kb();
+  try {
+    const w = star.createStructureWorker({
+      store: srv.store, writer: srv.writer,
+      config: { enabled: true, ai: { enabled: true, maxDecisionsPerScan: 10, allowSiblingLineRemoval: true } },
+      aiRun: async () => ({ ok: true, text: JSON.stringify({ action: "keep", reason: "gives useful reading order" }) }),
+    });
+    await w.scanOnce();
+    const a = fs.readFileSync(path.join(root, "memory/a.md"), "utf8");
+    assert.match(a, /See also/);
+    const st = w.status();
+    assert.strictEqual(st.r4Verdicts[0].action, "keep");
+  } finally { cleanup(); }
+});
+
+test("R4: a NON-pure line (links sit inside prose) is never removed even with allowSiblingLineRemoval true and a \"remove\" verdict", async () => {
+  const { root, srv, cleanup } = makeSrv({
+    "memory/hub.md": "---\ntitle: hub\n---\n\n## Parts\n- [[a]] — a\n- [[b]] — b\n- [[c]] — c\n",
+    "memory/a.md": "---\ntitle: a\npart_of: hub\n---\n\nUp: [[hub]] — part of hub.\n\nRead [[b]] and [[c]] before this for context.\n\nBody of a.\n",
+    "memory/b.md": "---\ntitle: b\npart_of: hub\n---\n\nUp: [[hub]] — part of hub.\n\nBody of b.\n",
+    "memory/c.md": "---\ntitle: c\npart_of: hub\n---\n\nUp: [[hub]] — part of hub.\n\nBody of c.\n",
+  });
+  try {
+    const w = star.createStructureWorker({
+      store: srv.store, writer: srv.writer,
+      config: { enabled: true, ai: { enabled: true, maxDecisionsPerScan: 10, allowSiblingLineRemoval: true } },
+      aiRun: async () => ({ ok: true, text: JSON.stringify({ action: "remove", reason: "x" }) }),
+    });
+    const applied = await w.scanOnce();
+    assert.ok(!applied.some((x) => x.rule === "R4"));
+    const a = fs.readFileSync(path.join(root, "memory/a.md"), "utf8");
+    assert.match(a, /Read \[\[b\]\] and \[\[c\]\] before this for context\./);
+  } finally { cleanup(); }
+});

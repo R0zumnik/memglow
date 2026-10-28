@@ -1269,7 +1269,11 @@ up on that note and logs it. At most `structure.ai.maxDecisionsPerScan` (default
 **Visibility**: `GET /api/maintenance` on the memory server's own HTTP port (same auth as every
 other request there) answers `{ autoSplit: {enabled, provider, model, keySet, thresholdTokens,
 pendingCount, lastScanAt, nextScanAt, lastError, recent}, structure: {enabled, ai, issues,
-lastScanAt, nextScanAt, lastError, recent} }` — never the key itself, only whether one resolved.
+r4Verdicts, lastScanAt, nextScanAt, lastError, recent}, archive: {…}, duplicates: {…, reported} }`
+— never the key itself, only whether one resolved; `archive`/`duplicates` are the two newer
+workers below ([PRUNE STALE → ARCHIVE](#auto-archive), [DUPLICATES](#auto-duplicates)), present
+(all-false) even when not configured at all. `structure.r4Verdicts` is the AI's `{action,reason}`
+answer for every R4 sibling-line issue asked about in the most recent scan.
 `lastError` is `null` until a worker's AI call fails with a bad credential (401/403/"invalid
 bearer token"/"failed to authenticate"/"unauthorized", any provider — `lib/ai-provider.js`'s
 `isAuthError()`): at that point the worker stops the rest of that scan outright (no point retrying
@@ -1280,6 +1284,54 @@ the existing "Memory server" health card) when `MEMGLOW_MEMORY_URL` points at it
 `lastError`, if any, as its own warning line — and `memory_core`'s answer always ends with one
 line, `maintenance: N structure issue(s), M note(s) over threshold (auto-split on/off).`, win or
 lose, so the AI reading its own memory sees the state without a separate call.
+
+<a id="auto-archive"></a>
+### PRUNE STALE → ARCHIVE (optional)
+
+A third worker alongside auto-split/structure, same family — **off by default**:
+`"maintenance": { "archive": { "enabled": true } }` or `MEMGLOW_AUTO_ARCHIVE=1`, plus a
+[provider](#auto-split) (shared config shape, independently configurable). On an idle, in-scope
+note, the AI is shown the note's outline (`[S1]`-style ids, a date if one is found in a heading or
+its text) and `keepDays` (default 60), and picks sections that are clearly obsolete — a closed
+incident, a superseded version, an old dated entry — or none, never guessing. Chosen sections move
+VERBATIM into a sibling note `<slug>-archive` (appended to if it already exists, else created with
+`part_of` pointing at the note's own hub, or the note itself, and an `Up:` line); the source note
+gets one new line, ADD only: `Archived sections: see [[<slug>-archive]].`. A note already fully
+reconsidered since its last edit is never re-asked. This is independent of — and complements —
+the existing [dormancy-based archive tier](#archive) (usage counters, no AI): that one finds
+content nobody has *read*, this one finds content that is *obviously stale on its own terms*.
+Config: `maintenance.archive: { enabled, keepDays, idleMinutes, scanHours, maxActionsPerScan,
+provider, model, … }`. `test/auto-archive.test.js`.
+
+<a id="auto-duplicates"></a>
+### Duplicate notes (optional)
+
+Same family again — **off by default**: `"maintenance": { "duplicates": { "enabled": true } }` or
+`MEMGLOW_AUTO_DUPLICATES=1`. Candidate pairs are found cheaply from title/description word overlap
+(the same rule the MCP proxy's `duplicateHint` lever already uses), then the AI confirms each with
+`{"duplicate": true|false, "keep": "a"|"b", "reason": "…"}`. **Default: report only** — every
+verdict lands in `GET /api/maintenance`'s `duplicates.reported` and the control panel, nothing is
+ever written. `maintenance.duplicates.autoMerge: true` (its own flag, off by default even with
+detection on; env `MEMGLOW_AUTO_DUPLICATES_MERGE`) additionally appends the other note's body under
+a `## Merged from [[x]] (date)` heading into the kept note, then reduces the other note to a
+2-line stub (its own frontmatter untouched, body replaced with `Merged into [[kept]].`) — never
+across two notes that declare different hubs, or no hub at all; that call needs a human. Config:
+`maintenance.duplicates: { enabled, autoMerge, idleMinutes, scanHours, maxActionsPerScan, provider,
+model, … }`. `test/auto-duplicates.test.js`.
+
+<a id="usage-aware-search"></a>
+### Usage-aware search (optional, on by default)
+
+Search ranking gets a small, capped nudge from the SAME learned (word → note) log lever 10
+(`aliases`) already keeps privately and locally (`lib/learned-aliases.js`) — a note the owner
+actually opened right after a similar past search scores a little higher next time, decayed over
+`halfLifeDays` (default 30). The nudge only ever settles a near-tie among notes the text search
+already matched (it can never invent a new result, and it is capped well under a single
+title-word match), so it cannot outrank a genuinely better text match. `search.usageBoost: {
+enabled, halfLifeDays, cap }` in `memglow.config.json` (`MEMGLOW_SEARCH_USAGE_BOOST=0/1`) —
+enabled by default, since it is a true no-op until there is actual usage data to learn from; the
+memory server only ever *reads* `learned-aliases.json` for this (the MCP proxy stays its one
+writer). `test/search-usage-boost.test.js`.
 
 #### Running the `claude-code` provider in Docker
 
@@ -1447,7 +1499,7 @@ docker run -d --name memglow -p 127.0.0.1:4747:4747 \
   -v /path/to/notes:/memory:ro \
   -v memglow-data:/data \
   -e MEMGLOW_TOKEN=$(cat ~/.memglow/token) \
-  ghcr.io/r0zumnik/memglow:0.5.4
+  ghcr.io/r0zumnik/memglow:0.5.5
 ```
 
 `/data` keeps the Memory cost counts (note ids and numbers only) and the saved view (settings,
@@ -1456,7 +1508,7 @@ layout, camera) across restarts.
 Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
 then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
 
-Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.5.4`.
+Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.5.5`.
 
 The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
 container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.

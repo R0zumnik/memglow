@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.5.5 — 2026-10-28
+
+### Added
+
+- **PRUNE STALE → ARCHIVE** (off by default — `maintenance.archive.enabled` / env
+  `MEMGLOW_AUTO_ARCHIVE`): a new maintenance worker, `lib/auto-archive.js`, same conventions as
+  `lib/auto-split.js` (scope, idle-from-mtime, event log, `status()`, auth-error stop). For an
+  in-scope, idle note, the AI (same pluggable provider) is shown the note's outline with
+  `[S1]`-style ids and any date found in each section, and picks sections that are clearly
+  obsolete (a closed incident, a superseded version, a dated log entry past `keepDays`, default
+  60) — or none, never guessing. Chosen sections move VERBATIM (`lib/split-engine.js`'s new
+  `moveSections`, with the same hard zero-loss check as every other automatic action) into a
+  sibling note `<slug>-archive` (appended to if it exists, else created with `part_of` = the
+  note's own hub or the note itself, and an `Up:` line); the source note keeps a single new line,
+  ADD only: "Archived sections: see [[<slug>-archive]]." A note is never re-asked about until its
+  own mtime changes. `test/auto-archive.test.js`.
+- **DUPLICATES** (off by default — `maintenance.duplicates.enabled` / env
+  `MEMGLOW_AUTO_DUPLICATES`): a new worker, `lib/auto-duplicates.js`. Candidate pairs are found
+  cheaply (title/description term overlap, reusing `lib/levers/duplicate-hint.js`'s own
+  `noteWords`/`duplicateHintCandidates`), then confirmed by the AI with a strict
+  `{duplicate, keep, reason}` verdict. Default behaviour is REPORT ONLY — every verdict is kept in
+  `status().reported` (`/api/maintenance` + the control panel), nothing is ever written. Optional
+  `maintenance.duplicates.autoMerge: true` (its own flag, env `MEMGLOW_AUTO_DUPLICATES_MERGE`,
+  off even when detection itself is on) additionally appends the other note's body under a
+  "## Merged from [[x]] (date)" heading into the kept note (ADD only, hard zero-loss check), then
+  turns the other note into a 2-line stub (its own frontmatter kept byte-for-byte, body replaced
+  with "Merged into [[kept]]."). Never auto-merges when either note has no declared `part_of`, or
+  the two declare different ones — picking the "right" side across hubs needs a human.
+  `test/auto-duplicates.test.js`.
+- **Structure guardian (R4 sibling lines) — AI verdict**: `lib/star-audit.js`'s `structure.ai`
+  judgement pass now also covers R4 (a part naming its own siblings), asking the AI a narrow
+  `{action: "keep"|"remove", reason}` question for every such issue once `structure.ai.enabled` —
+  the verdict is always recorded (`status().r4Verdicts`, report-only, shown in the panel). Only
+  with the new `structure.ai.allowSiblingLineRemoval: true` (default `false`, env
+  `MEMGLOW_STRUCTURE_ALLOW_SIBLING_REMOVAL`) does a `"remove"` verdict on a PURE sibling-link line
+  (every link target also listed in the hub's own `## Parts`) turn into a real deletion — the
+  single line this worker is ever allowed to delete automatically.
+- **`split_plan` (D — unify grouping)**: the MCP tool's proposal now also includes `enginePlan`,
+  built with the SAME grouping heuristic `lib/auto-split.js`'s own worker uses (consecutive
+  top-level sections packed toward `splitChunkTokens`) and validated through
+  `lib/split-engine.js`'s `computeSplit` (zero-loss, slug freedom) — the exact plan shape
+  `split_apply`/the auto-split worker expect, every `[S#]`-style id already resolved to real
+  heading text. `sections`/`split`/`copyPrompt` (the existing flat `packSections` breakdown) are
+  unchanged, back-compat. New engine export: `greedyEnginePlan`.
+- **Usage-aware search (E)**: a small, capped ranking boost (`search.usageBoost`, env
+  `MEMGLOW_SEARCH_USAGE_BOOST`, default on — a true no-op without data) for notes the owner
+  actually opened right after a similar past search, reusing the SAME learned (word, note) log
+  lever 10 (`aliases`) already keeps (`lib/learned-aliases.js`'s new `computeUsageBoosts`, decayed
+  over `halfLifeDays`, default 30) — read-only on the memory server's side (the MCP proxy stays
+  the only writer of `learned-aliases.json`, in the same shared data folder). The boost is added
+  to a note's score before the final sort, so it only ever settles a near-tie among notes the
+  lexical engine already matched; it is capped well under a single title-term match, so it can
+  never outrank a real, much stronger text match. `lib/store/search.js`'s `createSearch()` takes
+  an optional 3rd `usage` argument (`null`/omitted: byte-identical to before).
+  `test/search-usage-boost.test.js`.
+
 ## 0.5.4 — 2026-10-27
 
 ### Added

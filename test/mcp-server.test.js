@@ -197,6 +197,24 @@ test("split_plan: \"sections\" (raw per-heading breakdown) and \"split\" (packed
   assert.ok(!("sections" in ds), "small note: split_plan does not read its body at all");
 });
 
+test("split_plan (0.5.5, D — unify grouping): \"enginePlan\" is the SAME heuristic/shape lib/auto-split.js's worker builds, validated through lib/split-engine.js's computeSplit (zero-loss, slug freedom); \"sections\"/\"split\" stay unchanged (back-compat)", () => {
+  const h = harness(buildFixture());
+  const big = call(h, 1, "split_plan", { note: "big" });
+  const db = JSON.parse(big.result.content[0].text.match(/```json\n([\s\S]*)\n```/)[1]);
+  assert.ok(db.enginePlan && Array.isArray(db.enginePlan.parts));
+  assert.deepStrictEqual(db.enginePlan.parts.map((p) => p.sections), [["Part 1"], ["Part 2"], ["Part 3"]]);
+  for (const p of db.enginePlan.parts) {
+    assert.ok(p.slug.startsWith("big-"), `slug "${p.slug}" is hub-prefixed, never a bare AI/heuristic guess`);
+    assert.ok(typeof p.description === "string" && p.description.length > 0);
+  }
+  // "sections"/"split"/"copyPrompt" (back-compat, pinned above) are untouched by enginePlan's presence.
+  assert.strictEqual(db.split.length, 3);
+
+  const small = call(h, 2, "split_plan", { note: "alpha" });
+  const ds = JSON.parse(small.result.content[0].text.match(/```json\n([\s\S]*)\n```/)[1]);
+  assert.ok(!("enginePlan" in ds), "under the threshold: no body read, no plan either");
+});
+
 test("related_notes: links, sub-theme and co-usage combine; topic search over metadata only", () => {
   const dir = buildFixture();
   const dataDir = tmpDir("memglow-mcp-data-");

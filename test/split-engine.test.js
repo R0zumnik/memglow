@@ -259,3 +259,63 @@ test("normalizeSlug: never doubles the hub's own tail (0.5.4, seen in a real AI 
   assert.strictEqual(n("initiatives-silvae", "initiatives-0-synthese-initiatives-design-spec"), "initiatives-0-synthese-initiatives-design-spec-initiatives-silvae");
   assert.strictEqual(n("2026", "project-garden-log-2026"), "project-garden-log-2026-2026");
 });
+
+// 0.5.5 (A — PRUNE STALE → ARCHIVE): moveSections' own pure partition + hard zero-loss check.
+test("moveSections: moves a whole section (with its own subsections) out, verbatim, and keeps everything else", () => {
+  const body = "## Intro\nHello world.\n\n## Old incident\nThis is old.\n\n### Root cause\nDetails.\n\n## Current status\nStill going.\n";
+  const r = engine.moveSections(body, ["Old incident"]);
+  assert.strictEqual(r.ok, true);
+  assert.match(r.moved, /Old incident/);
+  assert.match(r.moved, /Root cause/, "a subsection moves with its own parent section");
+  assert.match(r.moved, /Details\./);
+  assert.doesNotMatch(r.kept, /Old incident/);
+  assert.match(r.kept, /Hello world\./);
+  assert.match(r.kept, /Still going\./);
+});
+
+test("moveSections: several non-overlapping sections at once, in any order given", () => {
+  const body = "## A\na\n\n## B\nb\n\n## C\nc\n";
+  const r = engine.moveSections(body, ["C", "A"]);
+  assert.strictEqual(r.ok, true);
+  assert.match(r.kept, /## B/);
+  assert.doesNotMatch(r.kept, /## A|## C/);
+  assert.match(r.moved, /## A/);
+  assert.match(r.moved, /## C/);
+});
+
+test("moveSections: refuses a heading not found exactly once, an overlap, or an empty/no selection — never a partial move", () => {
+  assert.strictEqual(engine.moveSections("## A\na\n", []).ok, false);
+  assert.strictEqual(engine.moveSections("## A\na\n", ["Missing"]).ok, false);
+  assert.strictEqual(engine.moveSections("## A\na\n\n## A\nb\n", ["A"]).ok, false, "found twice: refused");
+  const overlap = engine.moveSections("## A\na\n\n### B\nb\n", ["A", "B"]);
+  assert.strictEqual(overlap.ok, false, "B is a subsection of A: already claimed");
+});
+
+test("moveSections: hard zero-loss check (defence in depth, same cut as computeSplit's own)", () => {
+  // Every real path already guarantees this by construction; the check itself must still catch
+  // a body that is not well-formed enough for the line-range math to behave (extremely short/
+  // edge-case input) rather than silently drop something.
+  const r = engine.moveSections("## A\nkeep this line\n", ["A"]);
+  assert.strictEqual(r.ok, true);
+  const countLines = (t) => t.split("\n").filter((l) => l.trim()).length;
+  assert.strictEqual(countLines(r.kept) + countLines(r.moved), countLines("## A\nkeep this line\n"));
+});
+
+// 0.5.5 (D — unify grouping): greedyEnginePlan, the heuristic split_plan now shares with the
+// engine's own validation.
+test("greedyEnginePlan: groups consecutive top-level sections toward ~chunkTokens, validated zero-loss through computeSplit", () => {
+  const body = ["## One", "word ".repeat(100), "## Two", "word ".repeat(100), "## Three", "word ".repeat(100)].join("\n");
+  const plan = engine.greedyEnginePlan(body, { hubId: "doc", chunkTokens: 50 });
+  assert.ok(plan && plan.ok);
+  assert.ok(plan.parts.length >= 2);
+  for (const p of plan.parts) { assert.ok(p.slug.startsWith("doc-")); assert.ok(p.sections.length >= 1); }
+  // Every part's sections, applied through computeSplit, account for the whole body (zero-loss
+  // is computeSplit's own hard check — greedyEnginePlan already ran it, this just re-confirms).
+  const r = engine.computeSplit(body, { parts: plan.parts });
+  assert.strictEqual(r.ok, true);
+});
+
+test("greedyEnginePlan: null when there is nothing useful to propose (no headings, or a single section)", () => {
+  assert.strictEqual(engine.greedyEnginePlan("just a paragraph, no headings at all.\n"), null);
+  assert.strictEqual(engine.greedyEnginePlan("## Only one\ntext\n"), null);
+});

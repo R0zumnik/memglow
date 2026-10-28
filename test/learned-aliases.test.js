@@ -161,3 +161,66 @@ test("createAliasStore: a malformed or missing file on disk is treated as empty,
     assert.strictEqual(store.match(["anything", "words"]), null);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ------------------------------------------------------------------ 0.5.5 (E — usage-aware search)
+
+test("computeUsageBoosts: decays over halfLifeDays, sums matching words per note, capped", () => {
+  const now = Date.parse("2026-06-01T00:00:00Z");
+  const entries = [
+    { word: "broker", note: "note-a", count: 1, last: now }, // today: full weight
+    { word: "reconnect", note: "note-a", count: 1, last: now - 30 * 86400000 }, // one half-life: half weight
+    { word: "unrelated", note: "note-b", count: 100, last: now }, // never matched: note-b absent
+  ];
+  const boosts = LA.computeUsageBoosts(entries, { words: ["broker", "reconnect"], now, halfLifeDays: 30, cap: 10 });
+  assert.ok(boosts.has("note-a"));
+  assert.ok(!boosts.has("note-b"), "a note with no matching word is simply absent, never a zero entry");
+  assert.ok(Math.abs(boosts.get("note-a") - 1.5) < 0.01, `expected ≈1.5 (1 + 0.5), got ${boosts.get("note-a")}`);
+});
+
+test("computeUsageBoosts: capped — a huge learned count never produces an unbounded boost", () => {
+  const now = Date.now();
+  const entries = [{ word: "broker", note: "note-a", count: 10000, last: now }];
+  const boosts = LA.computeUsageBoosts(entries, { words: ["broker"], now, cap: 1 });
+  assert.strictEqual(boosts.get("note-a"), 1);
+});
+
+test("computeUsageBoosts: no words, no entries, or no match at all → an empty Map, never throws", () => {
+  assert.strictEqual(LA.computeUsageBoosts([], { words: ["x"] }).size, 0);
+  assert.strictEqual(LA.computeUsageBoosts([{ word: "x", note: "n", count: 1, last: Date.now() }], { words: [] }).size, 0);
+  assert.strictEqual(LA.computeUsageBoosts(null, { words: ["x"] }).size, 0);
+});
+
+test("usageBoostSettings: enabled by default (a true no-op without data — see createAliasStore.usageBoosts), env/config can force it off", () => {
+  assert.strictEqual(LA.usageBoostSettings({}, {}).enabled, true);
+  assert.strictEqual(LA.usageBoostSettings({ enabled: false }, {}).enabled, false);
+  assert.strictEqual(LA.usageBoostSettings({}, { MEMGLOW_SEARCH_USAGE_BOOST: "0" }).enabled, false);
+  assert.strictEqual(LA.usageBoostSettings({ enabled: false }, { MEMGLOW_SEARCH_USAGE_BOOST: "1" }).enabled, true, "env wins");
+  assert.strictEqual(LA.usageBoostSettings({}, {}).halfLifeDays, LA.USAGE_BOOST_HALF_LIFE_DAYS_DEFAULT);
+  assert.strictEqual(LA.usageBoostSettings({}, {}).cap, LA.USAGE_BOOST_CAP_DEFAULT);
+});
+
+test("createAliasStore.usageBoosts: read-only (learnAliases/aliases both false), gated by cfg.usageBoost, empty store is a true no-op", () => {
+  const dir = tmpDir();
+  try {
+    const writer = LA.createAliasStore({ dataDir: dir, learnAliases: true, aliases: false });
+    writer.learn("note-a", ["broker", "reconnect"]);
+    writer.flush();
+
+    // A reader that never learns/injects, only reads, from the SAME data folder.
+    const reader = LA.createAliasStore({ dataDir: dir, learnAliases: false, aliases: false, usageBoost: true });
+    assert.ok(reader.available());
+    const boosts = reader.usageBoosts(["broker"]);
+    assert.ok(boosts.get("note-a") > 0);
+
+    // cfg.usageBoost off: always an empty Map, never throws.
+    const off = LA.createAliasStore({ dataDir: dir, learnAliases: false, aliases: false, usageBoost: false });
+    assert.strictEqual(off.usageBoosts(["broker"]).size, 0);
+
+    // A fresh install (no file at all yet): a true no-op.
+    const dir2 = tmpDir();
+    try {
+      const empty = LA.createAliasStore({ dataDir: dir2, usageBoost: true });
+      assert.strictEqual(empty.usageBoosts(["broker"]).size, 0);
+    } finally { fs.rmSync(dir2, { recursive: true, force: true }); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
