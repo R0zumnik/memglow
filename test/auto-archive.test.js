@@ -170,13 +170,15 @@ test("worker (0.5.5): \"left\" verdicts are cached by CONTENT HASH across a work
   try {
     let calls = 0;
     const aiRun = async () => { calls++; return { ok: true, text: JSON.stringify({ sections: [], reason: "nothing obsolete" }) }; };
-    const w1 = archive.createArchiveWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
+    // minTokens: 0 — this test is about the restart cache, not the size pre-filter (its own test
+    // covers that); NOTE's ~15-token old section would otherwise never clear the pre-filter at all.
+    const w1 = archive.createArchiveWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
     await w1.scanOnce();
     w1.stop(); // flushes the cache to disk
     assert.strictEqual(calls, 1);
 
     // A BRAND NEW worker instance (simulating a process restart), same data dir, same content.
-    const w2 = archive.createArchiveWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
+    const w2 = archive.createArchiveWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
     await w2.scanOnce();
     assert.strictEqual(calls, 1, "cached across the restart: no new AI call for unchanged content");
   } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
@@ -186,9 +188,10 @@ test("worker: the AI finds nothing obsolete — left alone, nothing written, and
   const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
   try {
     let calls = 0;
+    // minTokens: 0 — about re-ask suppression, not the size pre-filter.
     const w = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" },
-      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
       aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ sections: [], reason: "nothing obsolete" }) }; },
     });
     const applied = await w.scanOnce();
@@ -204,11 +207,82 @@ test("worker: an auth error stops the scan and is surfaced in status().lastError
   try {
     const w = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" },
-      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
       aiRun: async () => ({ ok: false, error: "401 unauthorized: invalid api key" }),
     });
     await w.scanOnce();
     const st = w.status();
     assert.ok(st.lastError && /unauthorized/i.test(st.lastError.message));
+  } finally { cleanup(); }
+});
+
+test("oldSectionsTotal: sums only TOP-LEVEL sections (disjoint, never double-counted) whose latest date is <= cutoff", () => {
+  const heads = archive.outline("## 2020-01-01 Old\nword ".padEnd(0) + "\n\n### Sub (nested, same old date)\n2020-01-01 too.\n\n## 2026-10-01 Recent\nStill fresh.\n");
+  // top-level only: level-2 headings "Old" (old) and "Recent" (not old); the level-3 "Sub" is
+  // skipped by the top-level filter (its own old date would otherwise double-count with "Old"'s).
+  const total = archive.oldSectionsTotal(heads, "2026-08-29");
+  const oldTop = heads.find((h) => h.level === 2 && h.date === "2020-01-01");
+  assert.strictEqual(total, oldTop.tokens, "only the top-level \"Old\" section counts, not its nested Sub too");
+});
+
+test("worker (0.5.5 bug fix): the AI-free pre-filter skips a note with nothing old+big enough — SILENTLY, zero AI calls", async () => {
+  // Same tiny fixture every other test in this file uses: a ~15-token old section never clears
+  // the default minTokens (400) — the second real-KB bug: the AI used to be asked anyway.
+  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    let calls = 0;
+    const logs = [];
+    const w = archive.createArchiveWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" }, log: (s) => logs.push(s),
+      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, // default minTokens: 400
+      aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ sections: ["S2"], reason: "x" }) }; },
+    });
+    const applied = await w.scanOnce();
+    assert.deepStrictEqual(applied, []);
+    assert.strictEqual(calls, 0, "pre-filtered out before any AI call");
+    assert.deepStrictEqual(logs, [], "skipped silently — no log line at all");
+  } finally { cleanup(); }
+});
+
+test("worker (0.5.5 bug fix): maxChecksPerScan caps the AI CALLS themselves (default 5), independent of maxActionsPerScan", async () => {
+  const big = (label, date) => ["---", `title: ${label}`, "theme: knowledge", "---", "",
+    "## Current status", "Still going. " + "word ".repeat(150), "",
+    `## ${date} Old incident`, "Closed long ago. " + "word ".repeat(500), "",
+  ].join("\n");
+  const notesFiles = {};
+  for (let i = 0; i < 7; i++) notesFiles[`memory/ops${i}.md`] = big(`ops${i}`, "2020-01-01");
+  const { srv, cleanup } = makeSrv(notesFiles, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    let calls = 0;
+    const w = archive.createArchiveWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" },
+      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, // maxChecksPerScan defaults to 5
+      aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ sections: [], reason: "nothing obsolete after all" }) }; },
+    });
+    await w.scanOnce();
+    assert.ok(calls <= 5, `expected at most 5 AI calls (maxChecksPerScan), got ${calls}`);
+    assert.strictEqual(calls, 5, "7 eligible notes exist: the cap actually bites");
+  } finally { cleanup(); }
+});
+
+test("worker (0.5.5 bug fix): eligible candidates are ordered by old-tokens DESCENDING — the capped budget spends calls on the biggest gain first", async () => {
+  const noteWith = (label, oldWords) => ["---", `title: ${label}`, "theme: knowledge", "---", "",
+    "## Current status", "Still going.", "",
+    "## 2020-01-01 Old incident", "word ".repeat(oldWords), "",
+  ].join("\n");
+  const { srv, cleanup } = makeSrv({
+    "memory/small-old.md": noteWith("small-old", 150), // clears minTokens, smaller old-tokens total
+    "memory/big-old.md": noteWith("big-old", 400), // clears minTokens, bigger old-tokens total
+  }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    const seen = [];
+    const w = archive.createArchiveWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" },
+      config: { enabled: true, idleMinutes: 0, maxChecksPerScan: 1, provider: "anthropic", apiKeyEnv: "FAKE" }, // only ONE AI call allowed
+      aiRun: async (prompt) => { seen.push(prompt); return { ok: true, text: JSON.stringify({ sections: [], reason: "x" }) }; },
+    });
+    await w.scanOnce();
+    assert.strictEqual(seen.length, 1);
+    assert.match(seen[0], /"big-old"/, "the bigger old-tokens candidate is asked first when the budget only allows one");
   } finally { cleanup(); }
 });

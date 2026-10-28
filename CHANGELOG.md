@@ -89,6 +89,22 @@ First real-KB run of A/B/C above surfaced four bugs, all fixed:
   keyed by content hash + lineIndex) — once the AI has answered for unchanged content, the same
   scan tier never asks again, surviving a restart. `test/verdict-cache.test.js`.
 
+Second real-KB run: ARCHIVE still asked the AI about ≈65 notes in one scan — same bug class
+(`maxActionsPerScan` only ever counted ARCHIVES, never AI calls, and almost nothing clears the
+default thresholds on a real KB in one pass). Fixed:
+
+- A cheap, AI-free CODE pre-filter now runs before any AI call (`oldSectionsTotal()`): a note
+  only qualifies when at least one of its TOP-LEVEL sections (the note's own minimum heading
+  level — disjoint spans, never double-counting a parent with its own subsection) has a
+  `latestDate()` older than `keepDays`, AND those old top-level sections' combined size reaches
+  `minTokens`. A note that fails this is skipped SILENTLY — no AI call, no log line at all (the
+  common case, not worth logging).
+- `maxChecksPerScan` (default 5, same name/shape as `lib/auto-duplicates.js`'s own) now caps the
+  AI calls themselves for archive too; `maxActionsPerScan` still separately caps archives
+  actually applied.
+- Eligible candidates are ranked by their old-tokens total, biggest first, so a capped budget of
+  AI calls is spent where the gain is largest.
+
 ## 0.5.4 — 2026-10-27
 
 ### Added

@@ -1290,25 +1290,32 @@ lose, so the AI reading its own memory sees the state without a separate call.
 
 A third worker alongside auto-split/structure, same family — **off by default**:
 `"maintenance": { "archive": { "enabled": true } }` or `MEMGLOW_AUTO_ARCHIVE=1`, plus a
-[provider](#auto-split) (shared config shape, independently configurable). On an idle, in-scope
-note, the AI is shown the note's outline (`[S1]`-style ids, the MOST RECENT date found in a
-heading or its text) and `keepDays` (default 60), and picks sections that are clearly obsolete —
-a closed incident, a superseded version, an old dated entry — or none, never guessing. **Both
-`keepDays` and a `minTokens` floor (default 400) are enforced IN CODE**, not merely asked of the
-AI: a chosen section whose own most recent date is newer than the `keepDays` cutoff is dropped,
-and the remaining chosen sections' combined size must still reach `minTokens` — never archive a
-dated entry that is not actually old enough, or a handful of lines into a brand-new note, whatever
-the AI answered. Sections are selected by their outline INDEX (the `[S#]` id itself), never by
+[provider](#auto-split) (shared config shape, independently configurable). A cheap, AI-FREE code
+pre-filter runs first: a note only becomes a candidate at all when at least one of its TOP-LEVEL
+sections has a most-recent date older than `keepDays` AND those old sections' combined size
+reaches `minTokens` (default 400) — everything else is skipped silently, no AI call, no log line.
+Eligible candidates are then ranked by their old-tokens total, biggest first, and
+**`maxChecksPerScan` (default 5) caps the AI calls themselves** for this spent budget
+(`maxActionsPerScan` separately caps archives actually applied — the two used to be conflated,
+so a scan with nothing to apply yet asked the AI about every single note). For each one asked,
+the AI is shown the note's outline (`[S1]`-style ids, the MOST RECENT date found in a heading or
+its text) and `keepDays`, and picks sections that are clearly obsolete — a closed incident, a
+superseded version, an old dated entry — or none, never guessing. **Both `keepDays` and
+`minTokens` are also enforced IN CODE** on the AI's own answer, not merely asked of it: a chosen
+section whose own most recent date is newer than the `keepDays` cutoff is dropped, and the
+remaining chosen sections' combined size must still reach `minTokens` — never archive a dated
+entry that is not actually old enough, or a handful of lines into a brand-new note, whatever the
+AI answered. Sections are selected by their outline INDEX (the `[S#]` id itself), never by
 heading text, so a note with two identically-worded headings works fine. Chosen sections then move
 VERBATIM into a sibling note `<slug>-archive` (appended to if it already exists, else created with
 `part_of` pointing at the note's own hub, or the note itself, and an `Up:` line); the source note
 gets one new line, ADD only: `Archived sections: see [[<slug>-archive]].`. A "nothing eligible"
-verdict is cached by the note's own CONTENT HASH (never re-asked until the note actually changes,
-surviving a restart). This is independent of — and complements — the existing
-[dormancy-based archive tier](#archive) (usage counters, no AI): that one finds content nobody has
-*read*, this one finds content that is *obviously stale on its own terms*. Config:
-`maintenance.archive: { enabled, keepDays, minTokens, idleMinutes, scanHours, maxActionsPerScan,
-provider, model, … }`. `test/auto-archive.test.js`.
+verdict (from the AI itself) is also cached by the note's own CONTENT HASH (never re-asked until
+the note actually changes, surviving a restart). This is independent of — and complements — the
+existing [dormancy-based archive tier](#archive) (usage counters, no AI): that one finds content
+nobody has *read*, this one finds content that is *obviously stale on its own terms*. Config:
+`maintenance.archive: { enabled, keepDays, minTokens, idleMinutes, scanHours, maxChecksPerScan,
+maxActionsPerScan, provider, model, … }`. `test/auto-archive.test.js`.
 
 <a id="auto-duplicates"></a>
 ### Duplicate notes (optional)
