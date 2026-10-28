@@ -1291,16 +1291,23 @@ lose, so the AI reading its own memory sees the state without a separate call.
 A third worker alongside auto-split/structure, same family — **off by default**:
 `"maintenance": { "archive": { "enabled": true } }` or `MEMGLOW_AUTO_ARCHIVE=1`, plus a
 [provider](#auto-split) (shared config shape, independently configurable). On an idle, in-scope
-note, the AI is shown the note's outline (`[S1]`-style ids, a date if one is found in a heading or
-its text) and `keepDays` (default 60), and picks sections that are clearly obsolete — a closed
-incident, a superseded version, an old dated entry — or none, never guessing. Chosen sections move
+note, the AI is shown the note's outline (`[S1]`-style ids, the MOST RECENT date found in a
+heading or its text) and `keepDays` (default 60), and picks sections that are clearly obsolete —
+a closed incident, a superseded version, an old dated entry — or none, never guessing. **Both
+`keepDays` and a `minTokens` floor (default 400) are enforced IN CODE**, not merely asked of the
+AI: a chosen section whose own most recent date is newer than the `keepDays` cutoff is dropped,
+and the remaining chosen sections' combined size must still reach `minTokens` — never archive a
+dated entry that is not actually old enough, or a handful of lines into a brand-new note, whatever
+the AI answered. Sections are selected by their outline INDEX (the `[S#]` id itself), never by
+heading text, so a note with two identically-worded headings works fine. Chosen sections then move
 VERBATIM into a sibling note `<slug>-archive` (appended to if it already exists, else created with
 `part_of` pointing at the note's own hub, or the note itself, and an `Up:` line); the source note
-gets one new line, ADD only: `Archived sections: see [[<slug>-archive]].`. A note already fully
-reconsidered since its last edit is never re-asked. This is independent of — and complements —
-the existing [dormancy-based archive tier](#archive) (usage counters, no AI): that one finds
-content nobody has *read*, this one finds content that is *obviously stale on its own terms*.
-Config: `maintenance.archive: { enabled, keepDays, idleMinutes, scanHours, maxActionsPerScan,
+gets one new line, ADD only: `Archived sections: see [[<slug>-archive]].`. A "nothing eligible"
+verdict is cached by the note's own CONTENT HASH (never re-asked until the note actually changes,
+surviving a restart). This is independent of — and complements — the existing
+[dormancy-based archive tier](#archive) (usage counters, no AI): that one finds content nobody has
+*read*, this one finds content that is *obviously stale on its own terms*. Config:
+`maintenance.archive: { enabled, keepDays, minTokens, idleMinutes, scanHours, maxActionsPerScan,
 provider, model, … }`. `test/auto-archive.test.js`.
 
 <a id="auto-duplicates"></a>
@@ -1308,16 +1315,22 @@ provider, model, … }`. `test/auto-archive.test.js`.
 
 Same family again — **off by default**: `"maintenance": { "duplicates": { "enabled": true } }` or
 `MEMGLOW_AUTO_DUPLICATES=1`. Candidate pairs are found cheaply from title/description word overlap
-(the same rule the MCP proxy's `duplicateHint` lever already uses), then the AI confirms each with
-`{"duplicate": true|false, "keep": "a"|"b", "reason": "…"}`. **Default: report only** — every
-verdict lands in `GET /api/maintenance`'s `duplicates.reported` and the control panel, nothing is
-ever written. `maintenance.duplicates.autoMerge: true` (its own flag, off by default even with
-detection on; env `MEMGLOW_AUTO_DUPLICATES_MERGE`) additionally appends the other note's body under
-a `## Merged from [[x]] (date)` heading into the kept note, then reduces the other note to a
-2-line stub (its own frontmatter untouched, body replaced with `Merged into [[kept]].`) — never
-across two notes that declare different hubs, or no hub at all; that call needs a human. Config:
-`maintenance.duplicates: { enabled, autoMerge, idleMinutes, scanHours, maxActionsPerScan, provider,
-model, … }`. `test/auto-duplicates.test.js`.
+(reusing — but with a stricter threshold than — the MCP proxy's own `duplicateHint` helper, tuned
+for a different purpose), excluding a pair where one note is `part_of` the other (a hub and its
+own part — never "duplicates"), then the AI confirms each remaining pair with `{"duplicate":
+true|false, "keep": "a"|"b", "reason": "…"}`. **`maxChecksPerScan` (default 5) caps the AI CALLS
+themselves** — independent of `maxActionsPerScan` (which only ever caps applied merges, and so
+never limits anything at all while `autoMerge` is off, the default). Every verdict, duplicate or
+not, is cached by the pair's own content hash (never re-asked about two unchanged notes, surviving
+a restart). **Default: report only** — every verdict lands in `GET /api/maintenance`'s
+`duplicates.reported` and the control panel, nothing is ever written. `maintenance.duplicates.
+autoMerge: true` (its own flag, off by default even with detection on; env
+`MEMGLOW_AUTO_DUPLICATES_MERGE`) additionally appends the other note's body under a `## Merged
+from [[x]] (date)` heading into the kept note, then reduces the other note to a 2-line stub (its
+own frontmatter untouched, body replaced with `Merged into [[kept]].`) — never across two notes
+that declare different hubs, or no hub at all; that call needs a human. Config:
+`maintenance.duplicates: { enabled, autoMerge, idleMinutes, scanHours, maxChecksPerScan,
+maxActionsPerScan, provider, model, … }`. `test/auto-duplicates.test.js`.
 
 <a id="usage-aware-search"></a>
 ### Usage-aware search (optional, on by default)

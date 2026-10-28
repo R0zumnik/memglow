@@ -43,13 +43,24 @@ test("duplicatesSettings: off by default, env MEMGLOW_AUTO_DUPLICATES=1 / MEMGLO
 
 test("findDuplicatePairs: cheap title/description overlap, deduped, ranked", () => {
   const notes = [
-    { id: "coffee-brewing-tips", label: "Coffee Brewing Tips", description: "espresso grind size timing" },
-    { id: "espresso-grind-notes", label: "Espresso Grind Notes", description: "espresso grind size timing extraction" },
+    { id: "coffee-a", label: "Espresso Grind Timing Notes", description: "Grind size and timing notes for espresso brewing" },
+    { id: "coffee-b", label: "Espresso Grind Timing Guide", description: "Grind size and timing guide for espresso brewing" },
     { id: "unrelated-note", label: "Unrelated Note", description: "garden watering schedule" },
   ];
   const pairs = dup.findDuplicatePairs(notes);
-  assert.ok(pairs.some((p) => [p.a, p.b].sort().join() === ["coffee-brewing-tips", "espresso-grind-notes"].sort().join()));
+  assert.ok(pairs.some((p) => [p.a, p.b].sort().join() === ["coffee-a", "coffee-b"].sort().join()));
   assert.ok(!pairs.some((p) => p.a === "unrelated-note" || p.b === "unrelated-note"));
+});
+
+test("findDuplicatePairs (0.5.5 bug fix): tighter than the duplicateHint lever's own thresholds — a weak, merely-generic overlap no longer matches", () => {
+  // feedback-autonomy-and-safety vs project-memglow-v04-strategy (the real-KB false positive):
+  // generic words only ("notes", "project", "feedback") never clear MIN_SHARED/MIN_COVERAGE now.
+  const notes = [
+    { id: "feedback-autonomy-and-safety", label: "Feedback: autonomy and safety", description: "Notes on project feedback about autonomy and safety concerns" },
+    { id: "project-memglow-v04-strategy", label: "Project memglow v0.4 strategy", description: "Notes on project roadmap and release strategy" },
+  ];
+  const pairs = dup.findDuplicatePairs(notes);
+  assert.deepStrictEqual(pairs, []);
 });
 
 test("parseDecision: validates shape, rejects a missing/invalid keep", () => {
@@ -143,4 +154,64 @@ test("worker: autoMerge true but NO declared hub (or different hubs) — never a
     const untouchedB = fs.readFileSync(path.join(srv.store.root, "memory/coffee-b.md"), "utf8");
     assert.match(untouchedB, /Body B, extended\./, "never rewritten");
   } finally { cleanup(); }
+});
+
+test("worker (0.5.5 bug fix): maxChecksPerScan caps AI CALLS themselves (default 5), independent of maxActionsPerScan/autoMerge", async () => {
+  const notesFiles = {};
+  const names = ["alpha", "beta", "gamma", "delta"]; // C(4,2) = 6 candidate pairs, all strongly overlapping
+  for (const n of names) {
+    notesFiles[`memory/coffee-${n}.md`] = note(`Espresso Grind Timing ${n}`, "Grind size and timing for espresso brewing", "", `Body of ${n}.`);
+  }
+  const { srv, cleanup } = makeSrv(notesFiles, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    let calls = 0;
+    const w = dup.createDuplicatesWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" },
+      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, // maxChecksPerScan defaults to 5
+      aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ duplicate: false, keep: "a", reason: "related but distinct" }) }; },
+    });
+    await w.scanOnce();
+    assert.ok(calls <= 5, `expected at most 5 AI calls (maxChecksPerScan), got ${calls}`);
+    assert.strictEqual(calls, 5, "6 candidate pairs exist: the cap actually bites");
+  } finally { cleanup(); }
+});
+
+test("worker (0.5.5 bug fix): a parent/child (part_of) pair is excluded before any AI call, even with strong title/description overlap", async () => {
+  const { srv, cleanup } = makeSrv({
+    "memory/hub.md": note("Espresso Grind Timing Hub", "Grind size and timing for espresso brewing", "", "## Parts\n- [[coffee-a]] — a\n"),
+    "memory/coffee-a.md": note("Espresso Grind Timing Notes", "Grind size and timing for espresso brewing", "part_of: hub\n", "Body A."),
+  }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    let calls = 0;
+    const w = dup.createDuplicatesWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" },
+      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ duplicate: true, keep: "a", reason: "x" }) }; },
+    });
+    await w.scanOnce();
+    assert.strictEqual(calls, 0, "hub.md and its own part coffee-a: never treated as a duplicate pair");
+  } finally { cleanup(); }
+});
+
+test("worker (0.5.5): every verdict is cached by the PAIR's content hash across a worker restart", async () => {
+  const dataDir = tmp("memglow-auto-dup-cache-");
+  const { srv, cleanup } = makeSrv({
+    "memory/coffee-a.md": note("Espresso Grind Timing Notes", "Grind size and timing notes for espresso brewing", "", "Body A."),
+    "memory/coffee-b.md": note("Espresso Grind Timing Guide", "Grind size and timing guide for espresso brewing", "", "Body B."),
+  }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    let calls = 0;
+    const aiRun = async () => { calls++; return { ok: true, text: JSON.stringify({ duplicate: false, keep: "a", reason: "related but distinct" }) }; };
+    const w1 = dup.createDuplicatesWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
+    await w1.scanOnce();
+    w1.stop();
+    assert.strictEqual(calls, 1);
+
+    const w2 = dup.createDuplicatesWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
+    const st2 = w2.status();
+    assert.strictEqual(st2.reported.length, 0, "the cache does not pre-populate reported — only a fresh scan does");
+    await w2.scanOnce();
+    assert.strictEqual(calls, 1, "cached across the restart: no new AI call for the unchanged pair");
+    assert.strictEqual(w2.status().reported.length, 1, "but the cached verdict is still reported this scan");
+  } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });

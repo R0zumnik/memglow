@@ -507,7 +507,10 @@ test("createStructureWorker: status() reports issue counts by rule, lastScan/nex
 // ------------------------------------------------------------------ AI judgement (0.5.5, Part C — R4 sibling lines)
 
 function makeR4Kb() {
+  // An index note listing "hub" (0.5.5: without one, "hub" itself is an R5 orphan candidate too —
+  // noise unrelated to what these R4 tests are about; a real KB always has an index).
   return makeSrv({
+    "memory/MEMORY.md": "---\ntitle: MEMORY\n---\n\n- [[hub]] — the hub\n",
     "memory/hub.md": "---\ntitle: hub\n---\n\n## Parts\n- [[a]] — a\n- [[b]] — b\n- [[c]] — c\n",
     "memory/a.md": "---\ntitle: a\npart_of: hub\n---\n\nUp: [[hub]] — part of hub.\n\n- See also: [[b]], [[c]]\n\nBody of a.\n",
     "memory/b.md": "---\ntitle: b\npart_of: hub\n---\n\nUp: [[hub]] — part of hub.\n\nBody of b.\n",
@@ -590,4 +593,22 @@ test("R4: a NON-pure line (links sit inside prose) is never removed even with al
     const a = fs.readFileSync(path.join(root, "memory/a.md"), "utf8");
     assert.match(a, /Read \[\[b\]\] and \[\[c\]\] before this for context\./);
   } finally { cleanup(); }
+});
+
+test("R4 (0.5.5 bug fix): the AI's verdict is cached by content hash + lineIndex across a worker restart", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-r4-cache-"));
+  const { root, srv, cleanup } = makeR4Kb();
+  try {
+    let calls = 0;
+    const aiRun = async () => { calls++; return { ok: true, text: JSON.stringify({ action: "keep", reason: "useful reading order" }) }; };
+    const w1 = star.createStructureWorker({ store: srv.store, writer: srv.writer, dataDir, config: { enabled: true, ai: { enabled: true, maxDecisionsPerScan: 10 } }, aiRun });
+    await w1.scanOnce();
+    w1.stop();
+    assert.strictEqual(calls, 1);
+
+    const w2 = star.createStructureWorker({ store: srv.store, writer: srv.writer, dataDir, config: { enabled: true, ai: { enabled: true, maxDecisionsPerScan: 10 } }, aiRun });
+    await w2.scanOnce();
+    assert.strictEqual(calls, 1, "cached across the restart: no new AI call for the unchanged note/line");
+    assert.strictEqual(w2.status().r4Verdicts[0].action, "keep", "the cached verdict is still reported");
+  } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });

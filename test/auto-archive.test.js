@@ -38,16 +38,27 @@ test("archiveSettings: off by default, env MEMGLOW_AUTO_ARCHIVE=1 turns it on", 
   assert.strictEqual(explicitOff.enabled, false);
 });
 
-test("outline: [S#] ids, levels and any date found", () => {
+test("outline: [S#] ids, levels and the MOST RECENT date found (not merely the first)", () => {
   const out = archive.outline("## 2020-01-01 Old incident\nResolved.\n\n## Current\nStill going.\n");
   assert.strictEqual(out.length, 2);
   assert.strictEqual(out[0].date, "2020-01-01");
   assert.strictEqual(out[1].date, null);
+  const multi = archive.outline("## Log\nStarted 2020-01-01, revisited 2024-06-15, closed 2026-09-01.\n");
+  assert.strictEqual(multi[0].date, "2026-09-01", "the latest date wins, not the first");
 });
 
-test("resolveIds: \"S<n>\" ids resolve to real heading text, in outline order; unknown ids dropped", () => {
-  const body = "## Alpha\nx\n\n## Beta\ny\n";
-  assert.deepStrictEqual(archive.resolveIds(["S2", "S9", "Alpha"], body), ["Beta", "Alpha"]);
+test("resolveIndices: \"S<n>\" ids resolve to 0-based INDICES (never heading text), in outline order; unknown/duplicate ids dropped", () => {
+  const heads = archive.outline("## Alpha\nx\n\n## Beta\ny\n");
+  assert.deepStrictEqual(archive.resolveIndices(["S2", "S9", "Alpha", "S2"], heads), [1, 0]);
+});
+
+test("resolveIndices: a heading that appears TWICE can still be picked by index (0.5.5 bug fix — text-based lookup used to be ambiguous)", () => {
+  const heads = archive.outline("## Status\nFirst.\n\n## Status\nSecond.\n");
+  assert.strictEqual(heads.length, 2, "two identically-worded headings");
+  assert.deepStrictEqual(archive.resolveIndices(["S2"], heads), [1]);
+  // An exact-text fallback (no "S#" prefix) is only accepted when it names exactly ONE heading —
+  // ambiguous here, so it resolves to nothing rather than guessing.
+  assert.deepStrictEqual(archive.resolveIndices(["Status"], heads), []);
 });
 
 test("worker: disabled is inert", () => {
@@ -64,9 +75,11 @@ test("worker: create-vs-append, zero-loss, and idempotent re-ask suppression —
   const srv = createMemoryServer({ root, readOnly: false, watch: false, pollMs: 0, fsync: false, archive: { enabled: false } });
   try {
     let calls = 0;
+    // minTokens: 0 — this test is about create-vs-append/zero-loss, not the size floor (its own
+    // dedicated test below uses the tiny default-size fixture on purpose).
     const w = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" },
-      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
       aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ sections: ["S2"], reason: "closed incident" }) }; },
     });
     await w.scanOnce();
@@ -84,7 +97,7 @@ test("worker: create-vs-append, zero-loss, and idempotent re-ask suppression —
     srv.store.refreshNote && srv.store.refreshNote("memory/ops.md");
     const w2 = archive.createArchiveWorker({
       store: srv.store, writer: srv.writer, env: { FAKE: "k" },
-      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
       aiRun: async () => ({ ok: true, text: JSON.stringify({ sections: ["S2"], reason: "also closed" }) }),
     });
     await w2.scanOnce();
@@ -92,6 +105,81 @@ test("worker: create-vs-append, zero-loss, and idempotent re-ask suppression —
     assert.match(archiveText2, /Old incident/, "the first archived section is still there (append, never overwrite)");
     assert.match(archiveText2, /Another old thing/);
   } finally { srv.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("worker (0.5.5 bug fix): a note with TWO IDENTICAL headings — archiving works by index, never refused as ambiguous", async () => {
+  const dupHeadingNote = ["---", "title: dup", "theme: knowledge", "---", "",
+    "## Status", "Current and fine, " + "word ".repeat(100), "",
+    "## Status", "2020-01-01: an old, closed incident. " + "word ".repeat(100), "",
+  ].join("\n");
+  const { srv, cleanup } = makeSrv({ "memory/dup.md": dupHeadingNote }, { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    const w = archive.createArchiveWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" },
+      config: { enabled: true, idleMinutes: 0, minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      aiRun: async () => ({ ok: true, text: JSON.stringify({ sections: ["S2"], reason: "closed, second Status section" }) }),
+    });
+    const applied = await w.scanOnce();
+    assert.deepStrictEqual(applied, ["memory/dup.md"]);
+    const srcText = fs.readFileSync(path.join(srv.store.root, "memory/dup.md"), "utf8");
+    assert.match(srcText, /Current and fine/, "the FIRST \"## Status\" (index 0 / S1) stays");
+    assert.doesNotMatch(srcText, /old, closed incident/, "the SECOND \"## Status\" (index 1 / S2) moved, by index, not by text");
+    const archiveText = fs.readFileSync(path.join(srv.store.root, "memory/dup-archive.md"), "utf8");
+    assert.match(archiveText, /old, closed incident/);
+  } finally { cleanup(); }
+});
+
+test("worker (0.5.5 bug fix): minTokens — never archives a handful of lines into a brand-new note", async () => {
+  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }); // default minTokens: 400
+  try {
+    const w = archive.createArchiveWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" },
+      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, // minTokens defaults to 400
+      aiRun: async () => ({ ok: true, text: JSON.stringify({ sections: ["S2"], reason: "closed incident" }) }),
+    });
+    const applied = await w.scanOnce();
+    assert.deepStrictEqual(applied, [], "the ≈15-token section never clears the 400-token floor");
+    assert.strictEqual(fs.existsSync(path.join(srv.store.root, "memory/ops-archive.md")), false, "no new note created for it");
+    assert.strictEqual(fs.readFileSync(path.join(srv.store.root, "memory/ops.md"), "utf8"), NOTE, "source left untouched");
+  } finally { cleanup(); }
+});
+
+test("worker (0.5.5 bug fix): keepDays is enforced IN CODE — a section dated more recently than the cutoff is never archived, whatever the AI answered", async () => {
+  const recent = ["---", "title: ops2", "theme: knowledge", "---", "",
+    "## Current status", "Still going. " + "word ".repeat(200), "",
+    "## 2026-10-01 Recent incident", "28 days ago — not old enough for a 60-day keepDays. " + "word ".repeat(200), "",
+  ].join("\n");
+  const { srv, cleanup } = makeSrv({ "memory/ops2.md": recent }, { enabled: true, idleMinutes: 0, keepDays: 60, provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    // now() fixed at 2026-10-29 — the incident (2026-10-01) is 28 days old, well under keepDays.
+    const now = () => Date.parse("2026-10-29T00:00:00Z");
+    const w = archive.createArchiveWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" }, now,
+      config: { enabled: true, idleMinutes: 0, keepDays: 60, provider: "anthropic", apiKeyEnv: "FAKE" },
+      aiRun: async () => ({ ok: true, text: JSON.stringify({ sections: ["S2"], reason: "AI mistakenly thinks this is old" }) }),
+    });
+    const applied = await w.scanOnce();
+    assert.deepStrictEqual(applied, [], "code-enforced keepDays overrides the AI's own (wrong) answer");
+    assert.strictEqual(fs.readFileSync(path.join(srv.store.root, "memory/ops2.md"), "utf8"), recent);
+  } finally { cleanup(); }
+});
+
+test("worker (0.5.5): \"left\" verdicts are cached by CONTENT HASH across a worker restart — a daily scan of an unchanged note costs no AI call past the first", async () => {
+  const dataDir = tmp("memglow-auto-archive-cache-");
+  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    let calls = 0;
+    const aiRun = async () => { calls++; return { ok: true, text: JSON.stringify({ sections: [], reason: "nothing obsolete" }) }; };
+    const w1 = archive.createArchiveWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
+    await w1.scanOnce();
+    w1.stop(); // flushes the cache to disk
+    assert.strictEqual(calls, 1);
+
+    // A BRAND NEW worker instance (simulating a process restart), same data dir, same content.
+    const w2 = archive.createArchiveWorker({ store: srv.store, writer: srv.writer, env: { FAKE: "k" }, dataDir, config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" }, aiRun });
+    await w2.scanOnce();
+    assert.strictEqual(calls, 1, "cached across the restart: no new AI call for unchanged content");
+  } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
 test("worker: the AI finds nothing obsolete — left alone, nothing written, and never re-asked again until the note itself changes", async () => {

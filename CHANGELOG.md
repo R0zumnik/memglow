@@ -56,6 +56,39 @@
   an optional 3rd `usage` argument (`null`/omitted: byte-identical to before).
   `test/search-usage-boost.test.js`.
 
+### Fixed
+
+First real-KB run of A/B/C above surfaced four bugs, all fixed:
+
+- **DUPLICATES burned ≈60 AI calls in one scan although `maxActionsPerScan` was 3**:
+  `maxActionsPerScan` only ever capped APPLIED merges, which never happens with `autoMerge` off
+  (the default) — every candidate pair got an AI call regardless. New `maxChecksPerScan` (default
+  5) now caps the AI calls themselves. Also: a pair where one note is `part_of` the other
+  (parent/child, already structurally linked) is excluded before any AI call; the cheap
+  pre-filter (`lib/auto-duplicates.js`'s own `findDuplicatePairs`) is now stricter than
+  `lib/levers/duplicate-hint.js`'s own thresholds (tuned for a different purpose, a single
+  `write_note` hint) — it had sent clearly-unrelated pairs to the AI; and every verdict (duplicate
+  or not) is now cached by the pair's content hash (`lib/verdict-cache.js`, new — see below), so a
+  daily scan of unchanged notes costs no AI call past the first.
+- **ARCHIVE moved a 15-token section into a brand-new note**: new `minTokens` (default 400) — the
+  chosen sections' own combined size must reach this floor, or the note is left alone.
+- **ARCHIVE archived a section dated 28 days ago with `keepDays: 60`**: `keepDays` is now enforced
+  IN CODE — a chosen section whose MOST RECENT date (not merely the first date found,
+  `lib/auto-archive.js`'s `outline()`/`latestDate()`) is newer than the cutoff is dropped before
+  anything is built, whatever the AI itself answered.
+- **ARCHIVE failed outright on a note with two identically-worded headings** ("heading … found 2
+  time(s)"): `lib/split-engine.js`'s `moveSections()` matched by heading TEXT, ambiguous by
+  construction for a duplicate heading. New `moveSectionsByIndex()` (shares the same partition/
+  zero-loss logic, `partitionChosenSpans`) selects by 0-based INDEX into the outline instead —
+  exactly the `[S#]` numbering the AI already answers with — so duplicate headings are no longer
+  a problem; `lib/auto-archive.js`'s `resolveIndices()` (was `resolveIds()`) now resolves ids to
+  indices, never heading text.
+- **New `lib/verdict-cache.js`**: a small, generic, content-hash-keyed verdict cache (atomic,
+  bounded, mode 600, in the data folder) shared by `lib/auto-archive.js` ("left" verdicts),
+  `lib/auto-duplicates.js` (every verdict) and `lib/star-audit.js` (R4 keep/remove verdicts,
+  keyed by content hash + lineIndex) — once the AI has answered for unchanged content, the same
+  scan tier never asks again, surviving a restart. `test/verdict-cache.test.js`.
+
 ## 0.5.4 — 2026-10-27
 
 ### Added
