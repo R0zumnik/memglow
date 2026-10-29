@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.7 — 2026-10-29
+
+### Fixed
+
+- **Store: a folder recreated after startup could miss a note** (`lib/store/store.js`): the rescan that
+  lists a (re)created folder ran BEFORE that folder's new watcher was armed, so a file written in
+  between was seen by neither — lost until the next poll (or for good with `pollMs: 0`). Arming a
+  NEW watcher after startup now lists only that folder's own notes and feeds them to the event
+  path (a stat each — no full rescan, nothing new armed, so it never loops). Found because the 0.5.6 release run failed on `test/review-0410-6b.test.js`; that
+  test's wait was also widened (2 s → 5 s) for slow shared CI runners.
+- 0.5.5 and 0.5.6 were tagged but never reached npm (their release runs failed in CI on the
+  idle-check race fixed in 0.5.6 and on the store race above); 0.5.7 ships everything since 0.5.4.
+
 ## 0.5.6 — 2026-10-29
 
 ### Added

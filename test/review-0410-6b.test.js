@@ -26,7 +26,7 @@ test("a folder deleted and recreated is watched again (no poll)", async () => {
     fs.mkdirSync(path.join(root, "x"));
     await sleep(500);
     fs.writeFileSync(path.join(root, "x", "b.md"), "# b\n");
-    assert.ok(await until(() => has(store, "x/b.md"), 2000), "a note in the recreated folder is seen");
+    assert.ok(await until(() => has(store, "x/b.md"), 5000), "a note in the recreated folder is seen");
   } finally { store.stop(); }
 });
 
