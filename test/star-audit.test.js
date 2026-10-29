@@ -679,3 +679,97 @@ test("R4 (0.5.5 bug fix): cache hits are SILENT — no per-note log line, but on
     assert.strictEqual(w2.status().r4Verdicts[0].action, "keep", "the panel/API still reflects the current scan");
   } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+// ------------------------------------------------------------------ R6 (0.5.6) — archive section drift
+
+test("audit/buildFix: R6a — an active note misplaced in the index's own archive section moves to its theme's section, under the sub-section with the most same-theme siblings", () => {
+  const indexText = "---\ntitle: MEMORY\n---\n\n## Home\n### Home automation\n- [[home-note-1]] — x\n- [[home-note-2]] — y\n\n### Garden\n- [[home-note-3]] — z\n\n## Archive (stopped projects)\n- [[project-ha-audit-2026-10]] — HA audit 2026-10\n";
+  const notes = [
+    rec("MEMORY", indexText),
+    rec("home-note-1", "---\ntitle: home-note-1\ntheme: home\n---\n\nBody.\n"),
+    rec("home-note-2", "---\ntitle: home-note-2\ntheme: home\n---\n\nBody.\n"),
+    rec("home-note-3", "---\ntitle: home-note-3\ntheme: home\n---\n\nBody.\n"),
+    rec("project-ha-audit-2026-10", "---\ntitle: project-ha-audit-2026-10\ntheme: home\n---\n\nActive project note, not archived at all.\n"),
+  ];
+  const issues = star.audit({ notes, indexId: "MEMORY", archiveFolder: "archive" });
+  const r6 = issues.find((i) => i.rule === "R6" && i.part === "project-ha-audit-2026-10");
+  assert.ok(r6, JSON.stringify(issues));
+  assert.strictEqual(r6.section, "Archive (stopped projects)");
+  assert.ok(r6.fix, "deterministic: theme home maps to exactly one top-level section (Home)");
+  assert.strictEqual(r6.fix.type, "move-index-line");
+  assert.strictEqual(r6.fix.toSection, "Home");
+  assert.strictEqual(r6.fix.toSubSection, "Home automation", "the sub-section holding the most home notes (2, vs Garden's 1)");
+
+  const byId = new Map(notes.map((n) => [n.id, n]));
+  const built = star.buildFix(r6.fix, byId);
+  assert.strictEqual(built.after,
+    "---\ntitle: MEMORY\n---\n\n## Home\n### Home automation\n- [[home-note-1]] — x\n- [[home-note-2]] — y\n- [[project-ha-audit-2026-10]] — HA audit 2026-10\n\n### Garden\n- [[home-note-3]] — z\n\n## Archive (stopped projects)\n",
+    "the line text itself is unchanged, moved verbatim; the archive section is left empty (heading kept)");
+
+  // Idempotence: re-auditing the fixed index finds no more R6 issue for this note.
+  const notes2 = [rec("MEMORY", built.after), ...notes.slice(1)];
+  const issues2 = star.audit({ notes: notes2, indexId: "MEMORY", archiveFolder: "archive" });
+  assert.ok(!issues2.some((i) => i.rule === "R6" && i.part === "project-ha-audit-2026-10"), JSON.stringify(issues2));
+});
+
+test("audit: R6b — a genuinely archived note (status: archived) listed outside the archive section is flagged, fix moves it there", () => {
+  const indexText = "---\ntitle: MEMORY\n---\n\n## Home\n- [[home-note-1]] — x\n- [[old-note]] — stopped\n\n## Archive (stopped projects)\n- [[other-archived]] — already filed\n";
+  const notes = [
+    rec("MEMORY", indexText),
+    rec("home-note-1", "---\ntitle: home-note-1\ntheme: home\n---\n\nBody.\n"),
+    rec("old-note", "---\ntitle: old-note\ntheme: home\nstatus: archived\n---\n\nStopped.\n"),
+    rec("other-archived", "---\ntitle: other-archived\n---\n\nBody.\n", "archive"),
+  ];
+  const issues = star.audit({ notes, indexId: "MEMORY", archiveFolder: "archive" });
+  const r6b = issues.find((i) => i.rule === "R6" && i.part === "old-note");
+  assert.ok(r6b, JSON.stringify(issues));
+  assert.strictEqual(r6b.section, "Home");
+  assert.strictEqual(r6b.fix.type, "move-index-line");
+  assert.strictEqual(r6b.fix.toSection, "Archive (stopped projects)");
+  const built = star.buildFix(r6b.fix, new Map(notes.map((n) => [n.id, n])));
+  assert.match(built.after, /## Archive \(stopped projects\)\n- \[\[other-archived\]\] — already filed\n- \[\[old-note\]\] — stopped\n/);
+  assert.doesNotMatch(built.after, /## Home\n- \[\[home-note-1\]\] — x\n- \[\[old-note\]\]/);
+});
+
+test("judgeIssues: R6 — ambiguous placement (no section shares the note's theme) asks the AI, theme-irrelevant sections offered, cached across a second scan", async () => {
+  const { root, srv, cleanup } = makeSrv({
+    "memory/MEMORY.md": "---\ntitle: MEMORY\n---\n\n## Work\n- [[work-note]] — a work note\n\n## Archive (stopped projects)\n- [[orphan-garden]] — garden note\n",
+    "memory/work-note.md": "---\ntitle: work-note\ntheme: work\n---\n\nBody.\n",
+    "memory/orphan-garden.md": "---\ntitle: orphan-garden\ntheme: home\n---\n\nStill an active note, just never classified.\n",
+  });
+  try {
+    let calls = 0;
+    const aiRun = async () => { calls++; return { ok: true, text: JSON.stringify({ action: "move", section: "Work" }) }; };
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-r6-cache-"));
+    const indexId = star.indexIdOf(srv.store, ["MEMORY", "index"]);
+    const notes = star.recordsFrom(srv.store.notes());
+    const issues = star.audit({ notes, indexId, archiveFolder: "archive" });
+    const r6 = issues.find((i) => i.rule === "R6" && i.part === "orphan-garden");
+    assert.ok(r6 && !r6.fix, "no section shares theme 'home': ambiguous, left for the AI");
+    const cfg = star.structureSettings({ ai: { enabled: true } }, {});
+    const r4Cache = { sha1: (s) => String(s), key: (...p) => p.join("\0"), get: () => undefined, set: () => {} };
+    const { createVerdictCache } = require("../lib/verdict-cache");
+    const r6Cache = createVerdictCache({ dataDir, file: "structure-r6-cache.json", now: Date.now });
+    const applied = await star.judgeIssues({ store: srv.store, writer: srv.writer, cfg, env: {}, dataDir: null, log: () => {}, indexId, notes, issues, aiRun, r4Cache, r6Cache });
+    r6Cache.flush();
+    assert.strictEqual(calls, 1);
+    assert.strictEqual(applied.length, 1);
+    assert.strictEqual(applied[0].fix, "move-index-line");
+    const after = fs.readFileSync(path.join(root, "memory/MEMORY.md"), "utf8");
+    assert.match(after, /## Work\n- \[\[work-note\]\] — a work note\n- \[\[orphan-garden\]\] — garden note\n/);
+    assert.doesNotMatch(after, /## Archive \(stopped projects\)\n- \[\[orphan-garden\]\]/);
+
+    // Second scan, same index content hash: a cache hit, no second AI call.
+    const notes2 = star.recordsFrom(srv.store.notes());
+    const issues2 = star.audit({ notes: notes2, indexId, archiveFolder: "archive" });
+    assert.ok(!issues2.some((i) => i.rule === "R6" && i.part === "orphan-garden"), "already moved: idempotent");
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  } finally { cleanup(); }
+});
+
+test("audit: R6 is skipped entirely when the index has no archive-matching heading, or more than one", () => {
+  const notes1 = [rec("MEMORY", "---\ntitle: MEMORY\n---\n\n## Home\n- [[home-note-1]] — x\n"), rec("home-note-1", "---\ntitle: home-note-1\n---\n\nBody.\n")];
+  assert.ok(!star.audit({ notes: notes1, indexId: "MEMORY" }).some((i) => i.rule === "R6"));
+  const notes2 = [rec("MEMORY", "---\ntitle: MEMORY\n---\n\n## Archive A\n- [[x]] — x\n\n## Archive B\n- [[y]] — y\n"), rec("x", "---\ntitle: x\n---\n\nBody.\n"), rec("y", "---\ntitle: y\n---\n\nBody.\n")];
+  assert.ok(!star.audit({ notes: notes2, indexId: "MEMORY" }).some((i) => i.rule === "R6"));
+});
