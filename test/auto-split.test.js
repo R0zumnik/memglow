@@ -91,6 +91,24 @@ test("worker: debounce — a note just written is not split until idleMinutes ha
   } finally { cleanup(); }
 });
 
+test("worker (0.5.6 bug fix): idleMinutes 0 is 'always idle' even when now() lands BEFORE the moment noteWritten() recorded (fast clock/filesystem rounding) — age is never negative", async () => {
+  const { srv, cleanup } = makeSrv({ "memory/big.md": bigNote() }, {});
+  try {
+    let now = Date.parse("2026-01-01T00:00:00Z");
+    let aiCalls = 0;
+    const w = auto.createAutoSplitWorker({
+      store: srv.store, writer: srv.writer, now: () => now,
+      config: { enabled: true, thresholdTokens: 200, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      env: { FAKE: "k" },
+      aiRun: async () => { aiCalls++; return { ok: true, text: JSON.stringify({ parts: [{ slug: "big-alpha", description: "Alpha", sections: ["Alpha"] }] }) }; },
+    });
+    w.noteWritten(["memory/big.md"]); // pending.set(rel, now()) at `now`
+    now -= 1; // 0.5.6: a later now() call lands a fraction of a ms BEFORE the recorded moment
+    await w.tick();
+    assert.strictEqual(aiCalls, 1, "idleMinutes 0: eligible regardless of a negative age");
+  } finally { cleanup(); }
+});
+
 test("worker (0.5.4 bug fix): a note found by the periodic SCAN waits idleMinutes from its own file mtime, not from when the scan ran", async () => {
   const now0 = Date.parse("2026-02-01T12:00:00Z");
   // Case A: modified 5 minutes before "now" — not eligible yet, not even 24 more minutes later;

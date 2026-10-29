@@ -406,3 +406,19 @@ test("worker (0.5.5 bug fix): cache hits are SILENT — no per-note log line, bu
     assert.ok(logs.some((l) => /1 cached verdict reused/.test(l)), "one summary line for the scan");
   } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test("worker (0.5.6 bug fix): idleMinutes 0 is 'always idle' even when the file's own mtime lands AFTER now() (fast runner/filesystem rounding) — age is never negative", async () => {
+  const { srv, cleanup } = makeSrv({ "memory/ops.md": NOTE }, { enabled: true, idleMinutes: 0, includeFolders: ["memory"], provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    const mtimeMs = fs.statSync(path.join(srv.store.root, "memory/ops.md")).mtimeMs;
+    let calls = 0;
+    const w = archive.createArchiveWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" },
+      now: () => mtimeMs - 1, // 0.5.6: now() a fraction of a ms BEFORE the file's own mtime
+      config: { enabled: true, idleMinutes: 0, includeFolders: ["memory"], minTokens: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ sections: [], reason: "nothing obsolete" }) }; },
+    });
+    await w.scanOnce();
+    assert.strictEqual(calls, 1, "idleMinutes 0: the note is eligible regardless of a negative age");
+  } finally { cleanup(); }
+});

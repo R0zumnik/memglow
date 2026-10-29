@@ -293,3 +293,24 @@ test("worker (0.5.5 bug fix): cache hits are SILENT — no per-pair log line, bu
     assert.strictEqual(w2.status().reported.length, 1, "the panel/API still reflects the current scan");
   } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test("worker (0.5.6 bug fix): idleMinutes 0 is 'always idle' even when a note's own mtime lands AFTER now() (fast runner/filesystem rounding) — age is never negative", async () => {
+  const { srv, cleanup } = makeSrv({
+    "memory/coffee-a.md": note("Espresso Grind Timing Notes", "Grind size and timing notes for espresso brewing", "", "Body A."),
+    "memory/coffee-b.md": note("Espresso Grind Timing Guide", "Grind size and timing guide for espresso brewing", "", "Body B."),
+  }, { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" });
+  try {
+    const mtimeA = fs.statSync(path.join(srv.store.root, "memory/coffee-a.md")).mtimeMs;
+    const mtimeB = fs.statSync(path.join(srv.store.root, "memory/coffee-b.md")).mtimeMs;
+    const earliestMtime = Math.min(mtimeA, mtimeB);
+    let calls = 0;
+    const w = dup.createDuplicatesWorker({
+      store: srv.store, writer: srv.writer, env: { FAKE: "k" },
+      now: () => earliestMtime - 1, // 0.5.6: now() a fraction of a ms BEFORE either file's own mtime
+      config: { enabled: true, idleMinutes: 0, provider: "anthropic", apiKeyEnv: "FAKE" },
+      aiRun: async () => { calls++; return { ok: true, text: JSON.stringify({ duplicate: false, keep: "a", reason: "x" }) }; },
+    });
+    await w.scanOnce();
+    assert.strictEqual(calls, 1, "idleMinutes 0: both notes are eligible regardless of a negative age");
+  } finally { cleanup(); }
+});
