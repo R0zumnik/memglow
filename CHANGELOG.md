@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.5.6 — 2026-10-29
+
+### Added
+
+- **Structure guardian rule R6 — archive-section drift** (`lib/star-audit.js`): the index note
+  may carry an archive section (a level-2 heading matching `/archive/i`, e.g. "## Archive
+  (stopped projects)"). R6a: a note listed there that is NOT genuinely archived (no archive-named
+  folder, no frontmatter `status: archived`) is a misplaced ACTIVE note. R6b: a non-archive
+  section listing a genuinely archived note is a misplaced ARCHIVE note. Fix moves the bullet
+  line verbatim (`buildFix`'s new `"move-index-line"`: insert first, then remove, so a crash
+  mid-write never loses the line) — deterministic when the note's frontmatter `theme` maps to
+  exactly one OTHER top-level section (built from where notes of that theme already sit, picking
+  the sub-section holding the most same-`sous_theme` — or, failing that, most total — siblings),
+  otherwise left for `judgeIssues()`'s AI pass (theme-guarded, cached in its own
+  `structure-r6-cache.json`, same spirit as R4/R5).
+- **PANEL + memory_core — auto-archive/auto-duplicates visibility**: the Settings → Control
+  panel's "Memory server" card now also shows auto-archive and duplicates (on/off, counts, last
+  scan, last error, the reported duplicate pairs with their AI reason, recent archive events) —
+  same card/i18n pattern as auto-split/structure already used; new keys in all 8 language files,
+  parity test green. `lib/setup.js`'s `memoryMaintenanceStatus()` now also parses/validates the
+  `archive`/`duplicates` fields `GET /api/maintenance` already returns. `memory_core`'s own
+  "maintenance: …" line (`memory-server/tools.js`) now appends archive/duplicates status
+  compactly inside the same trailing parenthesis, when those workers are wired in (now also done
+  in `memory-server/memglow-memory-server.js`).
+- **DUPLICATES pre-filter, tightened again**: `findDuplicatePairs()` (`lib/auto-duplicates.js`)
+  still paired unrelated notes sharing only a broad `theme` (e.g.
+  `project-memglow-v04-strategy` with `feedback-autonomy-*` and
+  `project-r0zumnik-hub-bento-shares-secrets` — the latter pair, worse, both masking to the
+  identical `maskSecrets()` placeholder since each note's own id+label+description line contains
+  a "secret"-shaped token, a 100% false "overlap" on its own). Now ALSO requires the SAME
+  declared `subtheme`/`sous_theme` when BOTH notes set one, OR a title-word (label-only) overlap
+  of >= 2 significant words; and a `feedback-*` id is never paired with a `project-*` one,
+  whatever they share.
+- **SESSION MEMORY BUDGET — lever 18** (`lib/levers/session-budget.js`, new, OFF by default):
+  config `proxy.sessionBudgetTokens` / env `MEMGLOW_PROXY_SESSION_BUDGET` (default 0). Tallies
+  the ≈tokens RETURNED by `read_note`/`view_note`/`read_content`/`fetch`/`build_context`/
+  `search_notes`/`search` answers against the running total of the EXISTING session identity
+  (the MCP proxy's own session map, keyed the same way every other lever already is, including
+  the `x-memglow-session` header). Once a session's total reaches the budget: answers are never
+  blocked, only prefixed with a one-line notice ("memglow: this session has read ≈N tokens of
+  memory (budget B) — prefer search_notes + targeted reads"); a full single-note read (never
+  `build_context`) still over ≈2000 tokens is additionally shortened to its own intro + "## Parts"
+  (or first section) plus a hint to read the rest — failing open to the plain notice when there
+  is nothing sensible to cut.
+
+### Fixed
+
+- **v0.5.5 GitHub release CI failure (Node 24, ubuntu)**: `test/auto-archive.test.js`'s "an auth
+  error stops the scan…" test failed — `st.lastError` was null, the AI was never called. The idle
+  checks in `lib/auto-archive.js`, `lib/auto-split.js` and `lib/auto-duplicates.js` compared
+  `now() - file mtime` against `idleMinutes * 60000`; on a fast runner a freshly written file's
+  mtime can land a fraction of a ms AFTER `now()`, making the age negative — which was still
+  `< idleMinutes * 60000` even with `idleMinutes: 0`, so the note was wrongly skipped as "not
+  idle yet". Fixed in all three: the age is clamped to `>= 0`, and `idleMinutes <= 0` is now
+  treated as "always idle" outright.
+- **i18n**: a native-quality pass on the control-panel strings added since 0.5.4 (auto-split/
+  structure/auto-archive/duplicates lines) across all 8 languages — German's "{n} Notiz wartend"-
+  style bare participle (awkward word order) fixed to the more natural adjective-before-noun
+  "{n} wartende Notiz" throughout.
+
 ## 0.5.5 — 2026-10-28
 
 ### Added
