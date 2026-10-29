@@ -232,8 +232,38 @@ test("findDuplicatePairs (0.5.5 bug fix): requires the SAME declared theme when 
     { id: "project-automations-journal", label: "Automations Journal Project", description: "Automation triggers and conditions, project journal", theme: "project" },
   ];
   assert.deepStrictEqual(dup.findDuplicatePairs(notes), [], "different declared themes: excluded outright, whatever the word overlap");
-  const sameTheme = notes.map((n) => ({ ...n, theme: "home-assistant" }));
-  assert.strictEqual(dup.findDuplicatePairs(sameTheme).length, 1, "same declared theme: the pair is found as before");
+  // 0.5.6: same theme is no longer enough on its own either — their titles only share
+  // "automations" (1 word), so the SAME declared subtheme is what now clears the pair.
+  const sameTheme = notes.map((n) => ({ ...n, theme: "home-assistant", subtheme: "automations" }));
+  assert.strictEqual(dup.findDuplicatePairs(sameTheme).length, 1, "same theme + same subtheme: the pair is found as before");
+  const sameThemeNoSubtheme = notes.map((n) => ({ ...n, theme: "home-assistant" }));
+  assert.deepStrictEqual(dup.findDuplicatePairs(sameThemeNoSubtheme), [], "0.5.6: same theme alone, no subtheme match and < 2 shared title words — no longer enough");
+});
+
+test("findDuplicatePairs (0.5.6 bug fix): a feedback/* note is NEVER paired with a project/* one, whatever they share", () => {
+  const notes = [
+    { id: "feedback-autonomy-boundaries", label: "Autonomy boundaries feedback", description: "Florent's feedback on autonomy, scope and decision boundaries for the project", theme: "work", subtheme: "process" },
+    { id: "project-memglow-v04-strategy", label: "Autonomy boundaries project strategy", description: "Strategy notes on autonomy, scope and decision boundaries for the project", theme: "work", subtheme: "process" },
+  ];
+  // Both the same declared theme AND subtheme, and a strong title overlap — every other gate
+  // would pass this pair; the feedback/project family guard alone must still rule it out.
+  assert.deepStrictEqual(dup.findDuplicatePairs(notes), []);
+  assert.strictEqual(dup.familyOf("feedback-autonomy-boundaries"), "feedback");
+  assert.strictEqual(dup.familyOf("project-memglow-v04-strategy"), "project");
+  assert.strictEqual(dup.neverPaired("feedback-autonomy-boundaries", "project-memglow-v04-strategy"), true);
+});
+
+test("findDuplicatePairs (0.5.6 bug fix): two project/* notes sharing only the broad theme 'project' (and, here, an identical masked-secret placeholder — both mention tokens/secrets so maskSecrets collapses their whole id+label+description line the same way, a real false-positive source on its own), different subthemes and no real title overlap, are no longer paired", () => {
+  const notes = [
+    { id: "project-memglow-v04-strategy", label: "Memglow v0.4 strategy", description: "Strategy covering memglow api token rotation and secrets handling for the project", theme: "project", subtheme: "memglow" },
+    { id: "project-r0zumnik-hub-bento-shares-secrets", label: "R0zumnik hub bento shares and secrets", description: "How the r0zumnik project hub shares bento config and secrets handling", theme: "project", subtheme: "r0zumnik" },
+  ];
+  // Sanity: the pre-existing (theme/word-overlap) gates alone DO still pass this pair — both
+  // notes' own content masks to the identical secret placeholder, a 100% "overlap" on its own.
+  const sameSubtheme = notes.map((n) => ({ ...n, subtheme: "shared-infra" }));
+  assert.strictEqual(dup.findDuplicatePairs(sameSubtheme).length, 1, "same subtheme: the older gates alone already pass this pair");
+  // With their REAL, different subthemes and titles that share nothing, the new guard excludes it.
+  assert.deepStrictEqual(dup.findDuplicatePairs(notes), [], "different subthemes, no title overlap: no longer paired");
 });
 
 test("significantWordsOf: drops GENERIC_WORDS and bare numbers/dates, keeps everything else", () => {
