@@ -147,19 +147,32 @@ test("memory_core: a coreMap target that is NOT listed in the index is still res
   } finally { kb.cleanup(); }
 });
 
-test("memory_core (0.5.4): a one-line \"maintenance: …\" summary from the auto-split/structure workers, on by default (both workers always exist, inert unless configured)", () => {
+test("memory_core (0.5.4/0.5.6): a one-line \"maintenance: …\" summary from the auto-split/structure/archive/duplicates workers, on by default (every worker always exists, inert unless configured)", () => {
   const kb = makeHubKb();
   try {
     const off = createMemoryServer({ root: kb.root, watch: false, pollMs: 0 });
     const outOff = off.tools.call("memory_core", {}).content[0].text;
-    assert.match(outOff, /maintenance: 0 structure issues, 0 notes over threshold \(auto-split off\)\.\n$/);
+    assert.match(outOff, /maintenance: 0 structure issues, 0 notes over threshold \(auto-split off, archive off, duplicates off\)\.\n$/);
     off.close();
 
     const on = createMemoryServer({ root: kb.root, watch: false, pollMs: 0, readOnly: false, autoSplit: { enabled: true, thresholdTokens: 50 }, structure: { enabled: true } });
     const outOn = on.tools.call("memory_core", {}).content[0].text;
-    assert.match(outOn, /maintenance: \d+ structure issues?, \d+ notes? over threshold \(auto-split on\)\.\n$/);
+    assert.match(outOn, /maintenance: \d+ structure issues?, \d+ notes? over threshold \(auto-split on, archive off, duplicates off\)\.\n$/);
     const json = JSON.parse(on.tools.call("memory_core", { output_format: "json" }).content[0].text);
     assert.match(json.text, /maintenance: /);
     on.close();
+  } finally { kb.cleanup(); }
+});
+
+test("memory_core (0.5.6): the maintenance line also names archive/duplicates on/off, and duplicates' own reported count, when those workers are configured", () => {
+  const kb = makeHubKb();
+  try {
+    const srv = createMemoryServer({
+      root: kb.root, watch: false, pollMs: 0, readOnly: false,
+      archive: { enabled: true }, duplicates: { enabled: true },
+    });
+    const out = srv.tools.call("memory_core", {}).content[0].text;
+    assert.match(out, /\(auto-split off, archive on, duplicates on \(0 reported\)\)\.\n$/);
+    srv.close();
   } finally { kb.cleanup(); }
 });

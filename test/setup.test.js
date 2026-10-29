@@ -393,11 +393,53 @@ test("setup: memoryMaintenanceStatus (0.5.4) — not configured, bad answer, a f
       configured: true, ok: true,
       autoSplit: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5", keySet: true, pendingCount: 3, lastError: { t: "2026-10-27T12:00:00.000Z", message: "Failed to authenticate. API Error: 401 Invalid bearer token" } },
       structure: { enabled: false, issues: 2, lastError: null },
+      // 0.5.6: the fake answer above carries no "archive"/"duplicates" at all (an older memory
+      // server) — both default to a harmless, fully-off shape, never an error.
+      archive: { enabled: false, provider: "", model: "", keySet: false, keepDays: 0, lastScanAt: null, nextScanAt: null, lastError: null, recent: [] },
+      duplicates: { enabled: false, autoMerge: false, provider: "", model: "", keySet: false, lastScanAt: null, nextScanAt: null, lastError: null, reported: [], recent: [] },
     });
     assert.ok(!JSON.stringify(r).includes("sk-ant-should-never-appear"), "only the few known-safe fields are ever copied through");
 
     const bad = await setup.memoryMaintenanceStatus({ url: `http://127.0.0.1:${fake.address().port}/no-key`, token: "s3cret" });
     assert.deepStrictEqual(bad, { configured: true, ok: false, error: "bad-answer" });
+  } finally { fake.close(); }
+});
+
+test("setup: memoryMaintenanceStatus (0.5.6) — archive/duplicates, bounded and re-validated field by field, never the key", async () => {
+  const fake = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      autoSplit: { enabled: false, provider: "", model: "", keySet: false, pendingCount: 0, lastScanAt: null, nextScanAt: null, recent: [], lastError: null },
+      structure: { enabled: false, ai: { enabled: false, provider: "", model: "" }, issues: { total: 0, fixable: 0, needsReview: 0, byRule: {} }, lastScanAt: null, nextScanAt: null, recent: [], lastError: null },
+      archive: {
+        enabled: true, provider: "anthropic", model: "claude-haiku-4-5", keySet: true, apiKeyEnv_should_never_leak: "sk-ant-should-never-appear", keepDays: 60,
+        lastScanAt: "2026-10-28T10:00:00.000Z", nextScanAt: "2026-10-29T10:00:00.000Z", lastError: null,
+        recent: [{ t: "2026-10-28T09:00:00.000Z", kind: "archived", note: "old-incident", detail: "1 section(s) → old-incident-archive" }],
+      },
+      duplicates: {
+        enabled: true, autoMerge: false, provider: "anthropic", model: "claude-haiku-4-5", keySet: true,
+        lastScanAt: "2026-10-28T10:00:00.000Z", nextScanAt: null, lastError: null,
+        reported: [{ a: "coffee-a", b: "coffee-b", duplicate: true, keep: "a", reason: "same subject, b is a superset", merged: false, t: "2026-10-28T09:30:00.000Z", apiKeyEnv_should_never_leak: "sk-ant-nope" }],
+        recent: [],
+      },
+    }));
+  });
+  await new Promise((ok) => fake.listen(0, "127.0.0.1", ok));
+  try {
+    const url = `http://127.0.0.1:${fake.address().port}/healthz`;
+    const r = await setup.memoryMaintenanceStatus({ url });
+    assert.deepStrictEqual(r.archive, {
+      enabled: true, provider: "anthropic", model: "claude-haiku-4-5", keySet: true, keepDays: 60,
+      lastScanAt: "2026-10-28T10:00:00.000Z", nextScanAt: "2026-10-29T10:00:00.000Z", lastError: null,
+      recent: [{ t: "2026-10-28T09:00:00.000Z", kind: "archived", note: "old-incident", detail: "1 section(s) → old-incident-archive" }],
+    });
+    assert.deepStrictEqual(r.duplicates, {
+      enabled: true, autoMerge: false, provider: "anthropic", model: "claude-haiku-4-5", keySet: true,
+      lastScanAt: "2026-10-28T10:00:00.000Z", nextScanAt: null, lastError: null,
+      reported: [{ a: "coffee-a", b: "coffee-b", duplicate: true, keep: "a", reason: "same subject, b is a superset", merged: false, t: "2026-10-28T09:30:00.000Z" }],
+      recent: [],
+    });
+    assert.ok(!JSON.stringify(r).includes("sk-ant-should-never-appear") && !JSON.stringify(r).includes("sk-ant-nope"), "only known-safe fields copied through, even inside archive/duplicates");
   } finally { fake.close(); }
 });
 

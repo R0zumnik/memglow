@@ -60,6 +60,15 @@ var EN_CONTROL = {
   "control.workerAutoSplit": "Auto-split",
   "control.workerStructure": "Structure guardian",
   "control.workerAuthError": "{worker}: stopped — auth error: {message}",
+  "control.archiveOn": { one: "Auto-archive: on — {n} note archived recently", other: "Auto-archive: on — {n} notes archived recently" },
+  "control.archiveOff": "Auto-archive: off",
+  "control.duplicatesOn": { one: "Duplicates: on — {n} pair reported", other: "Duplicates: on — {n} pairs reported" },
+  "control.duplicatesOff": "Duplicates: off",
+  "control.workerArchive": "Auto-archive",
+  "control.workerDuplicates": "Duplicates",
+  "control.recentArchivesTitle": "Recently archived",
+  "control.reportedDuplicatesTitle": "Reported duplicate pairs",
+  "control.duplicatePairReason": "{a} / {b}: {reason}",
   "control.measuresEmpty": "No measurements yet.",
   "control.byClientTitle": "By AI tool (7 days)",
   "control.byLeverTitle": "By lever (7 days)",
@@ -294,16 +303,42 @@ function controlRenderMaintenanceWorkers(mm, T) {
   if (!mm || !mm.configured || !mm.ok) return "";
   const as = mm.autoSplit || { enabled: false };
   const st = mm.structure || { enabled: false };
+  // 0.5.6: auto-archive (PRUNE STALE → ARCHIVE) and duplicates — same shape/fallback pattern as
+  // autoSplit/structure above; `mm` may still lack either on an older memory server (lib/setup.js
+  // memoryMaintenanceStatus() already defaults both to a harmless, fully-off shape in that case).
+  const ar = mm.archive || { enabled: false };
+  const du = mm.duplicates || { enabled: false };
   const asLine = as.enabled
     ? T("control.autoSplitOn", { n: as.pendingCount || 0, provider: as.provider || "?", model: as.model || "?" })
     : T("control.autoSplitOff");
   const stLine = st.enabled ? T("control.structureOn", { n: st.issues || 0 }) : T("control.structureOff");
-  var out = '<p class="mg-control__line">' + cEsc(asLine) + '</p><p class="mg-control__line">' + cEsc(stLine) + '</p>';
+  const arLine = ar.enabled ? T("control.archiveOn", { n: (ar.recent || []).length }) : T("control.archiveOff");
+  const duLine = du.enabled ? T("control.duplicatesOn", { n: (du.reported || []).length }) : T("control.duplicatesOff");
+  var out = '<p class="mg-control__line">' + cEsc(asLine) + '</p><p class="mg-control__line">' + cEsc(stLine) + '</p>' +
+    '<p class="mg-control__line">' + cEsc(arLine) + '</p><p class="mg-control__line">' + cEsc(duLine) + '</p>';
   // 0.5.4: a worker that already gave up on a bad credential for the rest of its process
   // lifetime (see lib/ai-provider.js's isAuthError()) — shown so Florent notices instead of the
   // worker silently doing nothing until the server restarts with a fixed key.
   if (as.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerAutoSplit"), message: as.lastError.message || "?" })) + '</p>';
   if (st.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerStructure"), message: st.lastError.message || "?" })) + '</p>';
+  if (ar.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerArchive"), message: ar.lastError.message || "?" })) + '</p>';
+  if (du.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerDuplicates"), message: du.lastError.message || "?" })) + '</p>';
+  // 0.5.6: last scan time (the same generic line the "Memory maintenance" section's own header
+  // already uses — no worker name baked into the key, so this stays a plain re-use, not a new
+  // text string per worker) and the two detail lists the task asks for: recent archives, and the
+  // reported duplicate pairs with their AI reason.
+  if (ar.enabled && ar.lastScanAt) out += '<p class="mg-control__line">' + cEsc(T("control.maintenanceGeneratedAt", { date: new Date(ar.lastScanAt).toLocaleString() })) + '</p>';
+  if (du.enabled && du.lastScanAt) out += '<p class="mg-control__line">' + cEsc(T("control.maintenanceGeneratedAt", { date: new Date(du.lastScanAt).toLocaleString() })) + '</p>';
+  if (ar.enabled && (ar.recent || []).length) {
+    out += '<p class="mg-control__subhead">' + cEsc(T("control.recentArchivesTitle")) + '</p><ul class="mg-control__clients">' +
+      ar.recent.map(function (e) { return "<li>" + cEsc(e.note || "?") + (e.detail ? " — " + cEsc(e.detail) : "") + "</li>"; }).join("") +
+      '</ul>';
+  }
+  if (du.enabled && (du.reported || []).length) {
+    out += '<p class="mg-control__subhead">' + cEsc(T("control.reportedDuplicatesTitle")) + '</p><ul class="mg-control__clients">' +
+      du.reported.map(function (r) { return "<li>" + cEsc(T("control.duplicatePairReason", { a: r.a || "?", b: r.b || "?", reason: r.reason || "?" })) + "</li>"; }).join("") +
+      '</ul>';
+  }
   return out;
 }
 

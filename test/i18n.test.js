@@ -199,6 +199,47 @@ test("control.js: controlRenderMaintenanceWorkers (0.5.4 bug fix) — a worker's
   assert.ok((html.match(/mg-control__line--bad/g) || []).length === 1, "only autoSplit has a lastError here, structure stays silent");
 });
 
+test("control.js: controlRenderMaintenanceWorkers (0.5.6) — auto-archive/duplicates lines, counts, last scan, last error, recent archives and reported pairs with reason", () => {
+  const T = controlPage.defaultControlT;
+  // Off (or simply absent, an older memory server): silent "off" lines, no detail lists, never a secret.
+  const offHtml = controlPage.controlRenderMaintenanceWorkers({
+    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: false },
+  }, T);
+  assert.match(offHtml, /Auto-archive: off/);
+  assert.match(offHtml, /Duplicates: off/);
+  assert.doesNotMatch(offHtml, /Recently archived/);
+  assert.doesNotMatch(offHtml, /Reported duplicate pairs/);
+
+  const html = controlPage.controlRenderMaintenanceWorkers({
+    configured: true, ok: true,
+    autoSplit: { enabled: false }, structure: { enabled: false },
+    archive: {
+      enabled: true, keepDays: 60, lastScanAt: "2026-10-28T10:00:00.000Z", lastError: null,
+      recent: [{ t: "2026-10-28T09:00:00.000Z", kind: "archived", note: "old-incident", detail: "1 section(s) → old-incident-archive" }],
+    },
+    duplicates: {
+      enabled: true, lastScanAt: "2026-10-28T10:00:00.000Z", lastError: null,
+      reported: [{ a: "coffee-a", b: "coffee-b", duplicate: true, keep: "a", reason: "same subject, b is a superset", merged: false }],
+    },
+  }, T);
+  assert.match(html, /Auto-archive: on — 1 note archived recently/);
+  assert.match(html, /Duplicates: on — 1 pair reported/);
+  assert.match(html, /Recently archived/);
+  assert.match(html, /old-incident — 1 section\(s\) → old-incident-archive/);
+  assert.match(html, /Reported duplicate pairs/);
+  assert.match(html, /coffee-a \/ coffee-b: same subject, b is a superset/);
+  assert.ok(!/<input|<select|<button/.test(html), "a read-only view, never a control");
+
+  const errHtml = controlPage.controlRenderMaintenanceWorkers({
+    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: false },
+    archive: { enabled: true, lastError: { t: "2026-10-27T12:00:00.000Z", message: "Failed to authenticate. API Error: 401 Invalid bearer token" } },
+    duplicates: { enabled: true, lastError: { t: "2026-10-27T12:00:00.000Z", message: "Failed to authenticate. API Error: 401 Invalid bearer token" } },
+  }, T);
+  assert.match(errHtml, /Auto-archive: stopped — auth error:/);
+  assert.match(errHtml, /Duplicates: stopped — auth error:/);
+  assert.strictEqual((errHtml.match(/mg-control__line--bad/g) || []).length, 2);
+});
+
 test("i18n: defaultT helpers resolve English outside a browser (Node require, no window)", () => {
   assert.strictEqual(appPage.defaultT("theme.index"), "Index");
   assert.strictEqual(appPage.defaultT("stats.notesWord", { n: 1 }), "note");

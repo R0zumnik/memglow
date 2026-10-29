@@ -107,7 +107,7 @@ const dirOf = (rel) => { const d = path.posix.dirname(rel); return d === "." ? "
 // (`--serve-files any`), the behaviour before 0.4.9.1.
 const SERVE_EXT = new Set([".md", ".txt", ".json", ".csv", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf"]);
 
-function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, searchUsage: searchUsageIn }) {
+function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, archive = null, duplicates = null, searchUsage: searchUsageIn }) {
   // Optional, local-first semantic search (lib/store/semantic.js) — self-configuring from env /
   // memglow.config.json, OFF unless a provider is actually set there (see that module's header
   // comment). `semanticIn` (tests): pass an engine to control it directly, or `null` to force it
@@ -662,11 +662,16 @@ function createTools({ store, project = store.project, readOnly = true, startedA
   }
 
   /**
-   * "maintenance: N structure issue(s), M note(s) over threshold (auto-split on/off)." — one
-   * line, only when BOTH workers were handed to createTools() (always true in production,
+   * "maintenance: N structure issue(s), M note(s) over threshold (auto-split on/off[, archive
+   * on/off][, duplicates on/off[, K reported]])." — one line, only when BOTH autoSplit AND
+   * structure were handed to createTools() (always true in production,
    * memory-server/memglow-memory-server.js; "" for any caller/test that does not pass them, so
-   * memory_core's output is unchanged unless this feature is actually wired in). Never a secret:
-   * `status()` itself never returns the API key, only counts and on/off/provider/model.
+   * memory_core's output is unchanged unless this feature is actually wired in). 0.5.6: archive/
+   * duplicates are each its OWN, independent addition — appended compactly inside the SAME
+   * trailing parenthesis only when that worker was ALSO handed in (a caller passing just
+   * autoSplit/structure, as every test before 0.5.6 did, gets the exact pre-0.5.6 line,
+   * byte-for-byte). Never a secret: every worker's own `status()` never returns the API key, only
+   * counts and on/off/provider/model.
    */
   function maintenanceLine() {
     if (!autoSplit || typeof autoSplit.status !== "function" || !structure || typeof structure.status !== "function") return "";
@@ -674,7 +679,17 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     const st = structure.status();
     const issues = st.issues.total;
     const over = as.pendingCount;
-    return `maintenance: ${issues} structure issue${issues === 1 ? "" : "s"}, ${over} note${over === 1 ? "" : "s"} over threshold (auto-split ${as.enabled ? "on" : "off"}).`;
+    let paren = `auto-split ${as.enabled ? "on" : "off"}`;
+    if (archive && typeof archive.status === "function") {
+      const ar = archive.status();
+      paren += `, archive ${ar.enabled ? "on" : "off"}`;
+    }
+    if (duplicates && typeof duplicates.status === "function") {
+      const du = duplicates.status();
+      const n = (du.reported || []).length;
+      paren += du.enabled ? `, duplicates on (${n} reported)` : ", duplicates off";
+    }
+    return `maintenance: ${issues} structure issue${issues === 1 ? "" : "s"}, ${over} note${over === 1 ? "" : "s"} over threshold (${paren}).`;
   }
 
   function memory_core(args) {
