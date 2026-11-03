@@ -30,6 +30,7 @@ const { createStructureWorker, structureSettings } = require("../lib/star-audit"
 const { createArchiveWorker, archiveSettings } = require("../lib/auto-archive");
 const { createDuplicatesWorker, duplicatesSettings } = require("../lib/auto-duplicates");
 const { usageBoostSettings } = require("../lib/learned-aliases");
+const { archivePenaltySettings } = require("../lib/store/search");
 
 const HELP = `memglow memory server ${SERVER_VERSION} (preview)
 
@@ -249,9 +250,17 @@ function resolveSearchUsage(env = process.env) {
   return usageBoostSettings(raw, env);
 }
 
+/** Same trust boundary — "search.archivePenalty" top-level key (0.5.9 — archive ranking penalty). */
+function resolveSearchArchivePenalty(env = process.env) {
+  let cfg = {};
+  try { cfg = defaultsLib.resolveConfigFiles({ env, allowCwd: false }).config || {}; } catch { cfg = {}; }
+  const raw = (cfg.search && typeof cfg.search === "object" && cfg.search) || {};
+  return archivePenaltySettings(raw, env);
+}
+
 function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 3000, watch = true, maxFileBytes, log = () => {},
   fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", structuredRead = true, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne, deferStart = false,
-  coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, archive = null, duplicates = null, searchUsage = null }) {
+  coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, archive = null, duplicates = null, searchUsage = null, archivePenalty }) {
   let tools = null, warmTimer = null, isReady = !deferStart;
   // The search index is rebuilt lazily by the next search anyway; warming it after a change is
   // coalesced (a burst of writes costs one rebuild, not one per write).
@@ -281,7 +290,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     const col = store.collisions();
     if (twins.length || col.length) log(`memglow memory server: ${twins.length + col.length} note(s) present under several paths or permalinks (an interrupted move?) — see basic_memory_diagnostics`);
   };
-  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, log, coreMap, dataDir, indexNote, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove }, autoSplit: autoSplitWorker, structure: structureWorker, archive: archiveWorker, duplicates: duplicatesWorker, searchUsage });
+  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, log, coreMap, dataDir, indexNote, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove }, autoSplit: autoSplitWorker, structure: structureWorker, archive: archiveWorker, duplicates: duplicatesWorker, searchUsage, archivePenalty });
   let ready;
   if (!deferStart) {
     store.start();
@@ -387,10 +396,11 @@ function main(argv = process.argv.slice(2), env = process.env) {
   const archive = resolveArchive(env);
   const duplicates = resolveDuplicates(env);
   const searchUsage = resolveSearchUsage(env);
+  const archivePenalty = resolveSearchArchivePenalty(env);
   // 0.4.10.2: the port opens at once; the notes folder is loaded and indexed in the background
   // (requests meanwhile wait for it, they never fail).
   const srv = createMemoryServer({ root, project: o.project, readOnly: o.readOnly, pollMs: o.pollMs, watch: o.watch, log,
-    coreMap, dataDir, indexNote: o.indexNote.length ? o.indexNote : ["MEMORY", "index"], autoSplit, structure, archive, duplicates, searchUsage,
+    coreMap, dataDir, indexNote: o.indexNote.length ? o.indexNote : ["MEMORY", "index"], autoSplit, structure, archive, duplicates, searchUsage, archivePenalty,
     fsync: o.fsync, fsyncMode: fsyncInfo.mode, fileMode: o.fileMode, serveFiles: o.serveFiles, structuredRead: o.structuredRead, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
     // 0.5.4: when BOTH --levers and autoSplit are on, sizeWarning's hint (lib/proxy-levers.js)
     // tells the AI memglow will split the note itself, instead of asking it to call split_plan —

@@ -9,7 +9,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { createStore } = require("../lib/store/store");
-const { createSearch } = require("../lib/store/search");
+const { createSearch, isArchiveNote, archivePenaltySettings } = require("../lib/store/search");
 const { stem } = require("../lib/store/text");
 const { makeKb } = require("./fixtures/memory-kb");
 
@@ -162,4 +162,63 @@ test("OR fallback never fires for an already-OR query, and never needed when the
     const or = s.engine.search({ query: "release pipeline" }); // no AND, no quotes: already OR
     assert.ok(or.total >= 2, "both notes found on the plain OR query, same as always");
   } finally { s.done(); }
+});
+
+// ---------------------------------------------------------------------------------------------
+// 0.5.9: archive ranking penalty — isArchiveNote()/archivePenaltySettings() in isolation, then
+// a live note vs its "-archive" sibling sharing the same query words, end to end.
+
+test("isArchiveNote(): slug suffix, archive-named folder (any depth), frontmatter status, and a plain live note", () => {
+  assert.strictEqual(isArchiveNote({ slug: "coffee-notes-archive", rel: "memory/notes/coffee-notes-archive.md" }), true, "slug ends with -archive");
+  assert.strictEqual(isArchiveNote({ slug: "old-project", rel: "memory/archive/old-project.md" }), true, "lives under an archive/ folder");
+  assert.strictEqual(isArchiveNote({ slug: "old-project", rel: "memory/projects/archive/old-project.md" }), true, "archive/ folder at any depth, not just the root");
+  assert.strictEqual(isArchiveNote({ slug: "old-project", rel: "memory/projects/old-project.md", status: "archived" }), true, "frontmatter status: archived");
+  assert.strictEqual(isArchiveNote({ slug: "old-project", rel: "memory/projects/old-project.md", status: "ARCHIVED" }), true, "status match is case-insensitive");
+  assert.strictEqual(isArchiveNote({ slug: "live-project", rel: "memory/projects/live-project.md", status: "active" }), false, "a plain live note is never flagged");
+});
+
+test("archivePenaltySettings(): defaults to 0.6, overridable by config/env, clamped to [0,1] (1 = off)", () => {
+  assert.strictEqual(archivePenaltySettings({}, {}), 0.6);
+  assert.strictEqual(archivePenaltySettings({ archivePenalty: 0.3 }, {}), 0.3);
+  assert.strictEqual(archivePenaltySettings({ archivePenalty: 1 }, {}), 1, "1 = off");
+  assert.strictEqual(archivePenaltySettings({ archivePenalty: 0.3 }, { MEMGLOW_SEARCH_ARCHIVE_PENALTY: "0.9" }), 0.9, "env wins over config");
+  assert.strictEqual(archivePenaltySettings({ archivePenalty: -5 }, {}), 0, "clamped at 0");
+  assert.strictEqual(archivePenaltySettings({ archivePenalty: 7 }, {}), 1, "clamped at 1");
+});
+
+test("archive penalty: a live note outranks its '-archive' sibling on a query matching both, but the archived one still appears", () => {
+  // Identical title/description (the query words), a base/slug that never exactly equals the
+  // query itself (no accidental "exact title/slug match" bonus for either side), and the SAME
+  // query-word-free body (so document length normalisation is identical too) — the two notes'
+  // raw text-match score (before the archive penalty) is exactly the same, and any gap in the
+  // final scores can only come from the penalty.
+  const s = setup({
+    "memory/notes/kitchen-espresso-grind-timing.md": "---\ntitle: Kitchen Espresso Grind Timing\ndescription: Grind size and timing notes for espresso brewing\n---\n\nUnrelated filler text, kept for context only.\n",
+    "memory/notes/kitchen-espresso-grind-timing-archive.md": "---\ntitle: Kitchen Espresso Grind Timing\ndescription: Grind size and timing notes for espresso brewing\n---\n\nUnrelated filler text, kept for context only.\n",
+  });
+  try {
+    const hits = s.ids({ query: "espresso grind timing" });
+    const live = hits.indexOf("main/memory/notes/kitchen-espresso-grind-timing");
+    const archived = hits.indexOf("main/memory/notes/kitchen-espresso-grind-timing-archive");
+    assert.ok(live !== -1 && archived !== -1, "both notes are found");
+    assert.ok(live < archived, "the live note ranks above its archived sibling");
+    const results = s.engine.search({ query: "espresso grind timing" }).results;
+    const archivedScore = results.find((h) => h.note.permalink === "main/memory/notes/kitchen-espresso-grind-timing-archive").score;
+    const liveScore = results.find((h) => h.note.permalink === "main/memory/notes/kitchen-espresso-grind-timing").score;
+    assert.ok(Math.abs(archivedScore - liveScore * 0.6) <= 1e-9 * liveScore, "penalty is the default 0.6x multiplier");
+  } finally { s.done(); }
+});
+
+test("archive penalty: archivePenalty: 1 (off) ranks a '-archive' note purely on text match, same as a live one", () => {
+  const kb = require("./fixtures/memory-kb").makeKb();
+  kb.write("memory/notes/kitchen-espresso-grind-timing.md", "---\ntitle: Kitchen Espresso Grind Timing\ndescription: Grind size and timing notes for espresso brewing\n---\n\nUnrelated filler text, kept for context only.\n");
+  kb.write("memory/notes/kitchen-espresso-grind-timing-archive.md", "---\ntitle: Kitchen Espresso Grind Timing\ndescription: Grind size and timing notes for espresso brewing\n---\n\nUnrelated filler text, kept for context only.\n");
+  const store = createStore({ root: kb.root, watch: false, pollMs: 0, maxFileBytes: 200 * 1024 }).start();
+  const engineOff = createSearch(store, null, null, 1);
+  try {
+    const rOff = engineOff.search({ query: "espresso grind timing" }).results;
+    const liveOff = rOff.find((h) => h.note.permalink === "main/memory/notes/kitchen-espresso-grind-timing").score;
+    const archivedOff = rOff.find((h) => h.note.permalink === "main/memory/notes/kitchen-espresso-grind-timing-archive").score;
+    assert.strictEqual(archivedOff, liveOff, "penalty off: both notes score identically (same title/description text)");
+  } finally { store.stop(); kb.cleanup(); }
 });

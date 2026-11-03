@@ -14,7 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { createSearch, clip } = require("../lib/store/search");
+const { createSearch, clip, archivePenaltySettings } = require("../lib/store/search");
 const { createSemanticSearch } = require("../lib/store/semantic");
 
 /** A value returned by a (possibly async) tool handler — a Promise or a plain MCP result. */
@@ -108,7 +108,7 @@ const dirOf = (rel) => { const d = path.posix.dirname(rel); return d === "." ? "
 // (`--serve-files any`), the behaviour before 0.4.9.1.
 const SERVE_EXT = new Set([".md", ".txt", ".json", ".csv", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf"]);
 
-function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, archive = null, duplicates = null, searchUsage: searchUsageIn }) {
+function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, archive = null, duplicates = null, searchUsage: searchUsageIn, archivePenalty: archivePenaltyIn }) {
   // Optional, local-first semantic search (lib/store/semantic.js) — self-configuring from env /
   // memglow.config.json, OFF unless a provider is actually set there (see that module's header
   // comment). `semanticIn` (tests): pass an engine to control it directly, or `null` to force it
@@ -126,7 +126,11 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     ? createAliasStore({ dataDir, learnAliases: false, aliases: false, usageBoost: true, usageBoostHalfLifeDays: searchUsageCfg.halfLifeDays, usageBoostCap: searchUsageCfg.cap })
     : null;
   const searchUsage = aliasStore && aliasStore.available() ? { boostsFor: (words, now) => aliasStore.usageBoosts(words, now) } : null;
-  const engine = createSearch(store, semantic, searchUsage);
+  // 0.5.9: archive ranking penalty (lib/store/search.js) — `archivePenaltyIn` (tests): pass a
+  // number to control it directly, or leave undefined for the real one (`search.archivePenalty` /
+  // MEMGLOW_SEARCH_ARCHIVE_PENALTY, same env-only trust boundary as searchUsage above).
+  const archivePenalty = archivePenaltyIn !== undefined ? archivePenaltyIn : archivePenaltySettings({}, process.env);
+  const engine = createSearch(store, semantic, searchUsage, archivePenalty);
   const writes = !readOnly && writer ? createWriteTools({ store, writer, project, ...writeOptions }) : null;
   const projectId = stableId("memglow-project:" + project);
 
