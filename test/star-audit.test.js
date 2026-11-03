@@ -311,9 +311,34 @@ function judgeSetup(aiRun) {
   const notes = star.recordsFrom(srv.store.notes());
   const issues = star.audit({ notes, indexId, archiveFolder: "archive" });
   const logs = [];
-  const run = async () => star.judgeIssues({ store: srv.store, writer: srv.writer, cfg, env: {}, dataDir: null, log: (s) => logs.push(s), indexId, notes, issues, aiRun });
-  return { root, srv, cleanup, cfg, indexId, notes, issues, logs, run };
+  const events = [];
+  const run = async () => star.judgeIssues({ store: srv.store, writer: srv.writer, cfg, env: {}, dataDir: null, log: (s) => logs.push(s), indexId, notes, issues, aiRun, events: { add: (e) => events.push(e) } });
+  return { root, srv, cleanup, cfg, indexId, notes, issues, logs, events, run };
 }
+
+test("judgeIssues (0.5.9): logs an 'ai-call' event per fresh decision (events param, additive-only when omitted)", async () => {
+  const { cleanup, events, run } = judgeSetup(async () => ({ ok: true, text: '{"action":"leave"}' }));
+  try {
+    await run();
+    const aiCalls = events.filter((e) => e.kind === "ai-call");
+    assert.ok(aiCalls.length >= 1, JSON.stringify(events));
+    assert.strictEqual(aiCalls[0].detail, "leave");
+  } finally { cleanup(); }
+});
+
+test("judgeIssues (0.5.9): logs an 'ai-failed' event (never 'ai-call') for an answer that never validates, and 'ai-failed' on an auth error", async () => {
+  const bad = judgeSetup(async () => ({ ok: true, text: "not json" }));
+  try {
+    await bad.run();
+    assert.strictEqual(bad.events.filter((e) => e.kind === "ai-call").length, 0);
+    assert.ok(bad.events.some((e) => e.kind === "ai-failed"), JSON.stringify(bad.events));
+  } finally { bad.cleanup(); }
+  const auth = judgeSetup(async () => ({ ok: false, error: "invalid api key (401)" }));
+  try {
+    await auth.run();
+    assert.ok(auth.events.some((e) => e.kind === "ai-failed" && /auth error/.test(e.detail)), JSON.stringify(auth.events));
+  } finally { auth.cleanup(); }
+});
 
 test("judgeIssues: R5 candidates are offered the confirmed hub(s) and the index sections", () => {
   const { srv, cleanup, indexId, notes } = judgeSetup(async () => ({ ok: true, text: '{"action":"leave"}' }));
@@ -677,6 +702,29 @@ test("R4 (0.5.5 bug fix): cache hits are SILENT — no per-note log line, but on
     assert.ok(!logs.some((l) => /AI judgement \(R4\) for/.test(l)), "no per-line judgement log for a cache hit");
     assert.ok(logs.some((l) => /1 cached R4 verdict reused/.test(l)), "one summary line for the scan");
     assert.strictEqual(w2.status().r4Verdicts[0].action, "keep", "the panel/API still reflects the current scan");
+  } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test("createStructureWorker (0.5.9): recentEvents() carries 'ai-call' for the first (fresh) R4 scan and ONE aggregated 'cache-reused' for the second (cached) scan — never one event per hit", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-r4-events-"));
+  const { srv, cleanup } = makeR4Kb();
+  try {
+    const aiRun = async () => ({ ok: true, text: JSON.stringify({ action: "keep", reason: "useful reading order" }) });
+    const w1 = star.createStructureWorker({ store: srv.store, writer: srv.writer, dataDir, config: { enabled: true, ai: { enabled: true, maxDecisionsPerScan: 10 } }, aiRun });
+    await w1.scanOnce();
+    const e1 = w1.recentEvents();
+    assert.strictEqual(e1.filter((e) => e.kind === "ai-call").length, 1, "one fresh R4 decision this scan");
+    assert.strictEqual(e1.filter((e) => e.kind === "cache-reused").length, 0, "nothing cached yet");
+    w1.stop();
+
+    const w2 = star.createStructureWorker({ store: srv.store, writer: srv.writer, dataDir, config: { enabled: true, ai: { enabled: true, maxDecisionsPerScan: 10 } }, aiRun });
+    await w2.scanOnce();
+    // recentEvents() persists across the restart (same dataDir, same event-log file) — e1's own
+    // "ai-call" is still in there; what matters is that this SECOND scan added no new one.
+    const e2 = w2.recentEvents();
+    assert.strictEqual(e2.filter((e) => e.kind === "cache-reused").length, 1, "the whole scan's cache hits collapse into ONE event");
+    assert.match(e2.find((e) => e.kind === "cache-reused").detail, /^1 cached verdict reused$/);
+    assert.strictEqual(e2.filter((e) => e.kind === "ai-call").length, e1.filter((e) => e.kind === "ai-call").length, "no NEW ai-call event this time: a pure cache hit");
   } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 

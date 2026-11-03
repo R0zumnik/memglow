@@ -38,10 +38,26 @@ test("buildWeeklyReport: structureFixes/structureFixesByKind — groups 'fix' ev
   const wk = buildWeeklyReport({ structureEvents });
   assert.strictEqual(wk.structureFixes, 4);
   assert.deepStrictEqual(wk.structureFixesByKind, { R2: 2, R4: 1, "no-dash-here": 1 });
-  // structure logs no "ai-call"/"cache-reused"/"auth-error" kind of its own (module doc's known
-  // limitation) — it never contributes to aiCalls/cachedVerdicts/errors.
+  // This fixture has only "fix" events (no "ai-call"/"ai-failed"/"cache-reused" of its own) —
+  // see the next test for structure's own AI-judgement counting (0.5.9).
   assert.strictEqual(wk.aiCalls, 0);
   assert.strictEqual(wk.errors, 0);
+});
+
+test("buildWeeklyReport: structure's own AI judgement pass (0.5.9) — 'ai-call'/'ai-failed' count toward aiCalls (a failure is still a call made), 'ai-failed' alone toward errors, 'cache-reused' toward cachedVerdicts", () => {
+  const structureEvents = [
+    { t: 1, kind: "ai-call", note: "a", detail: "attach" },
+    { t: 2, kind: "ai-call", note: "b", detail: "R4: remove" },
+    { t: 3, kind: "ai-failed", note: "c", detail: "the AI provider failed" },
+    { t: 4, kind: "ai-failed", note: null, detail: "R6 auth error: bad key" },
+    { t: 5, kind: "cache-reused", note: null, detail: "5 cached verdicts reused" },
+    { t: 6, kind: "fix", note: "a", detail: "AI — attach on projects/a.md" },
+  ];
+  const wk = buildWeeklyReport({ structureEvents });
+  assert.strictEqual(wk.aiCalls, 4, "2 ai-call + 2 ai-failed: every one followed an actual AI call");
+  assert.strictEqual(wk.errors, 2, "only the 2 ai-failed count as errors");
+  assert.strictEqual(wk.cachedVerdicts, 5);
+  assert.strictEqual(wk.structureFixes, 1, "the 'fix' event is unaffected, counted as always");
 });
 
 test("buildWeeklyReport: sectionsArchived — sums the leading section count of 'archived' events; cachedVerdicts/errors from archive's own kinds", () => {
