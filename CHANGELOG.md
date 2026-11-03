@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.9 — 2026-11-03
+
+### Added
+
+- **Search: archive notes ranked below live ones** (`lib/store/search.js`): a note whose slug
+  ends with `-archive`, that lives under an `archive`-named folder (any depth), or that declares
+  `status: archived` now gets a multiplicative ranking penalty (default ×0.6, configurable
+  `search.archivePenalty` / `MEMGLOW_SEARCH_ARCHIVE_PENALTY`, `1` = off) on a text-search match —
+  it never outranks a live note with a comparable match, but still surfaces when it is the
+  only/best one. The 215-query ranking golden snapshot (`test/fixtures/ranking-golden.json`) is
+  regenerated: the synthetic corpus's own `archive/`-themed notes dropped out of several queries'
+  top-10, replaced by the next live note.
+- **Weekly maintenance report: the structure worker's own AI calls now counted**
+  (`lib/star-audit.js`, `lib/weekly-report.js`): `judgeIssues()` (R5/ambiguous-R3, R4, R6) now
+  logs `ai-call` per fresh decision obtained, `ai-failed` per candidate that never got a usable
+  one, and one aggregated `cache-reused` event per AI pass that had any cache hit at all (never
+  one event per hit — same quiet-log convention as the existing per-scan summary line). The
+  report's `aiCalls`/`cachedVerdicts`/`errors` now cover all four maintenance workers, closing a
+  known gap where structure's own (occasional) AI judgement never showed up there.
+
+### Changed
+
+- **Duplicates: weekly cadence by default** (`lib/auto-duplicates.js`): `maintenance.duplicates`
+  now defaults `scanHours` to 168 (weekly) instead of inheriting the daily (24h) default every
+  other maintenance worker uses — an AI call per candidate pair is pricier than a single-note
+  judgement, and duplicates do not accumulate as fast as the issues the other workers scan for.
+  Still configurable (`maintenance.duplicates.scanHours`, same 0-168 bound as the other workers).
+
 ## 0.5.8 — 2026-11-03
 
 ### Added
