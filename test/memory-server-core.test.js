@@ -152,12 +152,15 @@ test("memory_core (0.5.4/0.5.6): a one-line \"maintenance: …\" summary from th
   try {
     const off = createMemoryServer({ root: kb.root, watch: false, pollMs: 0 });
     const outOff = off.tools.call("memory_core", {}).content[0].text;
-    assert.match(outOff, /maintenance: 0 structure issues, 0 notes over threshold \(auto-split off, archive off, duplicates off\)\.\n$/);
+    assert.match(outOff, /maintenance: 0 structure issues, 0 notes over threshold \(auto-split off, archive off, duplicates off\)\.\n/);
+    // 0.5.8: WEEKLY MAINTENANCE REPORT — a second, trailing line, same gate as maintenanceLine.
+    assert.match(outOff, /maintenance this week: 0 split, 0 structure fixes, 0 archived, 0 duplicates found, 0 AI calls\.\n$/);
     off.close();
 
     const on = createMemoryServer({ root: kb.root, watch: false, pollMs: 0, readOnly: false, autoSplit: { enabled: true, thresholdTokens: 50 }, structure: { enabled: true } });
     const outOn = on.tools.call("memory_core", {}).content[0].text;
-    assert.match(outOn, /maintenance: \d+ structure issues?, \d+ notes? over threshold \(auto-split on, archive off, duplicates off\)\.\n$/);
+    assert.match(outOn, /maintenance: \d+ structure issues?, \d+ notes? over threshold \(auto-split on, archive off, duplicates off\)\.\n/);
+    assert.match(outOn, /maintenance this week: \d+ split, \d+ structure fix(es)?, \d+ archived, \d+ duplicates? found, \d+ AI calls?\.\n$/);
     const json = JSON.parse(on.tools.call("memory_core", { output_format: "json" }).content[0].text);
     assert.match(json.text, /maintenance: /);
     on.close();
@@ -172,7 +175,7 @@ test("memory_core (0.5.6): the maintenance line also names archive/duplicates on
       archive: { enabled: true }, duplicates: { enabled: true },
     });
     const out = srv.tools.call("memory_core", {}).content[0].text;
-    assert.match(out, /\(auto-split off, archive on, duplicates on \(0 reported\)\)\.\n$/);
+    assert.match(out, /\(auto-split off, archive on, duplicates on \(0 found, 0 pairs checked\)\)\.\n/);
     srv.close();
   } finally { kb.cleanup(); }
 });

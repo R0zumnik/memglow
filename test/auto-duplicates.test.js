@@ -97,6 +97,9 @@ test("worker: default behaviour is REPORT ONLY — a confirmed duplicate is list
     assert.strictEqual(st.reported.length, 1);
     assert.strictEqual(st.reported[0].duplicate, true);
     assert.strictEqual(st.reported[0].merged, false);
+    // 0.5.8 bug fix: `reported` is every pair CHECKED, `foundCount` is the real-duplicates count.
+    assert.strictEqual(st.foundCount, 1);
+    assert.strictEqual(st.checkedCount, 1);
   } finally { cleanup(); }
 });
 
@@ -264,6 +267,30 @@ test("findDuplicatePairs (0.5.6 bug fix): two project/* notes sharing only the b
   assert.strictEqual(dup.findDuplicatePairs(sameSubtheme).length, 1, "same subtheme: the older gates alone already pass this pair");
   // With their REAL, different subthemes and titles that share nothing, the new guard excludes it.
   assert.deepStrictEqual(dup.findDuplicatePairs(notes), [], "different subthemes, no title overlap: no longer paired");
+});
+
+test("findDuplicatePairs (0.5.8 bug fix): never pairs two notes of the same split family — one slug is a '-'-bounded prefix of the other's", () => {
+  const notes = [
+    { id: "project-ibs-initiatives-europe", label: "IBS initiatives Europe", description: "IBS initiatives for Europe" },
+    { id: "project-ibs-initiatives-europe-silvae-market-decks", label: "IBS initiatives Europe Silvae", description: "IBS initiatives for Europe Silvae" },
+  ];
+  // Sanity: every pre-existing gate here (shared words, coverage, title overlap) already
+  // passes this pair on its own — only the new split-family guard rules it out.
+  assert.deepStrictEqual(dup.findDuplicatePairs(notes), []);
+  assert.strictEqual(dup.sameSplitFamily("project-ibs-initiatives-europe", "project-ibs-initiatives-europe-silvae-market-decks"), true);
+  assert.strictEqual(dup.sameSplitFamily("coffee-a", "coffee-abc"), false, "no '-' boundary: not a split family by id alone");
+});
+
+test("findDuplicatePairs (0.5.8 bug fix): never pairs two notes sharing the same declared part_of when one slug starts with the other's (even without a '-' boundary)", () => {
+  const withPartOf = [
+    { id: "alpha", label: "Alpha project beta notes shared", description: "Alpha project beta notes shared", partOf: "hub-x" },
+    { id: "alphabeta", label: "Alpha project beta notes shared extra", description: "Alpha project beta notes shared extra", partOf: "hub-x" },
+  ];
+  assert.deepStrictEqual(dup.findDuplicatePairs(withPartOf), [], "same part_of + slug-prefix: excluded");
+  const noPartOf = withPartOf.map((n) => ({ ...n, partOf: null }));
+  assert.strictEqual(dup.findDuplicatePairs(noPartOf).length, 1, "without a shared part_of, the id-prefix alone (no '-' boundary) is NOT enough to exclude");
+  const differentPartOf = [{ ...withPartOf[0], partOf: "hub-x" }, { ...withPartOf[1], partOf: "hub-y" }];
+  assert.strictEqual(dup.findDuplicatePairs(differentPartOf).length, 1, "different part_of: not the same split family either");
 });
 
 test("significantWordsOf: drops GENERIC_WORDS and bare numbers/dates, keeps everything else", () => {

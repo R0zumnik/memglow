@@ -211,7 +211,10 @@ test("HTTP /api/maintenance (0.5.4): the auto-split/structure workers' status, g
     // 0.5.5 (A, B): "archive"/"duplicates" are always present (a harmless, all-false fallback
     // shape when the server was not given those workers at all — same pattern as the
     // "neither worker configured" case right below).
-    assert.deepStrictEqual(Object.keys(j).sort(), ["archive", "autoSplit", "duplicates", "structure"]);
+    assert.deepStrictEqual(Object.keys(j).sort(), ["archive", "autoSplit", "duplicates", "structure", "weekly"]);
+    // 0.5.8: the last 7 days of all four workers' activity (lib/weekly-report.js) — present even
+    // when nothing happened this week (every count 0), never a crash.
+    assert.deepStrictEqual(j.weekly, { notesSplit: 0, structureFixes: 0, structureFixesByKind: {}, sectionsArchived: 0, duplicatesFound: 0, aiCalls: 0, cachedVerdicts: 0, errors: 0 });
     assert.deepStrictEqual(Object.keys(j.autoSplit).sort(), ["enabled", "keySet", "lastError", "lastScanAt", "model", "nextScanAt", "pendingCount", "provider", "recent", "thresholdTokens"]);
     assert.strictEqual(j.archive.enabled, false);
     assert.strictEqual(j.duplicates.enabled, false);
@@ -263,6 +266,31 @@ test("HTTP /api/maintenance (0.5.4 bug fix): a worker's lastError (epoch ms + me
   try {
     const j = await (await fetch(`http://127.0.0.1:${server.address().port}/api/maintenance`)).json();
     assert.deepStrictEqual(j.autoSplit.lastError, { t: new Date(t).toISOString(), message: "Failed to authenticate. API Error: 401 Invalid bearer token" });
+  } finally { server.close(); srv.close(); kb.cleanup(); }
+});
+
+test("HTTP /api/maintenance (0.5.8): `weekly` aggregates every worker's own recentEvents(since) — lib/weekly-report.js wired through the HTTP layer", async () => {
+  const kb = makeKb();
+  const srv = createMemoryServer({
+    root: kb.root, readOnly: false, watch: false, pollMs: 0,
+    autoSplit: { enabled: true, provider: "anthropic", apiKeyEnv: "SOME_KEY" },
+    structure: { enabled: true },
+  });
+  // Monkey-patch recentEvents on autoSplit/structure, same spirit as the lastError test above —
+  // this test only checks the HTTP layer actually calls recentEvents(since) and hands the four
+  // arrays to lib/weekly-report.js; the aggregation logic itself is unit-tested in
+  // test/weekly-report.test.js with synthetic events.
+  let sinceSeen = null;
+  srv.autoSplit.recentEvents = (since) => { sinceSeen = since; return [{ t: Date.now(), kind: "split", note: "a", detail: "2 part(s): a-1, a-2" }]; };
+  srv.structure.recentEvents = () => [{ t: Date.now(), kind: "fix", note: "b", detail: "R2 — moved on b.md" }];
+  const server = createHttpServer({ rpc: srv.rpc, store: srv.store, readOnly: false, autoSplit: srv.autoSplit, structure: srv.structure });
+  await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
+  try {
+    const j = await (await fetch(`http://127.0.0.1:${server.address().port}/api/maintenance`)).json();
+    assert.strictEqual(j.weekly.notesSplit, 1);
+    assert.strictEqual(j.weekly.structureFixes, 1);
+    assert.deepStrictEqual(j.weekly.structureFixesByKind, { R2: 1 });
+    assert.ok(typeof sinceSeen === "number" && sinceSeen < Date.now(), "called with a real 'since' — the last 7 days, not every event ever");
   } finally { server.close(); srv.close(); kb.cleanup(); }
 });
 

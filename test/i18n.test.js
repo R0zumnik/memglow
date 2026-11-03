@@ -219,15 +219,21 @@ test("control.js: controlRenderMaintenanceWorkers (0.5.6) — auto-archive/dupli
     },
     duplicates: {
       enabled: true, lastScanAt: "2026-10-28T10:00:00.000Z", lastError: null,
-      reported: [{ a: "coffee-a", b: "coffee-b", duplicate: true, keep: "a", reason: "same subject, b is a superset", merged: false }],
+      // 0.5.8: a CHECKED-but-not-duplicate pair alongside the confirmed one — `reported` holds
+      // both, so the summary line/detail list must show 1 found of 2 checked, never "2 reported".
+      reported: [
+        { a: "coffee-a", b: "coffee-b", duplicate: true, keep: "a", reason: "same subject, b is a superset", merged: false },
+        { a: "tea-a", b: "tea-b", duplicate: false, keep: "a", reason: "merely related, not a duplicate", merged: false },
+      ],
     },
   }, T);
   assert.match(html, /Auto-archive: on — 1 note archived recently/);
-  assert.match(html, /Duplicates: on — 1 pair reported/);
+  assert.match(html, /Duplicates: on — 1 duplicate found \(2 pairs checked\)/);
   assert.match(html, /Recently archived/);
   assert.match(html, /old-incident — 1 section\(s\) → old-incident-archive/);
   assert.match(html, /Reported duplicate pairs/);
   assert.match(html, /coffee-a \/ coffee-b: same subject, b is a superset/);
+  assert.doesNotMatch(html, /tea-a \/ tea-b/, "0.5.8 bug fix: only the CONFIRMED duplicate pair is listed, never a merely-checked one");
   assert.ok(!/<input|<select|<button/.test(html), "a read-only view, never a control");
 
   const errHtml = controlPage.controlRenderMaintenanceWorkers({
@@ -238,6 +244,28 @@ test("control.js: controlRenderMaintenanceWorkers (0.5.6) — auto-archive/dupli
   assert.match(errHtml, /Auto-archive: stopped — auth error:/);
   assert.match(errHtml, /Duplicates: stopped — auth error:/);
   assert.strictEqual((errHtml.match(/mg-control__line--bad/g) || []).length, 2);
+});
+
+test("control.js: controlRenderMaintenanceWorkers (0.5.8) — the weekly maintenance report block, silent when absent, an error line only when errors > 0", () => {
+  const T = controlPage.defaultControlT;
+  const noWeekly = controlPage.controlRenderMaintenanceWorkers({
+    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: false },
+  }, T);
+  assert.doesNotMatch(noWeekly, /This week:/, "an older memory server with no `weekly` field: silent, never a crash");
+
+  const html = controlPage.controlRenderMaintenanceWorkers({
+    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: false },
+    weekly: { notesSplit: 1, structureFixes: 3, structureFixesByKind: { R2: 3 }, sectionsArchived: 2, duplicatesFound: 0, aiCalls: 12, cachedVerdicts: 4, errors: 0 },
+  }, T);
+  assert.match(html, /This week: 1 split, 3 structure fixes, 2 archived, 0 duplicates found, 12 AI calls/);
+  assert.doesNotMatch(html, /error this week|errors this week/);
+
+  const errHtml = controlPage.controlRenderMaintenanceWorkers({
+    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: false },
+    weekly: { notesSplit: 0, structureFixes: 0, structureFixesByKind: {}, sectionsArchived: 0, duplicatesFound: 0, aiCalls: 0, cachedVerdicts: 0, errors: 2 },
+  }, T);
+  assert.match(errHtml, /2 errors this week/);
+  assert.match(errHtml, /mg-control__line--bad/);
 });
 
 test("i18n: defaultT helpers resolve English outside a browser (Node require, no window)", () => {

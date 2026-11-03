@@ -62,13 +62,15 @@ var EN_CONTROL = {
   "control.workerAuthError": "{worker}: stopped — auth error: {message}",
   "control.archiveOn": { one: "Auto-archive: on — {n} note archived recently", other: "Auto-archive: on — {n} notes archived recently" },
   "control.archiveOff": "Auto-archive: off",
-  "control.duplicatesOn": { one: "Duplicates: on — {n} pair reported", other: "Duplicates: on — {n} pairs reported" },
+  "control.duplicatesOn": { one: "Duplicates: on — {n} duplicate found ({checked} pairs checked)", other: "Duplicates: on — {n} duplicates found ({checked} pairs checked)" },
   "control.duplicatesOff": "Duplicates: off",
   "control.workerArchive": "Auto-archive",
   "control.workerDuplicates": "Duplicates",
   "control.recentArchivesTitle": "Recently archived",
   "control.reportedDuplicatesTitle": "Reported duplicate pairs",
   "control.duplicatePairReason": "{a} / {b}: {reason}",
+  "control.weeklyReport": "This week: {split} split, {fixes} structure fixes, {archived} archived, {dup} duplicates found, {ai} AI calls",
+  "control.weeklyErrors": { one: "{n} error this week", other: "{n} errors this week" },
   "control.measuresEmpty": "No measurements yet.",
   "control.byClientTitle": "By AI tool (7 days)",
   "control.byLeverTitle": "By lever (7 days)",
@@ -313,7 +315,13 @@ function controlRenderMaintenanceWorkers(mm, T) {
     : T("control.autoSplitOff");
   const stLine = st.enabled ? T("control.structureOn", { n: st.issues || 0 }) : T("control.structureOff");
   const arLine = ar.enabled ? T("control.archiveOn", { n: (ar.recent || []).length }) : T("control.archiveOff");
-  const duLine = du.enabled ? T("control.duplicatesOn", { n: (du.reported || []).length }) : T("control.duplicatesOff");
+  // 0.5.8 bug fix: `du.reported` is every pair CHECKED (duplicate true or false), not "N
+  // duplicates found" — this line used to show its length as if it were. `foundCount`/
+  // `checkedCount` (lib/setup.js memoryMaintenanceStatus(), itself falling back to deriving them
+  // from `reported` for an older memory server) are the two real numbers.
+  const duChecked = typeof du.checkedCount === "number" ? du.checkedCount : (du.reported || []).length;
+  const duFound = typeof du.foundCount === "number" ? du.foundCount : (du.reported || []).filter(function (r) { return r && r.duplicate; }).length;
+  const duLine = du.enabled ? T("control.duplicatesOn", { n: duFound, checked: duChecked }) : T("control.duplicatesOff");
   var out = '<p class="mg-control__line">' + cEsc(asLine) + '</p><p class="mg-control__line">' + cEsc(stLine) + '</p>' +
     '<p class="mg-control__line">' + cEsc(arLine) + '</p><p class="mg-control__line">' + cEsc(duLine) + '</p>';
   // 0.5.4: a worker that already gave up on a bad credential for the rest of its process
@@ -334,10 +342,24 @@ function controlRenderMaintenanceWorkers(mm, T) {
       ar.recent.map(function (e) { return "<li>" + cEsc(e.note || "?") + (e.detail ? " — " + cEsc(e.detail) : "") + "</li>"; }).join("") +
       '</ul>';
   }
-  if (du.enabled && (du.reported || []).length) {
+  // 0.5.8 bug fix: this list is titled "duplicate pairs" — it now only ever holds the ones
+  // actually confirmed as duplicates (duplicate === true), never every pair merely CHECKED.
+  var duConfirmed = (du.reported || []).filter(function (r) { return r && r.duplicate; });
+  if (du.enabled && duConfirmed.length) {
     out += '<p class="mg-control__subhead">' + cEsc(T("control.reportedDuplicatesTitle")) + '</p><ul class="mg-control__clients">' +
-      du.reported.map(function (r) { return "<li>" + cEsc(T("control.duplicatePairReason", { a: r.a || "?", b: r.b || "?", reason: r.reason || "?" })) + "</li>"; }).join("") +
+      duConfirmed.map(function (r) { return "<li>" + cEsc(T("control.duplicatePairReason", { a: r.a || "?", b: r.b || "?", reason: r.reason || "?" })) + "</li>"; }).join("") +
       '</ul>';
+  }
+  // 0.5.8: WEEKLY MAINTENANCE REPORT — the last 7 days of all four workers' own activity
+  // (lib/weekly-report.js, via GET /api/maintenance's `weekly`), one compact line + an error
+  // line only when there was at least one. Silent when `mm.weekly` is absent (an older memory
+  // server that does not send it yet).
+  var wk = mm.weekly;
+  if (wk) {
+    out += '<p class="mg-control__line">' + cEsc(T("control.weeklyReport", {
+      split: wk.notesSplit || 0, fixes: wk.structureFixes || 0, archived: wk.sectionsArchived || 0, dup: wk.duplicatesFound || 0, ai: wk.aiCalls || 0,
+    })) + '</p>';
+    if (wk.errors) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.weeklyErrors", { n: wk.errors })) + '</p>';
   }
   return out;
 }

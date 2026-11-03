@@ -396,7 +396,9 @@ test("setup: memoryMaintenanceStatus (0.5.4) — not configured, bad answer, a f
       // 0.5.6: the fake answer above carries no "archive"/"duplicates" at all (an older memory
       // server) — both default to a harmless, fully-off shape, never an error.
       archive: { enabled: false, provider: "", model: "", keySet: false, keepDays: 0, lastScanAt: null, nextScanAt: null, lastError: null, recent: [] },
-      duplicates: { enabled: false, autoMerge: false, provider: "", model: "", keySet: false, lastScanAt: null, nextScanAt: null, lastError: null, reported: [], recent: [] },
+      duplicates: { enabled: false, autoMerge: false, provider: "", model: "", keySet: false, foundCount: 0, checkedCount: 0, lastScanAt: null, nextScanAt: null, lastError: null, reported: [], recent: [] },
+      // 0.5.8: same "an older memory server simply does not send it" fallback for `weekly`.
+      weekly: { notesSplit: 0, structureFixes: 0, structureFixesByKind: {}, sectionsArchived: 0, duplicatesFound: 0, aiCalls: 0, cachedVerdicts: 0, errors: 0 },
     });
     assert.ok(!JSON.stringify(r).includes("sk-ant-should-never-appear"), "only the few known-safe fields are ever copied through");
 
@@ -435,6 +437,9 @@ test("setup: memoryMaintenanceStatus (0.5.6) — archive/duplicates, bounded and
     });
     assert.deepStrictEqual(r.duplicates, {
       enabled: true, autoMerge: false, provider: "anthropic", model: "claude-haiku-4-5", keySet: true,
+      // 0.5.8 bug fix: derived from `reported` here (the fake answer sends no foundCount/
+      // checkedCount of its own, same "older memory server" fallback as every other field).
+      foundCount: 1, checkedCount: 1,
       lastScanAt: "2026-10-28T10:00:00.000Z", nextScanAt: null, lastError: null,
       reported: [{ a: "coffee-a", b: "coffee-b", duplicate: true, keep: "a", reason: "same subject, b is a superset", merged: false, t: "2026-10-28T09:30:00.000Z" }],
       recent: [],

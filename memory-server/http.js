@@ -29,6 +29,7 @@
 const http = require("http");
 const crypto = require("crypto");
 const { SUPPORTED_VERSIONS } = require("./rpc");
+const weeklyReport = require("../lib/weekly-report");
 
 const MAX_BODY = 10 * 1024 * 1024;
 const MAX_SESSIONS = 5000;
@@ -140,6 +141,16 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
   // of its process lifetime — {t: ISO string, message} | null. Never raw epoch ms, same as
   // lastScanAt/nextScanAt below.
   const errorOf = (e) => (e ? { t: iso(e.t), message: e.message } : null);
+  // 0.5.8: the last 7 days of each worker's own event log (lib/weekly-report.js), bounded to the
+  // same "worker not configured at all" fallback shape as autoSplit/structure/archive/duplicates
+  // above — an older caller/test that does not pass a worker simply gets 0 everywhere for it.
+  function weeklyStatus() {
+    const since = weeklyReport.weeklyReportSince(Date.now());
+    const evOf = (w) => (w && typeof w.recentEvents === "function" ? w.recentEvents(since) : []);
+    return weeklyReport.buildWeeklyReport({
+      autoSplitEvents: evOf(autoSplit), structureEvents: evOf(structure), archiveEvents: evOf(archive), duplicatesEvents: evOf(duplicates),
+    });
+  }
   function maintenanceStatus() {
     const as = autoSplit && autoSplit.status ? autoSplit.status() : { enabled: false, provider: "", model: "", keySet: false, thresholdTokens: 0, pendingCount: 0, lastScanAt: null, nextScanAt: null, lastError: null };
     const st = structure && structure.status ? structure.status() : { enabled: false, ai: { enabled: false, provider: "", model: "" }, issues: { total: 0, fixable: 0, needsReview: 0, byRule: {} }, lastScanAt: null, nextScanAt: null, lastError: null };
@@ -151,6 +162,8 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
       structure: { ...st, lastScanAt: iso(st.lastScanAt), nextScanAt: iso(st.nextScanAt), lastError: errorOf(st.lastError), recent: recentOf(structure) },
       archive: { ...ar, lastScanAt: iso(ar.lastScanAt), nextScanAt: iso(ar.nextScanAt), lastError: errorOf(ar.lastError), recent: recentOf(archive) },
       duplicates: { ...du, reported: (du.reported || []).map((r) => ({ ...r, t: iso(r.t) })), lastScanAt: iso(du.lastScanAt), nextScanAt: iso(du.nextScanAt), lastError: errorOf(du.lastError), recent: recentOf(duplicates) },
+      // 0.5.8: additive only — every existing field/key above is unchanged (backward compatible).
+      weekly: weeklyStatus(),
     };
   }
 

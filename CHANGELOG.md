@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.8 — 2026-11-03
+
+### Added
+
+- **Weekly maintenance report** (`lib/weekly-report.js`): aggregates the last 7 days of the four
+  maintenance workers' own event logs (auto-split, structure, archive, duplicates) into counts —
+  notes split, structure fixes (by rule), sections archived, real duplicates found, AI calls made,
+  cached verdicts reused, errors. Exposed as `weekly` in `GET /api/maintenance` (additive — every
+  existing field is unchanged), a one-line "maintenance this week: …" summary in `memory_core`
+  (`memory-server/tools.js`), and a compact block in the control panel's maintenance card
+  (`public/control.js`).
+
+### Fixed
+
+- **Duplicates: "reported" was every pair CHECKED, not duplicates FOUND** (`lib/auto-duplicates.js`,
+  `memory-server/tools.js`, `public/control.js`): `memory_core`'s maintenance line and the control
+  panel both showed `duplicates.status().reported.length` as if it were a count of real
+  duplicates — a scan with 0 real duplicates among 50 checked pairs read "duplicates on (50
+  reported)". The worker's `status()` now also returns `foundCount`/`checkedCount`; both surfaces
+  show "N found, M pairs checked", and the panel's "Reported duplicate pairs" detail list only
+  ever lists confirmed duplicates. `reported` itself, and every other field, is unchanged.
+- **Duplicates: never pairs two notes of the same split family** (`lib/auto-duplicates.js`
+  `findDuplicatePairs()`): a note split into further, more specific notes (e.g.
+  `project-ibs-initiatives-europe` and `project-ibs-initiatives-europe-silvae-market-decks`) could
+  still be flagged as a "duplicate" of its own part merely on word overlap. Excluded outright,
+  before any AI call, whenever one slug is a `-`-bounded prefix of the other's, or both notes
+  declare the same `part_of` and one slug starts with the other's.
+
 ## 0.5.7 — 2026-10-29
 
 ### Fixed

@@ -23,6 +23,7 @@ const { estimateTokens } = require("../lib/cost");
 const hubSpoke = require("../lib/hub-spoke");
 const indexTree = require("../lib/index-tree");
 const memoryCore = require("../lib/memory-core");
+const weeklyReport = require("../lib/weekly-report");
 
 // 0.4.10.6: search_notes' TEXT output is leaner — no external_id line (it stays in the json
 // output), the match excerpt cut to MATCH_MAX characters around the query, a shorter footer.
@@ -663,15 +664,20 @@ function createTools({ store, project = store.project, readOnly = true, startedA
 
   /**
    * "maintenance: N structure issue(s), M note(s) over threshold (auto-split on/off[, archive
-   * on/off][, duplicates on/off[, K reported]])." — one line, only when BOTH autoSplit AND
-   * structure were handed to createTools() (always true in production,
+   * on/off][, duplicates on/off[, (F found, C checked)]])." — one line, only when BOTH autoSplit
+   * AND structure were handed to createTools() (always true in production,
    * memory-server/memglow-memory-server.js; "" for any caller/test that does not pass them, so
    * memory_core's output is unchanged unless this feature is actually wired in). 0.5.6: archive/
    * duplicates are each its OWN, independent addition — appended compactly inside the SAME
    * trailing parenthesis only when that worker was ALSO handed in (a caller passing just
    * autoSplit/structure, as every test before 0.5.6 did, gets the exact pre-0.5.6 line,
    * byte-for-byte). Never a secret: every worker's own `status()` never returns the API key, only
-   * counts and on/off/provider/model.
+   * counts and on/off/provider/model. 0.5.8 bug fix: `duplicates.status().reported` is every pair
+   * CHECKED (duplicate true or false), not "N duplicates found" — this used to show its length as
+   * if it were (a scan with 0 real duplicates among 50 checked pairs read "duplicates on (50
+   * reported)"). Now shows the real find count AND the checked count, using the worker's own
+   * `foundCount`/`checkedCount` (falling back to counting `reported` itself, for an older worker
+   * that does not set them yet).
    */
   function maintenanceLine() {
     if (!autoSplit || typeof autoSplit.status !== "function" || !structure || typeof structure.status !== "function") return "";
@@ -686,10 +692,30 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     }
     if (duplicates && typeof duplicates.status === "function") {
       const du = duplicates.status();
-      const n = (du.reported || []).length;
-      paren += du.enabled ? `, duplicates on (${n} reported)` : ", duplicates off";
+      const checked = typeof du.checkedCount === "number" ? du.checkedCount : (du.reported || []).length;
+      const found = typeof du.foundCount === "number" ? du.foundCount : (du.reported || []).filter((r) => r && r.duplicate).length;
+      paren += du.enabled ? `, duplicates on (${found} found, ${checked} pairs checked)` : ", duplicates off";
     }
     return `maintenance: ${issues} structure issue${issues === 1 ? "" : "s"}, ${over} note${over === 1 ? "" : "s"} over threshold (${paren}).`;
+  }
+
+  /**
+   * "maintenance this week: S split, F structure fixes, A archived, D duplicates found, C AI
+   * calls." — one compact line (lib/weekly-report.js, the last 7 days of each of the four
+   * workers' own event logs), only when autoSplit/structure were both handed to createTools()
+   * (same gate as maintenanceLine() above — "" otherwise, so output is unchanged for any caller
+   * that does not wire this in). archive/duplicates/structure are each optional on top of that,
+   * same as maintenanceLine(). Never a secret — only counts.
+   */
+  function weeklyLine() {
+    if (!autoSplit || typeof autoSplit.recentEvents !== "function" || !structure || typeof structure.recentEvents !== "function") return "";
+    const since = weeklyReport.weeklyReportSince(Date.now());
+    const evOf = (w) => (w && typeof w.recentEvents === "function" ? w.recentEvents(since) : []);
+    const wk = weeklyReport.buildWeeklyReport({
+      autoSplitEvents: evOf(autoSplit), structureEvents: evOf(structure), archiveEvents: evOf(archive), duplicatesEvents: evOf(duplicates),
+    });
+    return `maintenance this week: ${wk.notesSplit} split, ${wk.structureFixes} structure fix${wk.structureFixes === 1 ? "" : "es"}, `
+      + `${wk.sectionsArchived} archived, ${wk.duplicatesFound} duplicate${wk.duplicatesFound === 1 ? "" : "s"} found, ${wk.aiCalls} AI call${wk.aiCalls === 1 ? "" : "s"}.`;
   }
 
   function memory_core(args) {
@@ -712,7 +738,9 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     const hubIds = hubEntryIds(entries, idx.title);
     const built = memoryCore.buildMemoryCore({ cwd, projectHints, tree, entries, notesById, coreMap, budgetTokens, hubIds, dataDir });
     const ml = maintenanceLine();
-    const text = ml ? built.text.replace(/\n*$/, "\n") + ml + "\n" : built.text;
+    const wl = weeklyLine();
+    const tail = [ml, wl].filter(Boolean).join("\n");
+    const text = tail ? built.text.replace(/\n*$/, "\n") + tail + "\n" : built.text;
     if (format === "json") return jsonResult({ ...built.meta, text });
     return textResult(text);
   }
