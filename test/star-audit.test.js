@@ -773,3 +773,11 @@ test("audit: R6 is skipped entirely when the index has no archive-matching headi
   const notes2 = [rec("MEMORY", "---\ntitle: MEMORY\n---\n\n## Archive A\n- [[x]] — x\n\n## Archive B\n- [[y]] — y\n"), rec("x", "---\ntitle: x\n---\n\nBody.\n"), rec("y", "---\ntitle: y\n---\n\nBody.\n")];
   assert.ok(!star.audit({ notes: notes2, indexId: "MEMORY" }).some((i) => i.rule === "R6"));
 });
+
+test("buildFix append-index-section-line is idempotent: no second index line for a note already linked (0.5.8, seen in production)", () => {
+  const idx = rec("MEMORY", "---\ntitle: MEMORY\n---\n\n## Me & family\n- [[kite]] — the kite trip\n\n## Work\n- [[w]] — w\n");
+  const byId = new Map([["MEMORY", idx]]);
+  assert.strictEqual(star.buildFix({ type: "append-index-section-line", index: "MEMORY", section: "Me & family", note: "kite", hook: "again" }, byId), null);
+  const ok = star.buildFix({ type: "append-index-section-line", index: "MEMORY", section: "Work", note: "other", hook: "new" }, byId);
+  assert.ok(ok && /- \[\[other\]\] — new/.test(ok.after));
+});

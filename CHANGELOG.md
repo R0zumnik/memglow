@@ -28,6 +28,10 @@
   before any AI call, whenever one slug is a `-`-bounded prefix of the other's, or both notes
   declare the same `part_of` and one slug starts with the other's.
 
+- **Structure guardian: placing an orphan in the index is idempotent** (`lib/star-audit.js`): an
+  `append-index-section-line` fix is a no-op when the index already links to that note — seen in
+  production, the same orphan was placed on two consecutive daily scans.
+
 ## 0.5.7 — 2026-10-29
 
 ### Fixed
