@@ -41,6 +41,13 @@ test("duplicatesSettings: off by default, env MEMGLOW_AUTO_DUPLICATES=1 / MEMGLO
   assert.strictEqual(merge.autoMerge, true);
 });
 
+test("duplicatesSettings: scanHours defaults to weekly (168), not the daily 24 other workers inherit, and stays configurable", () => {
+  const def = dup.duplicatesSettings({}, {});
+  assert.strictEqual(def.scanHours, 168);
+  const custom = dup.duplicatesSettings({ scanHours: 48 }, {});
+  assert.strictEqual(custom.scanHours, 48, "maintenance.duplicates.scanHours overrides the default");
+});
+
 test("findDuplicatePairs: cheap title/description overlap, deduped, ranked", () => {
   const notes = [
     { id: "coffee-a", label: "Espresso Grind Timing Notes", description: "Grind size and timing notes for espresso brewing" },
