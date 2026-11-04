@@ -1,8 +1,10 @@
 "use strict";
 // SessionStart hook (hooks/memglow-session-core.js): calls memory_core and prints the hook JSON
 // (hookSpecificOutput.additionalContext) — and, above everything else, FAILS OPEN on any problem
-// (server down, bad token, malformed answer, timeout): nothing printed, exit 0, never a broken
-// session. parseBody/gitHint are tested directly; the rest is end-to-end, as a real subprocess.
+// reaching/using memory_core (server down, bad token, malformed answer, timeout): the short
+// UNREACHABLE_MESSAGE is printed instead (0.5.10 — never the whole index, and never nothing),
+// exit 0, never a broken session. parseBody/gitHint are tested directly; the rest is end-to-end,
+// as a real subprocess.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("fs");
@@ -11,7 +13,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 const { createMemoryServer } = require("../memory-server/memglow-memory-server");
 const { createHttpServer } = require("../memory-server/http");
-const { parseBody, gitHint, remainingFetchTimeoutMs, MIN_FETCH_TIMEOUT_MS, EXIT_MARGIN_MS, HARD_TIMEOUT_MS } = require("../hooks/memglow-session-core");
+const { parseBody, gitHint, remainingFetchTimeoutMs, MIN_FETCH_TIMEOUT_MS, EXIT_MARGIN_MS, HARD_TIMEOUT_MS, UNREACHABLE_MESSAGE } = require("../hooks/memglow-session-core");
 const { makeKb } = require("./fixtures/memory-kb");
 
 const HOOK = path.join(__dirname, "..", "hooks", "memglow-session-core.js");
@@ -73,40 +75,49 @@ test("gitHint: a non-repo folder (or a missing git binary) returns \"\", never t
 });
 
 // ---------------------------------------------------------------------------------------------
-// Fail-open: every one of these must print NOTHING and exit 0.
+// Fail-open (0.5.10): every one of these must print the short UNREACHABLE_MESSAGE as
+// additionalContext — never nothing, and never anything resembling the full memory index (this
+// hook has no code path that reads the index note directly, so that can never actually happen;
+// the check is a regression guard, not a close call).
 
-test("fail open: no server listening at all", async () => {
+/** Every fail-open assertion shares this shape: exit 0, the hook JSON, exactly UNREACHABLE_MESSAGE
+ * as additionalContext, and nothing index-shaped in it. */
+function assertUnreachable(r) {
+  assert.strictEqual(r.code, 0);
+  const parsed = JSON.parse(r.out);
+  assert.strictEqual(parsed.hookSpecificOutput.hookEventName, "SessionStart");
+  assert.strictEqual(parsed.hookSpecificOutput.additionalContext, UNREACHABLE_MESSAGE);
+  assert.doesNotMatch(parsed.hookSpecificOutput.additionalContext, /# Memory index|## Index|Expand:/, "never the whole index, even a hint of its own shape");
+}
+
+test("fail open (0.5.10): no server listening at all", async () => {
   const r = await run({ MEMGLOW_MEMORY_URL: "http://127.0.0.1:1", MEMGLOW_MEMORY_CORE_TIMEOUT_MS: "1200" }, "{}");
-  assert.strictEqual(r.code, 0);
-  assert.strictEqual(r.out, "");
+  assertUnreachable(r);
 });
 
-test("fail open: malformed stdin JSON", async () => {
+test("fail open (0.5.10): malformed stdin JSON", async () => {
   const r = await run({ MEMGLOW_MEMORY_URL: "http://127.0.0.1:1", MEMGLOW_MEMORY_CORE_TIMEOUT_MS: "1200" }, "not json at all");
-  assert.strictEqual(r.code, 0);
-  assert.strictEqual(r.out, "");
+  assertUnreachable(r);
 });
 
-test("fail open: no stdin at all", async () => {
+test("fail open (0.5.10): no stdin at all", async () => {
   const r = await run({ MEMGLOW_MEMORY_URL: "http://127.0.0.1:1", MEMGLOW_MEMORY_CORE_TIMEOUT_MS: "1200" });
-  assert.strictEqual(r.code, 0);
-  assert.strictEqual(r.out, "");
+  assertUnreachable(r);
 });
 
-test("fail open: the hard timeout always wins, even against a server that never answers", async () => {
+test("fail open (0.5.10): the hard timeout always wins, even against a server that never answers", async () => {
   const srv = require("http").createServer(() => { /* never responds */ });
   await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
   try {
     const url = `http://127.0.0.1:${srv.address().port}`;
     const t0 = Date.now();
     const r = await run({ MEMGLOW_MEMORY_URL: url, MEMGLOW_MEMORY_CORE_TIMEOUT_MS: "1000" }, "{}");
-    assert.strictEqual(r.code, 0);
-    assert.strictEqual(r.out, "");
-    assert.ok(Date.now() - t0 < 4000, "the hard timeout, not the test runner's own patience, ended this");
+    assertUnreachable(r);
+    assert.ok(Date.now() - t0 < 4000, "the fetch's own AbortSignal, not the test runner's own patience, ended this");
   } finally { srv.close(); }
 });
 
-test("fail open: wrong bearer token (401) against a real memory server", async () => {
+test("fail open (0.5.10): wrong bearer token (401) against a real memory server", async () => {
   const kb = makeKb();
   const memSrv = createMemoryServer({ root: kb.root, watch: false, pollMs: 0, maxFileBytes: 200 * 1024 });
   const httpSrv = createHttpServer({ rpc: memSrv.rpc, store: memSrv.store, token: "the-real-token-0123456789" });
@@ -114,8 +125,7 @@ test("fail open: wrong bearer token (401) against a real memory server", async (
   try {
     const url = `http://127.0.0.1:${httpSrv.address().port}`;
     const r = await run({ MEMGLOW_MEMORY_URL: url, MEMGLOW_MEMORY_TOKEN: "wrong-token", MEMGLOW_MEMORY_CORE_TIMEOUT_MS: "2000" }, "{}");
-    assert.strictEqual(r.code, 0);
-    assert.strictEqual(r.out, "");
+    assertUnreachable(r);
   } finally { httpSrv.closeAllConnections(); httpSrv.close(); memSrv.close(); kb.cleanup(); }
 });
 

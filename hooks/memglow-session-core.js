@@ -8,10 +8,15 @@
  * project hub(s) plus a tiny global index, instead of the whole memory index note.
  *
  * FAILS OPEN, ALWAYS: any problem at all — memory-server not running, bad/missing token, a
- * timeout, a malformed answer, an unexpected tool result shape, even an uncaught exception —
- * ends with this hook printing NOTHING and exiting 0. A session must never fail, or even look
- * different, just because this optional optimisation could not run; nothing here ever throws out
- * to the caller, and nothing here is more than a few seconds slower than not having it at all.
+ * timeout, a malformed answer, an unexpected tool result shape — ends with this hook printing
+ * ONE short line ("memglow unreachable — use search_notes when it is back", UNREACHABLE_MESSAGE
+ * below) as the session's additionalContext, never the whole memory index (this hook has no
+ * local fallback that reads the index note directly, by design — a silent session used to leave
+ * the assistant with no idea memglow even exists; the short line at least tells it what to do
+ * instead of a cold, expensive full re-index). A session must never fail, or even look different
+ * in any OTHER way, just because this optional optimisation could not run; an uncaught exception
+ * anywhere above printing that one line still ends in exiting 0 with nothing printed, and nothing
+ * here is more than a few seconds slower than not having it at all.
  *
  * Configuration (environment of the Claude Code session):
  *   MEMGLOW_MEMORY_URL     the memory server's base URL          (default http://127.0.0.1:8000)
@@ -43,6 +48,11 @@ const HARD_TIMEOUT_MS = Number(process.env.MEMGLOW_MEMORY_CORE_TIMEOUT_MS) > 0 ?
 // (JSON.stringify, the write, exiting) so the outer safety timer is never the one that fires.
 const MIN_FETCH_TIMEOUT_MS = 300;
 const EXIT_MARGIN_MS = 150;
+// 0.5.10: printed as `additionalContext` whenever memory_core could not be reached/answered at
+// all (down, timed out, bad token, malformed answer) — instead of printing nothing. Tells the
+// assistant to use search_notes on demand rather than, say, going to read the whole index note
+// itself to compensate for the missing context.
+const UNREACHABLE_MESSAGE = "memglow unreachable — use search_notes when it is back";
 const START_MS = Date.now();
 /** Milliseconds actually left of HARD_TIMEOUT_MS right now, floored at MIN_FETCH_TIMEOUT_MS. */
 function remainingFetchTimeoutMs(nowFn = Date.now) {
@@ -118,8 +128,16 @@ async function run() {
   try { const payload = JSON.parse(stdinRaw); if (payload && typeof payload.cwd === "string" && payload.cwd.trim()) cwd = payload.cwd.trim(); } catch { /* keep process.cwd() */ }
   const remote = gitHint(cwd);
   const project = [remote, path.basename(cwd)].filter(Boolean);
-  const additionalContext = await callMemoryCore({ cwd, project, fetchTimeoutMs: remainingFetchTimeoutMs() });
-  if (!additionalContext) return; // fail open: print nothing
+  // 0.5.10: a reachability problem (down, timed out, bad token, malformed answer) is handled
+  // HERE, not by the outer safety net below — callMemoryCore() returning null, or even throwing
+  // (e.g. ECONNREFUSED, or the fetch's own AbortSignal firing), both fall back to the same short
+  // UNREACHABLE_MESSAGE instead of printing nothing. The outer try/catch stays reserved for a
+  // truly unexpected failure (stdin/git/JSON machinery itself) — "fails open" there still means
+  // nothing printed, never a broken session.
+  let additionalContext;
+  try { additionalContext = await callMemoryCore({ cwd, project, fetchTimeoutMs: remainingFetchTimeoutMs() }); }
+  catch { additionalContext = null; }
+  if (!additionalContext) additionalContext = UNREACHABLE_MESSAGE;
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: "SessionStart", additionalContext },
   }));
@@ -132,4 +150,4 @@ if (require.main === module) {
   run().catch(() => { /* fail open: nothing printed */ }).finally(() => { finished = true; clearTimeout(safety); process.exit(0); });
 }
 
-module.exports = { parseBody, gitHint, readStdin, callMemoryCore, remainingFetchTimeoutMs, MIN_FETCH_TIMEOUT_MS, EXIT_MARGIN_MS, HARD_TIMEOUT_MS };
+module.exports = { parseBody, gitHint, readStdin, callMemoryCore, remainingFetchTimeoutMs, MIN_FETCH_TIMEOUT_MS, EXIT_MARGIN_MS, HARD_TIMEOUT_MS, UNREACHABLE_MESSAGE };
