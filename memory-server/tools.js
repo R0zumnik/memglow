@@ -722,14 +722,23 @@ function createTools({ store, project = store.project, readOnly = true, startedA
       + `${wk.sectionsArchived} archived, ${wk.duplicatesFound} duplicate${wk.duplicatesFound === 1 ? "" : "s"} found, ${wk.aiCalls} AI call${wk.aiCalls === 1 ? "" : "s"}.`;
   }
 
-  function memory_core(args) {
-    const format = fmtOf(args.output_format);
-    const idx = findIndexNote();
-    if (!idx) return noIndexResult(format);
-    const cwd = str(args.cwd, "");
-    const projectHints = Array.isArray(args.project) ? args.project.map((x) => str(x)).filter(Boolean)
-      : (typeof args.project === "string" && args.project.trim() ? [args.project.trim()] : []);
-    const budgetTokens = int(args.budget_tokens, 1500, { min: 100, max: 20000, name: "budget_tokens" });
+  /**
+   * memory_core cache (0.5.10): the full build (hub-spoke detect() over EVERY note, index-tree
+   * parse, matchHub, truncateToBudget…) measured 130-260 ms in production, almost entirely re-done
+   * identically at every session start — same cwd, same budget, same notes. Keyed by the inputs
+   * that can change the BUILT text (idx.title covers "which index note", plus cwd/projectHints/
+   * budgetTokens — coreMap is fixed per server so folding it in is belt-and-suspenders, not load-
+   * bearing) and bucketed by `store.version()` (lib/store/store.js: a monotonic counter already
+   * bumped on every scan/event-apply/direct write — cheap to read, `fresh()` is a no-op once
+   * loaded). A version change invalidates the WHOLE cache at once (every old entry was built from
+   * notes that no longer reflect the store) rather than tracking per-key staleness. Capped so a
+   * server fielding many distinct cwd/project combos never grows this unboundedly between writes.
+   */
+  let coreCacheVersion = -1;
+  let coreCacheMap = new Map();
+  const CORE_CACHE_MAX = 50;
+
+  function buildCoreUncached({ idx, cwd, projectHints, budgetTokens }) {
     const tree = indexTree.parseIndexTree(idx.raw);
     const entries = tree.groups.flatMap((g) => g.entries);
     const notesById = new Map();
@@ -740,10 +749,48 @@ function createTools({ store, project = store.project, readOnly = true, startedA
       if (typeof slug === "string" && !notesById.has(slug)) { const n = store.resolve(slug); if (n) notesById.set(slug, n); }
     }
     const hubIds = hubEntryIds(entries, idx.title);
-    const built = memoryCore.buildMemoryCore({ cwd, projectHints, tree, entries, notesById, coreMap, budgetTokens, hubIds, dataDir });
-    const ml = maintenanceLine();
-    const wl = weeklyLine();
-    const tail = [ml, wl].filter(Boolean).join("\n");
+    return memoryCore.buildMemoryCore({ cwd, projectHints, tree, entries, notesById, coreMap, budgetTokens, hubIds, dataDir });
+  }
+
+  function cachedCore({ idx, cwd, projectHints, budgetTokens }) {
+    const v = store.version();
+    if (v !== coreCacheVersion) { coreCacheMap.clear(); coreCacheVersion = v; }
+    const key = JSON.stringify([idx.title, cwd, projectHints, budgetTokens, coreMap]);
+    const hit = coreCacheMap.get(key);
+    if (hit) return hit;
+    const built = buildCoreUncached({ idx, cwd, projectHints, budgetTokens });
+    if (coreCacheMap.size >= CORE_CACHE_MAX) coreCacheMap.clear();
+    coreCacheMap.set(key, built);
+    return built;
+  }
+
+  // The maintenance/weekly tail: its own inputs (autoSplit/structure/archive/duplicates status(),
+  // the last 7 days of each worker's event log) do not move with the store's note `version()` —
+  // re-reading them on every call bought nothing when memory_core is hit repeatedly within the
+  // same minute. Re-read at most every 60 s; a cache hit only ever returns text up to 60 s stale.
+  const CORE_TAIL_MAX_AGE_MS = 60000;
+  let coreTailCache = { at: -Infinity, text: "" };
+
+  function cachedTail() {
+    const now = Date.now();
+    if (now - coreTailCache.at > CORE_TAIL_MAX_AGE_MS) {
+      const ml = maintenanceLine();
+      const wl = weeklyLine();
+      coreTailCache = { at: now, text: [ml, wl].filter(Boolean).join("\n") };
+    }
+    return coreTailCache.text;
+  }
+
+  function memory_core(args) {
+    const format = fmtOf(args.output_format);
+    const idx = findIndexNote();
+    if (!idx) return noIndexResult(format);
+    const cwd = str(args.cwd, "");
+    const projectHints = Array.isArray(args.project) ? args.project.map((x) => str(x)).filter(Boolean)
+      : (typeof args.project === "string" && args.project.trim() ? [args.project.trim()] : []);
+    const budgetTokens = int(args.budget_tokens, 1500, { min: 100, max: 20000, name: "budget_tokens" });
+    const built = cachedCore({ idx, cwd, projectHints, budgetTokens });
+    const tail = cachedTail();
     const text = tail ? built.text.replace(/\n*$/, "\n") + tail + "\n" : built.text;
     if (format === "json") return jsonResult({ ...built.meta, text });
     return textResult(text);

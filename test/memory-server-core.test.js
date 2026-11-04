@@ -179,3 +179,41 @@ test("memory_core (0.5.6): the maintenance line also names archive/duplicates on
     srv.close();
   } finally { kb.cleanup(); }
 });
+
+// 0.5.10: memory_core cache (memory-server/tools.js) — the full build (hub-spoke detect() over
+// every note, index-tree parse, matchHub, truncateToBudget…) is now cached per (idx.title, cwd,
+// projectHints, budgetTokens, coreMap), invalidated as a whole whenever store.version() changes.
+
+test("memory_core cache: two back-to-back calls with the same args return byte-identical text (a cache hit)", () => {
+  const kb = makeHubKb();
+  try {
+    const srv = createMemoryServer({ root: kb.root, watch: false, pollMs: 0 });
+    const args = { cwd: "/home/x/projects/hub-acme", project: ["acme"] };
+    const first = srv.tools.call("memory_core", args).content[0].text;
+    const second = srv.tools.call("memory_core", args).content[0].text;
+    assert.strictEqual(second, first);
+    assert.match(first, /The project hub itself/);
+    srv.close();
+  } finally { kb.cleanup(); }
+});
+
+test("memory_core cache: a note write invalidates it — the next call (same args) sees the new content", () => {
+  const kb = makeHubKb();
+  try {
+    const srv = createMemoryServer({ root: kb.root, watch: false, pollMs: 0 });
+    const args = { cwd: "/home/x/projects/hub-acme", project: ["acme"] };
+    const before = srv.tools.call("memory_core", args).content[0].text;
+    assert.doesNotMatch(before, /brand-new marker text/);
+
+    // Change the matched hub note on disk, then apply it the same way the real file watcher
+    // would (watch is off in this test, so refreshNote() stands in for the watcher event).
+    const hubPath = path.join(kb.root, "projects", "hub-acme.md");
+    fs.appendFileSync(hubPath, "\nbrand-new marker text appended after the first read.\n");
+    assert.strictEqual(srv.store.refreshNote("projects/hub-acme.md"), true);
+
+    const after = srv.tools.call("memory_core", args).content[0].text;
+    assert.notStrictEqual(after, before);
+    assert.match(after, /brand-new marker text/);
+    srv.close();
+  } finally { kb.cleanup(); }
+});
