@@ -187,6 +187,47 @@ test("control.js: controlRenderMaintenanceWorkers (0.5.4) — auto-split/structu
   assert.match(offHtml, /Structure guardian: on — 1 issue found/);
 });
 
+test("control.js: controlRenderMaintenanceWorkers (0.5.10) — the structure issue sample, collapsible, silent when empty/absent/disabled", () => {
+  const T = controlPage.defaultControlT;
+  // No issueList at all (an older memory server): no collapsible block, no crash.
+  const noList = controlPage.controlRenderMaintenanceWorkers({
+    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: true, issues: 1 },
+  }, T);
+  assert.doesNotMatch(noList, /Structure issues/);
+  assert.doesNotMatch(noList, /<details/);
+
+  // Enabled with issues: a collapsed <details> list, one <li> per issue, fixable vs needs-review
+  // worded differently, escaped (never raw HTML from a note's own title/detail).
+  const html = controlPage.controlRenderMaintenanceWorkers({
+    configured: true, ok: true, autoSplit: { enabled: false },
+    structure: {
+      enabled: true, issues: 2,
+      issueList: [
+        { rule: "R3", note: "hub<script>", detail: 'missing "## Parts" line for part "spoke"', fixable: true },
+        { rule: "R5", note: "orphan", detail: "not in the index, not a part, not named in any hub's \"## Parts\"", fixable: false },
+      ],
+    },
+  }, T);
+  assert.match(html, /Structure issues/);
+  assert.match(html, /<details class="mg-control__advanced"><summary>Structure issues<\/summary>/);
+  assert.match(html, /R3 — hub&lt;script&gt;: missing &quot;## Parts&quot; line for part &quot;spoke&quot; \(auto-fixable\)/);
+  assert.match(html, /R5 — orphan: not in the index.* \(needs review\)/);
+  assert.doesNotMatch(html, /<script>/);
+
+  // Disabled: never shown even if a stale issueList is still present from before it was turned off.
+  const disabledHtml = controlPage.controlRenderMaintenanceWorkers({
+    configured: true, ok: true, autoSplit: { enabled: false },
+    structure: { enabled: false, issues: 1, issueList: [{ rule: "R5", note: "x", detail: "y", fixable: false }] },
+  }, T);
+  assert.doesNotMatch(disabledHtml, /Structure issues/);
+
+  // Enabled but empty: silent.
+  const emptyHtml = controlPage.controlRenderMaintenanceWorkers({
+    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: true, issues: 0, issueList: [] },
+  }, T);
+  assert.doesNotMatch(emptyHtml, /Structure issues/);
+});
+
 test("control.js: controlRenderMaintenanceWorkers (0.5.4 bug fix) — a worker's lastError becomes a visible warning line, named per worker", () => {
   const T = controlPage.defaultControlT;
   const html = controlPage.controlRenderMaintenanceWorkers({

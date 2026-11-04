@@ -225,10 +225,12 @@ test("HTTP /api/maintenance (0.5.4): the auto-split/structure workers' status, g
     assert.ok(Array.isArray(j.autoSplit.recent));
     // 0.5.5 (C): "r4Verdicts" — the AI's {action,reason} verdict for every R4 issue asked about
     // in the most recent scan (report-only unless structure.ai.allowSiblingLineRemoval).
-    assert.deepStrictEqual(Object.keys(j.structure).sort(), ["ai", "enabled", "issues", "lastError", "lastScanAt", "nextScanAt", "r4Verdicts", "recent"]);
+    assert.deepStrictEqual(Object.keys(j.structure).sort(), ["ai", "enabled", "issueList", "issues", "lastError", "lastScanAt", "nextScanAt", "r4Verdicts", "recent"]);
     assert.strictEqual(j.structure.enabled, true);
     assert.strictEqual(j.structure.lastError, null);
     assert.strictEqual(typeof j.structure.issues.total, "number");
+    // 0.5.10: the issues themselves (bounded sample), alongside the counts above.
+    assert.ok(Array.isArray(j.structure.issueList));
     assert.ok(!JSON.stringify(j).includes("SOME_KEY"), "never the api key env var name's value, and no key anywhere in the answer");
   } finally { server.close(); srv.close(); kb.cleanup(); }
 

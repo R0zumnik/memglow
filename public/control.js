@@ -57,6 +57,10 @@ var EN_CONTROL = {
   "control.autoSplitOff": "Auto-split: off",
   "control.structureOn": { one: "Structure guardian: on — {n} issue found", other: "Structure guardian: on — {n} issues found" },
   "control.structureOff": "Structure guardian: off",
+  "control.structureIssuesTitle": "Structure issues",
+  "control.structureIssueLine": "{rule} — {note}: {detail}",
+  "control.structureIssueFixable": "(auto-fixable)",
+  "control.structureIssueNeedsReview": "(needs review)",
   "control.workerAutoSplit": "Auto-split",
   "control.workerStructure": "Structure guardian",
   "control.workerAuthError": "{worker}: stopped — auth error: {message}",
@@ -331,6 +335,19 @@ function controlRenderMaintenanceWorkers(mm, T) {
   if (st.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerStructure"), message: st.lastError.message || "?" })) + '</p>';
   if (ar.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerArchive"), message: ar.lastError.message || "?" })) + '</p>';
   if (du.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerDuplicates"), message: du.lastError.message || "?" })) + '</p>';
+  // 0.5.10: the structure guardian's own issue sample (bounded, GET /api/maintenance's
+  // `structure.issueList`) — collapsed by default, same <details>/<summary> pattern as the
+  // "Token savings" section's "Advanced" lever list, so a long list never pushes the rest of the
+  // maintenance card down by default.
+  var stIssues = st.issueList || [];
+  if (st.enabled && stIssues.length) {
+    out += '<details class="mg-control__advanced"><summary>' + cEsc(T("control.structureIssuesTitle")) + '</summary>' +
+      '<ul class="mg-control__clients">' + stIssues.map(function (it) {
+        var line = T("control.structureIssueLine", { rule: it.rule || "?", note: it.note || "?", detail: it.detail || "" });
+        var status = T(it.fixable ? "control.structureIssueFixable" : "control.structureIssueNeedsReview");
+        return "<li>" + cEsc(line) + " " + cEsc(status) + "</li>";
+      }).join("") + '</ul></details>';
+  }
   // 0.5.6: last scan time (the same generic line the "Memory maintenance" section's own header
   // already uses — no worker name baked into the key, so this stays a plain re-use, not a new
   // text string per worker) and the two detail lists the task asks for: recent archives, and the

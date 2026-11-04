@@ -392,7 +392,7 @@ test("setup: memoryMaintenanceStatus (0.5.4) — not configured, bad answer, a f
     assert.deepStrictEqual(r, {
       configured: true, ok: true,
       autoSplit: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5", keySet: true, pendingCount: 3, lastError: { t: "2026-10-27T12:00:00.000Z", message: "Failed to authenticate. API Error: 401 Invalid bearer token" } },
-      structure: { enabled: false, issues: 2, lastError: null },
+      structure: { enabled: false, issues: 2, issueList: [], lastError: null },
       // 0.5.6: the fake answer above carries no "archive"/"duplicates" at all (an older memory
       // server) — both default to a harmless, fully-off shape, never an error.
       archive: { enabled: false, provider: "", model: "", keySet: false, keepDays: 0, lastScanAt: null, nextScanAt: null, lastError: null, recent: [] },
@@ -445,6 +445,40 @@ test("setup: memoryMaintenanceStatus (0.5.6) — archive/duplicates, bounded and
       recent: [],
     });
     assert.ok(!JSON.stringify(r).includes("sk-ant-should-never-appear") && !JSON.stringify(r).includes("sk-ant-nope"), "only known-safe fields copied through, even inside archive/duplicates");
+  } finally { fake.close(); }
+});
+
+test("setup: memoryMaintenanceStatus (0.5.10) — structure.issueList, bounded to 50 and re-validated field by field, never trusted verbatim from the network", async () => {
+  const fake = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      autoSplit: { enabled: false, provider: "", model: "", keySet: false, pendingCount: 0, lastScanAt: null, nextScanAt: null, recent: [], lastError: null },
+      structure: {
+        enabled: true, ai: { enabled: false, provider: "", model: "" }, issues: { total: 60, fixable: 1, needsReview: 59, byRule: { R5: 60 } },
+        issueList: Array.from({ length: 60 }, (_, i) => ({
+          rule: "R5", note: `orphan-${i}`, detail: "not in the index, not a part, not named in any hub's \"## Parts\"", fixable: false,
+          apiKeyEnv_should_never_leak: "sk-ant-should-never-appear",
+        })),
+        lastScanAt: null, nextScanAt: null, recent: [], lastError: null,
+      },
+    }));
+  });
+  await new Promise((ok) => fake.listen(0, "127.0.0.1", ok));
+  try {
+    const url = `http://127.0.0.1:${fake.address().port}/healthz`;
+    const r = await setup.memoryMaintenanceStatus({ url });
+    assert.strictEqual(r.structure.issueList.length, 50, "bounded to 50 even though the memory server sent 60");
+    assert.deepStrictEqual(r.structure.issueList[0], { rule: "R5", note: "orphan-0", detail: "not in the index, not a part, not named in any hub's \"## Parts\"", fixable: false });
+    assert.ok(!JSON.stringify(r).includes("sk-ant-should-never-appear"), "only rule/note/detail/fixable are ever copied through");
+
+    const srvOld = http.createServer((req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({
+      autoSplit: { enabled: false }, structure: { enabled: true, issues: { total: 0, fixable: 0, needsReview: 0, byRule: {} } },
+    })); });
+    await new Promise((ok) => srvOld.listen(0, "127.0.0.1", ok));
+    try {
+      const old = await setup.memoryMaintenanceStatus({ url: `http://127.0.0.1:${srvOld.address().port}/healthz` });
+      assert.deepStrictEqual(old.structure.issueList, [], "an older memory server with no issueList field: an empty list, never a crash");
+    } finally { srvOld.close(); }
   } finally { fake.close(); }
 });
 

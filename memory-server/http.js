@@ -153,7 +153,7 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
   }
   function maintenanceStatus() {
     const as = autoSplit && autoSplit.status ? autoSplit.status() : { enabled: false, provider: "", model: "", keySet: false, thresholdTokens: 0, pendingCount: 0, lastScanAt: null, nextScanAt: null, lastError: null };
-    const st = structure && structure.status ? structure.status() : { enabled: false, ai: { enabled: false, provider: "", model: "" }, issues: { total: 0, fixable: 0, needsReview: 0, byRule: {} }, lastScanAt: null, nextScanAt: null, lastError: null };
+    const st = structure && structure.status ? structure.status() : { enabled: false, ai: { enabled: false, provider: "", model: "" }, issues: { total: 0, fixable: 0, needsReview: 0, byRule: {} }, issueList: [], lastScanAt: null, nextScanAt: null, lastError: null };
     // 0.5.5 (A, B): same shape/fallback pattern as autoSplit/structure above.
     const ar = archive && archive.status ? archive.status() : { enabled: false, provider: "", model: "", keySet: false, keepDays: 0, lastScanAt: null, nextScanAt: null, lastError: null };
     const du = duplicates && duplicates.status ? duplicates.status() : { enabled: false, autoMerge: false, provider: "", model: "", keySet: false, reported: [], lastScanAt: null, nextScanAt: null, lastError: null };

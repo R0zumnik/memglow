@@ -185,6 +185,34 @@ test("summarize(): counts fixable vs needing review, by rule", () => {
   assert.ok(s.byRule.R5 >= 1);
 });
 
+// 0.5.10: issueList() — the bounded {rule, note, detail, fixable} sample behind `/api/maintenance`'s
+// `structure.issueList` and memory_core/the control panel. Most rules already carry their own
+// human `detail`; R2/R3's deterministic half do not — issueDetail() builds one from `fix` itself.
+test("issueList(): every entry has rule/note/detail/fixable; R2/R3's deterministic half get a detail built from fix(), bounded to ISSUE_LIST_MAX", () => {
+  const notes = [
+    rec("hub", "---\ntitle: hub\n---\n\nNo Parts section.\n"),
+    rec("spoke", "---\ntitle: spoke\npart_of: hub\n---\n\nUp: [[hub]] — part of hub.\n\nBody.\n"),
+    rec("floating", "---\ntitle: floating\n---\n\nNothing links here.\n"),
+  ];
+  const issues = star.audit({ notes, indexId: null });
+  const list = star.issueList(issues);
+  assert.strictEqual(list.length, issues.length);
+  for (const it of list) {
+    assert.strictEqual(typeof it.rule, "string");
+    assert.strictEqual(typeof it.note, "string");
+    assert.strictEqual(typeof it.detail, "string");
+    assert.ok(it.detail.length > 0, `${it.rule}/${it.note}: detail must never be empty`);
+    assert.strictEqual(typeof it.fixable, "boolean");
+  }
+  const r3 = list.find((it) => it.rule === "R3" && it.fixable);
+  assert.ok(r3, "hub is missing the '## Parts' line back to spoke — R3, deterministically fixable");
+  assert.match(r3.detail, /## Parts/);
+
+  // Bounded: feeding more issues than ISSUE_LIST_MAX never grows the list past it.
+  const many = Array.from({ length: star.ISSUE_LIST_MAX + 20 }, (_, i) => ({ rule: "R5", note: `n${i}`, fix: null, detail: "orphan" }));
+  assert.strictEqual(star.issueList(many).length, star.ISSUE_LIST_MAX);
+});
+
 // ------------------------------------------------------------------ the worker, on a real temp KB
 
 function makeSrv(notes) {
@@ -524,8 +552,17 @@ test("createStructureWorker: status() reports issue counts by rule, lastScan/nex
     assert.strictEqual(typeof s.lastScanAt, "number");
     assert.strictEqual(s.nextScanAt, s.lastScanAt + 24 * 3600000);
     assert.strictEqual(s.issues.fixable, 0, "every mechanically-fixable issue converged within one scan");
+    // 0.5.10: issueList mirrors issues.total (both ends of the same final audit(), well under
+    // ISSUE_LIST_MAX here) and every entry is a plain, bounded object.
+    assert.ok(Array.isArray(s.issueList));
+    assert.strictEqual(s.issueList.length, s.issues.total);
+    for (const it of s.issueList) assert.deepStrictEqual(Object.keys(it).sort(), ["detail", "fixable", "note", "rule"]);
     const events = w.recentEvents();
     assert.ok(events.some((e) => e.kind === "fix" && e.note === "loose"));
+
+    // Disabled: status() still answers issueList: [] (never undefined — the inert early-return
+    // shares the same `lastIssueList` closure, defaulted at declaration).
+    assert.deepStrictEqual(off.status().issueList, []);
   } finally { cleanup(); }
 });
 
