@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.10 — 2026-11-04
+
+### Added
+
+- **Structure issue list in `/api/maintenance`** (`lib/star-audit.js`, `memory-server/http.js`,
+  `lib/setup.js`, `public/control.js`): alongside the existing `issues: {total, byRule, …}`
+  counts, the structure guardian's own status now carries `issueList` — a bounded (50) sample of
+  `{rule, note, detail, fixable}`, sorted the same deterministic way `audit()` already sorts
+  issues. Shown in the control panel's "Memory maintenance" card as a collapsible "Structure
+  issues" list (new i18n keys, all 8 languages). Backward compatible: an older memory server that
+  does not send `issueList` yet simply shows an empty one.
+- **Session-start fallback, never silent** (`hooks/memglow-session-core.js`): when `memory_core`
+  cannot be reached or answered at all (server down, timed out, bad token, malformed answer),
+  the SessionStart hook now prints a short `additionalContext` line ("memglow unreachable — use
+  search_notes when it is back") instead of printing nothing. The hook has no code path that
+  reads the whole memory index directly, so this can never turn into a full-index dump either way
+  — the short line just makes that invariant explicit and gives the assistant something to act on
+  instead of total silence.
+
+### Performance
+
+- **`memory_core` result cache** (`memory-server/tools.js`): the full build (hub-spoke `detect()`
+  over every note, index-tree parse, `matchHub`, `truncateToBudget`…) used to run again, from
+  scratch, on every single call — 130-260 ms in production, almost always for the identical
+  answer a session start just got a moment before. Now cached per (index note, `cwd`,
+  `project`, `budget_tokens`, `coreMap`), invalidated as a whole whenever the store's own
+  `version()` changes (any note scanned, written or removed). The maintenance/weekly tail lines
+  are cached separately, re-read at most once every 60 s, since their own inputs do not move with
+  note edits. Measured on a synthetic ~350-note knowledge base, warm: first call ~90-100 ms, every
+  repeat call with the same arguments now ~0.1 ms (previously ~33-125 ms on EVERY call, no
+  benefit from repetition at all).
+
 ## 0.5.9 — 2026-11-03
 
 ### Added
