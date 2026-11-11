@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.11 — 2026-11-11
+
+### Added
+
+- **CI on every push and pull request** (`.github/workflows/ci.yml`): `npm test` on Node 22 and 24,
+  with a second run in the Node 24 job to surface flakiness. Releases (tag-triggered) are unchanged.
+- **Real-bundle page test** (`test/page-bundle.test.js`): loads the vendored
+  `public/vendor/memglow-graph.js` in a `vm` context (no WebGL), asserts every `THREE.X` used by
+  `public/*.js` is exported by it, and instantiates the classes the page constructs. The hand-written
+  fake three.js in `page-smoke` cannot catch a class the bundle lacks; this test does.
+- **Structure rule R7, invalid theme** (`lib/star-audit.js`): a note whose frontmatter `theme` is
+  outside `structure.themes` (default `family, work, home, tech, archive`; an array, or an object
+  whose keys are the themes; the index's own top-level section names also count) is reported with a
+  suggested fix (the valid theme of its `sous_theme` siblings or of its hub). R5, R3 and R6 never
+  place such a note, by the AI or otherwise (report only).
+
+### Changed
+
+- **R5 / ambiguous R3 placement is deterministic first**: hubs with the same valid theme AND the same
+  `sous_theme`; exactly one means attach with no AI call. Otherwise the AI is offered at most 3
+  candidates (same theme, ranked by words shared with the title/description).
+- **Those AI verdicts are cached** (`structure-r5-cache.json`, key = sha1(note text) + sha1(sorted
+  candidate ids)) and counted in the weekly report as `ai-call` / `cache-reused`, like R4 and R6.
+
+### Fixed
+
+- A note with an invalid theme (e.g. `housing`) listed in the index Archive section was moved by the AI
+  into the wrong index section.
+
 ## 0.5.10 — 2026-11-04
 
 ### Added

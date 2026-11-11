@@ -866,3 +866,93 @@ test("buildFix append-index-section-line is idempotent: no second index line for
   const ok = star.buildFix({ type: "append-index-section-line", index: "MEMORY", section: "Work", note: "other", hook: "new" }, byId);
   assert.ok(ok && /- \[\[other\]\] — new/.test(ok.after));
 });
+
+// ------------------------------------------------------------------ 0.5.11 — theme guard (R7), R5/R3 determinism + cache
+
+function fmNote(title, extra = "", body = "Body.\n") { return `---\ntitle: ${title}\n${extra}---\n\n${body}`; }
+function hubNote(title, theme, sous, part) {
+  return fmNote(title, `description: Hub about ${title} things\ntheme: ${theme}\nsous_theme: ${sous}\n`, `## Parts\n- [[${part}]] — part\n`);
+}
+function partNote(title, hub) { return fmNote(title, `part_of: ${hub}\n`, `Up: [[${hub}]] — part of ${hub}.\n\nBody.\n`); }
+
+test("R7 (0.5.11): theme \"housing\" listed in the index Archive section — reported with R7, and R6 neither moves it deterministically nor asks the AI", async () => {
+  const idx = "---\ntitle: MEMORY\n---\n\n## Family\n- [[fam1]] — f\n\n## Home\n- [[home1]] — h\n- [[house-buy]] — buying\n\n## Archive (stopped)\n- [[rental]] — the rental building purchase\n";
+  const { srv, cleanup, root } = makeSrv({
+    "memory/MEMORY.md": idx,
+    "memory/fam1.md": fmNote("fam1", "theme: family\n"),
+    "memory/home1.md": fmNote("home1", "theme: home\n"),
+    "memory/house-buy.md": fmNote("house-buy", "theme: housing\nsous_theme: rental-building-purchase\n"),
+    "memory/rental.md": fmNote("rental", "theme: housing\nsous_theme: rental-building-purchase\n"),
+  });
+  try {
+    const before = fs.readFileSync(path.join(root, "memory/MEMORY.md"), "utf8");
+    let calls = 0;
+    const w = star.createStructureWorker({ store: srv.store, writer: srv.writer, config: { enabled: true, ai: { enabled: true } }, aiRun: async () => { calls++; return { ok: true, text: '{"action":"move","section":"Home","reason":"x"}' }; } });
+    await w.scanOnce();
+    assert.strictEqual(calls, 0, "no AI call for an invalid-theme note");
+    assert.strictEqual(fs.readFileSync(path.join(root, "memory/MEMORY.md"), "utf8"), before, "the index is untouched");
+    const r7 = w.status().issueList.filter((i) => i.rule === "R7").map((i) => i.note).sort();
+    assert.deepStrictEqual(r7, ["house-buy", "rental"]);
+    assert.match(w.status().issueList.find((i) => i.rule === "R7").detail, /invalid theme "housing"/);
+    assert.ok(w.status().issueList.some((i) => i.rule === "R6" && /not placed/.test(i.detail)), "R6 still reports it");
+  } finally { cleanup(); }
+});
+
+test("R7 (0.5.11): suggestion from the sous_theme's other notes or the hub; configurable themes; valid and theme-less notes are not flagged", () => {
+  const notes = [
+    rec("MEMORY", "---\ntitle: MEMORY\n---\n\n## Foo\n- [[a]]\n- [[b]]\n- [[c]]\n- [[d]]\n- [[e]]\n"),
+    rec("a", fmNote("a", "theme: housing\nsous_theme: s1\n")), rec("b", fmNote("b", "theme: home\nsous_theme: s1\n")),
+    rec("c", fmNote("c", "theme: tech\n")), rec("d", fmNote("d")), rec("e", fmNote("e", "theme: Foo\n")),
+  ];
+  const r7 = star.audit({ notes, indexId: "MEMORY" }).filter((i) => i.rule === "R7");
+  assert.deepStrictEqual(r7.map((i) => i.note), ["a"], "index section names (case-insensitive) count as valid themes");
+  assert.strictEqual(r7[0].suggest, "home");
+  assert.match(r7[0].detail, /suggested fix: theme: home/);
+  assert.strictEqual(star.audit({ notes, indexId: "MEMORY", themes: ["housing", "home", "tech"] }).filter((i) => i.rule === "R7").length, 0);
+  assert.deepStrictEqual(star.structureSettings({}, {}).themes, ["family", "work", "home", "tech", "archive"]);
+  assert.deepStrictEqual(star.structureSettings({ themes: { a: "A", b: "B" } }, {}).themes, ["a", "b"]);
+});
+
+function makeHubsKb(extraHubs = 0) {
+  const files = {
+    "memory/MEMORY.md": "---\ntitle: MEMORY\n---\n\n## Tech\n- [[hub-a]] — a\n- [[hub-b]] — b\n" + Array.from({ length: extraHubs }, (_, i) => `- [[hub-x${i}]] — x\n`).join(""),
+    "memory/hub-a.md": hubNote("hub-a", "tech", "nas", "pa"), "memory/pa.md": partNote("pa", "hub-a"),
+    "memory/hub-b.md": hubNote("hub-b", "tech", "network", "pb"), "memory/pb.md": partNote("pb", "hub-b"),
+    "memory/orphan.md": fmNote("orphan", "description: nas backup notes\ntheme: tech\nsous_theme: nas\n"),
+  };
+  for (let i = 0; i < extraHubs; i++) { files[`memory/hub-x${i}.md`] = hubNote(`hub-x${i}`, "tech", "nas", `px${i}`); files[`memory/px${i}.md`] = partNote(`px${i}`, `hub-x${i}`); }
+  return makeSrv(files);
+}
+
+test("R5 (0.5.11): exactly one hub with the same theme AND sous_theme — attached deterministically, 0 AI calls", async () => {
+  const { srv, cleanup, root } = makeHubsKb();
+  try {
+    let calls = 0;
+    const w = star.createStructureWorker({ store: srv.store, writer: srv.writer, config: { enabled: true, ai: { enabled: true } }, aiRun: async () => { calls++; return { ok: true, text: '{"action":"leave"}' }; } });
+    await w.scanOnce();
+    assert.strictEqual(calls, 0);
+    assert.match(fs.readFileSync(path.join(root, "memory/orphan.md"), "utf8"), /part_of: hub-a/);
+    assert.match(fs.readFileSync(path.join(root, "memory/hub-a.md"), "utf8"), /\[\[orphan\]\]/);
+    assert.ok(!w.status().issueList.some((i) => i.rule === "R5"));
+  } finally { cleanup(); }
+});
+
+test("R5 (0.5.11): ambiguous candidates — the AI sees at most 3 hubs, and its verdict is cached across a worker restart (0 extra calls, one cache-reused event)", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-r5-cache-"));
+  const { srv, cleanup } = makeHubsKb(3); // hub-a + 3 more hubs share theme tech / sous_theme nas
+  try {
+    let calls = 0; const prompts = [];
+    const aiRun = async (p) => { calls++; prompts.push(p); return { ok: true, text: '{"action":"leave"}' }; };
+    const cfg = { enabled: true, ai: { enabled: true, maxDecisionsPerScan: 10 } };
+    const w1 = star.createStructureWorker({ store: srv.store, writer: srv.writer, dataDir, config: cfg, aiRun });
+    await w1.scanOnce(); w1.stop();
+    assert.strictEqual(calls, 1);
+    assert.ok(prompts[0].split("\n").filter((l) => /^- hub-/.test(l)).length <= 3, "at most 3 candidate hubs");
+    assert.ok(w1.recentEvents(0).some((e) => e.kind === "ai-call"));
+    const w2 = star.createStructureWorker({ store: srv.store, writer: srv.writer, dataDir, config: cfg, aiRun });
+    await w2.scanOnce();
+    assert.strictEqual(calls, 1, "cached across the restart");
+    assert.strictEqual(w2.recentEvents(0).filter((e) => e.kind === "cache-reused").length, 1);
+    assert.strictEqual(w2.recentEvents(0).filter((e) => e.kind === "ai-call").length, 1, "still only the first scan event (the log persists)");
+  } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
