@@ -1,8 +1,8 @@
 "use strict";
 // memglow memory server (stage 0.4.5.2, writes enabled) behind the memglow MCP proxy: write_note
 // and edit_note answers go through untouched, the duplicateHint lever (enabled) adds its line,
-// sizeWarning sees the fresh size of a note a write just made large, and alreadyLoaded stops
-// stubbing a note once a write changed it.
+// sizeWarning sees the fresh size of a note a write just made large, and a re-read after
+// a write to the index note sees the new text.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("fs");
@@ -71,17 +71,15 @@ test("through the proxy: sizeWarning uses the fresh size of the note a write jus
   } finally { s.done(); }
 });
 
-test("through the proxy: alreadyLoaded stubs the index note, and stops once a write changed it", async () => {
-  const s = await setup({ MEMGLOW_PROXY_ALREADY_LOADED: "1" });
+test("through the proxy: a write to the index note is visible at once on the next read", async () => {
+  const s = await setup({});
   try {
-    await s.call("read_note", { identifier: "bob" }); // some activity first (rule 2)
-    const stub = await s.call("read_note", { identifier: "MEMORY" });
-    assert.match(stub[0], /^memglow: "MEMORY" \(≈\d+ tokens\) is already in your context/);
+    const first = await s.call("read_note", { identifier: "MEMORY" });
+    assert.match(first[0], /^---\ntitle: MEMORY/);
     const w = await s.call("edit_note", { identifier: "MEMORY", operation: "append", content: "\n- [[Kayak weekend]] — new entry" });
     assert.match(w[0], /^# Edited note \(append\)/);
     const after = await s.call("read_note", { identifier: "MEMORY" });
-    assert.match(after[0], /^---\ntitle: MEMORY/, "full text, not the stub");
+    assert.match(after[0], /^---\ntitle: MEMORY/, "full text");
     assert.match(after[0], /new entry$/);
-    assert.match(after[after.length - 1], /has changed since the start of this session/);
   } finally { s.done(); }
 });

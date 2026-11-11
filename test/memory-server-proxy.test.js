@@ -1,6 +1,6 @@
 "use strict";
 // memglow memory server (stage 0.4.5.1) behind the memglow MCP proxy (createHttpProxy, upstream =
-// this server): search, multiQuery (`memglow_queries`), read_note and alreadyLoaded keep working.
+// this server): search, multiQuery (`memglow_queries`), read_note keep working.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("fs");
@@ -39,8 +39,8 @@ async function setup(env = {}) {
   };
 }
 
-test("through the proxy (legacy session): tools/list gains memglow_queries, search + multiQuery merge, read_note, alreadyLoaded stub", async () => {
-  const s = await setup({ MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_MULTI_QUERY: "1" });
+test("through the proxy (legacy session): tools/list gains memglow_queries, search + multiQuery merge, read_note, tools.profile minimal", async () => {
+  const s = await setup({ MEMGLOW_PROXY_MULTI_QUERY: "1" });
   try {
     const init = await s.post({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", clientInfo: { name: "claude-code", version: "2" } } });
     const sid = init.headers.get("mcp-session-id");
@@ -49,6 +49,12 @@ test("through the proxy (legacy session): tools/list gains memglow_queries, sear
     const list = await s.post({ jsonrpc: "2.0", id: 1, method: "tools/list" }, H);
     const sn = list.json.result.tools.find((t) => t.name === "search_notes");
     assert.ok(sn.inputSchema.properties.memglow_queries, "proxy lever 9 advertises memglow_queries on our search tool");
+    // 0.6.0 tools.profile "minimal" (default): compat tools are not listed, but still callable by name.
+    const names = list.json.result.tools.map((t) => t.name);
+    for (const hidden of ["schema_infer", "view_note", "read_content", "list_workspaces", "search", "fetch"]) assert.ok(!names.includes(hidden), hidden + " hidden");
+    for (const shown of ["read_note", "search_notes", "write_note", "memory_core", "build_context"]) assert.ok(names.includes(shown), shown + " listed");
+    const viaHidden = await s.post({ jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "list_memory_projects", arguments: {} } }, H);
+    assert.ok(viaHidden.json.result && !viaHidden.json.error, "a hidden tool is still callable by name");
 
     // Plain search: relayed unchanged.
     const plain = await s.post({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "search_notes", arguments: { query: "garden" } } }, H);
@@ -72,11 +78,9 @@ test("through the proxy (legacy session): tools/list gains memglow_queries, sear
     // read_note: a normal note comes back in full.
     const bob = await s.post({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "read_note", arguments: { identifier: "main/memory/people/bob" } } }, H);
     assert.strictEqual(bob.json.result.content[0].text, fs.readFileSync(path.join(s.kb.root, "memory/people/bob.md"), "utf8"));
-    // alreadyLoaded: the index note (MEMORY) is stubbed, memglow_fresh gets it back.
+    // The index note comes back in full.
     const idx = await s.post({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "read_note", arguments: { identifier: "MEMORY" } } }, H);
-    assert.match(idx.json.result.content[0].text, /^memglow: "MEMORY" \(≈\d+ tokens\) is already in your context/);
-    const fresh = await s.post({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "read_note", arguments: { identifier: "MEMORY", memglow_fresh: true } } }, H);
-    assert.match(fresh.json.result.content[0].text, /^---\ntitle: MEMORY/);
+    assert.match(idx.json.result.content[0].text, /^---\ntitle: MEMORY/);
   } finally { s.done(); }
 });
 

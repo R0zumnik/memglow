@@ -13,7 +13,6 @@ const {
   mergeSearchBursts, MULTI_QUERY_GAP_MS, DEFAULT_TURN_TOKENS,
 } = require("../bench/replay.js");
 const { ARG_FRESH, ARG_QUERIES, MULTI_QUERY_MAX, DEFAULTS: LIB_DEFAULTS } = require("../lib/proxy-levers");
-const DR = require("../lib/delta-read");
 
 test("SHIPPED_DEFAULTS (bench/replay.js) never silently drifts from lib/proxy-levers.js DEFAULTS", () => {
   for (const name of LEVER_NAMES) assert.strictEqual(SHIPPED_DEFAULTS[name], LIB_DEFAULTS[name], `lever "${name}"`);
@@ -77,49 +76,6 @@ test("isReachable: an artificially broken lever — a stub with none of the thre
 });
 
 // ---------------------------------------------------------------------------------------------
-// isReachable: lever `deltaRead`'s diff deliveries (0.4.3) — "full text reachable = version A
-// delivered earlier this session + this diff". A REAL check (DR.applyDiff), not the escape-hatch
-// loophole above: a diff that reconstructs the WRONG text is a violation even when its own
-// header also names the escape hatch.
-
-test("isReachable: a valid deltaRead diff, with the matching previousFullText, reconstructs the current note → reachable", () => {
-  const before = "---\npermalink: a\n---\n# Intro\nline one\nline two\nline three\n";
-  const upstreamFull = before.replace("line two", "line two CHANGED");
-  const diff = DR.renderDiff(before, upstreamFull, { context: 2 });
-  const header = `memglow: "a" changed since you read it earlier in this session; only the changes below. Call read_note again with the same arguments plus "${ARG_FRESH}": true for the full text.`;
-  const r = isReachable({ deliveredText: header + "\n" + diff.text, upstreamFull, previousFullHash: null, previousFullText: before, baselineHash: null });
-  assert.strictEqual(r.reachable, true);
-  assert.strictEqual(r.deliveredFull, false);
-  assert.strictEqual(r.reconstructed, true);
-});
-
-test("isReachable: a deltaRead diff WITHOUT its matching previousFullText (version A unknown to this guard) → VIOLATION, even though the header names memglow_fresh", () => {
-  const before = "---\npermalink: a\n---\n# Intro\nline one\nline two\nline three\n";
-  const upstreamFull = before.replace("line two", "line two CHANGED");
-  const diff = DR.renderDiff(before, upstreamFull, { context: 2 });
-  const header = `memglow: changed since you read it earlier; only the changes below. "${ARG_FRESH}": true for the full text.`;
-  const r = isReachable({ deliveredText: header + "\n" + diff.text, upstreamFull, previousFullHash: null, previousFullText: null, baselineHash: null });
-  assert.strictEqual(r.reachable, false, "the escape-hatch text alone must not paper over an unverifiable diff");
-  assert.strictEqual(r.reconstructed, false);
-});
-
-test("isReachable: a deltaRead diff that reconstructs the WRONG text (built against a DIFFERENT previousFullText) → VIOLATION", () => {
-  const beforeReal = "---\npermalink: a\n---\n# Intro\nline one\nline two\nline three\n";
-  const beforeWrong = "---\npermalink: a\n---\n# Intro\nsomething else entirely\nline two\nline three\n";
-  const upstreamFull = beforeReal.replace("line two", "line two CHANGED");
-  // The diff was rendered against `beforeWrong`, but the guard is told the session's version A
-  // was `beforeReal` — a lever bug that mismatched the stored "version A" with the real one.
-  const diff = DR.renderDiff(beforeWrong, upstreamFull.replace("line one", "something else entirely"), { context: 2 });
-  const r = isReachable({ deliveredText: `memglow: ... "${ARG_FRESH}": true ...\n` + diff.text, upstreamFull, previousFullHash: null, previousFullText: beforeReal, baselineHash: null });
-  assert.strictEqual(r.reachable, false);
-});
-
-test("isReachable: delivered in full takes priority even when the text happens to also mention the delta-read marker", () => {
-  const upstreamFull = "---\npermalink: a\n---\nbody " + DR.DELTA_READ_MARKER + " text";
-  const r = isReachable({ deliveredText: "prefix\n" + upstreamFull + "\nsuffix", upstreamFull, previousFullHash: null, previousFullText: null, baselineHash: null });
-  assert.strictEqual(r.reachable, true);
-  assert.strictEqual(r.deliveredFull, true);
-});
 
 // ---------------------------------------------------------------------------------------------
 // Event loading: JSONL/array tool-call format, and the portal's own {evenements:[...]} format.
@@ -254,8 +210,8 @@ test("runConfig: a changed-file case is never stubbed — the read right after a
     { session: "s1", tool: "edit_note", args: { identifier: "a", operation: "append", content: "Added line, now different.\n" } },
     { session: "s1", tool: "read_note", args: { identifier: "a" } },
   ]);
-  // dedupe AND alreadyLoaded both on: if either wrongly stubbed the post-edit read, the guard would catch it.
-  const flags = { ...flagsAllOff(), dedupe: true, alreadyLoaded: true };
+  // dedupe on: if it wrongly stubbed the post-edit read, the guard would catch it.
+  const flags = { ...flagsAllOff(), dedupe: true };
   const res = await runConfig(flags, events, { memoryDir: dir, alwaysLoaded: ["a"] });
   assert.strictEqual(res.violations, 0, JSON.stringify(res.violationDetails));
 });
@@ -269,34 +225,7 @@ test("runConfig: an unresolved note (never on disk) is skipped by the guard, not
 });
 
 // ---------------------------------------------------------------------------------------------
-// The demo table itself: off vs defaults vs +alreadyLoaded over demo/memory + bench/replay-demo.jsonl.
-
-test("demo replay: +alreadyLoaded gives a positive saving on the repeated index reads, with 0 violations everywhere", async () => {
-  const events = loadEvents(DEMO_EVENTS);
-  assert.ok(events.length >= 10, "the demo events file should have a handful of calls across 3 sessions");
-  const configs = namedConfigs([["alreadyLoaded"]]);
-  const results = await Promise.all(configs.map(async (c) => ({ key: c.key, label: c.label, ...(await runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] })) })));
-  const rows = summarize(results);
-  for (const r of rows) assert.strictEqual(r.violations, 0, `${r.key}: ${JSON.stringify(r.violationDetails)}`);
-
-  const off = rows.find((r) => r.key === "off");
-  const already = rows.find((r) => r.key === "+alreadyLoaded");
-  assert.ok(already.tokensTotal < off.tokensTotal, "alreadyLoaded must cut tokens below the off baseline (repeated index reads stubbed)");
-  assert.ok(already.savingsAbs > 0 && already.savingsPct > 0);
-});
-
-test("delta-read replay: +deltaRead saves tokens on bench/replay-delta-read.jsonl (within-session diff + cross-session header), 0 violations everywhere", async () => {
-  const events = loadEvents(path.join(__dirname, "..", "bench", "replay-delta-read.jsonl"));
-  assert.ok(events.length >= 5);
-  const configs = namedConfigs([["deltaRead"]]);
-  const results = await Promise.all(configs.map(async (c) => ({ key: c.key, label: c.label, ...(await runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] })) })));
-  const rows = summarize(results);
-  for (const r of rows) assert.strictEqual(r.violations, 0, `${r.key}: ${JSON.stringify(r.violationDetails)}`);
-
-  const off = rows.find((r) => r.key === "off");
-  const on = rows.find((r) => r.key === "+deltaRead");
-  assert.ok(on.tokensTotal < off.tokensTotal, "deltaRead must cut tokens below the off baseline on this fixture");
-});
+// The demo table itself: off vs defaults over demo/memory + bench/replay-demo.jsonl.
 
 test("withPermalink: adds a permalink line right after the frontmatter fence, matching basic-memory's own convention", () => {
   const out = withPermalink("---\ntitle: x\n---\nbody\n", "folder/x");
@@ -343,17 +272,14 @@ test("eachLeverConfigs: one row per lever, each with every OTHER lever off", () 
   }
 });
 
-test("demo replay: per-lever breakdown — searchDetails/suggestions only ADD tokens alone, dedupe/alreadyLoaded only SAVE, the rest are no-ops on this file (no bursts, no large notes)", async () => {
+test("demo replay: per-lever breakdown — dedupe only SAVEs, the rest are no-ops on this file (no bursts, no large notes)", async () => {
   const events = loadEvents(DEMO_EVENTS);
   const off = { key: "off", flags: flagsAllOff() };
   const results = await Promise.all([off, ...eachLeverConfigs()].map(async (c) => ({ key: c.key, label: c.label || c.key, ...(await runConfig(c.flags, events, { memoryDir: DEMO_MEMORY, alwaysLoaded: [] })) })));
   const rows = summarize(results); // baseline "off" present in `results`, so savingsAbs is a real number
   for (const r of rows) assert.strictEqual(r.violations, 0, `${r.key}: ${JSON.stringify(r.violationDetails)}`);
   const delta = (name) => -rows.find((r) => r.key === "alone:" + name).savingsAbs; // positive = adds
-  assert.ok(delta("searchDetails") > 0, "searchDetails alone adds tokens on the demo file");
-  assert.ok(delta("suggestions") > 0, "suggestions alone adds tokens on the demo file");
   assert.ok(delta("dedupe") < 0, "dedupe alone saves tokens on the demo file");
-  assert.ok(delta("alreadyLoaded") < 0, "alreadyLoaded alone saves tokens on the demo file");
   for (const name of ["sizeWarning", "indexWarning", "toc", "archiveHint", "hideUnsupportedTools", "multiQuery"]) {
     assert.ok(delta(name) === 0, `${name}: nothing on this file triggers it`); // "=== 0" to accept -0 too
   }

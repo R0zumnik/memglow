@@ -126,7 +126,7 @@ test("5: the .trash backup is fsync'd; a moved file's pending fsync follows it",
   } finally { srv.close(); }
 });
 
-test("6: read_note, edit_note and lever 8's check apply a pending outside save first", async () => {
+test("6: read_note, edit_note and the levers' check apply a pending outside save first", async () => {
   const root = tmp("memglow-7-6-");
   fs.mkdirSync(path.join(root, "memory"));
   fs.writeFileSync(path.join(root, "memory", "MEMORY.md"), "# MEMORY\n\nv1 " + "x ".repeat(400) + "\n");
@@ -141,8 +141,8 @@ test("6: read_note, edit_note and lever 8's check apply a pending outside save f
     const e = await call(srv, "edit_note", { identifier: "fresh-one", operation: "append", content: "\nmore" });
     assert.strictEqual(e.result.isError, false, "edit_note finds a note saved a moment ago: " + JSON.stringify(e));
     const idx = srv.aio.lv.index;
-    const h1 = idx.fileHash("MEMORY");
+    const h1 = idx.noteText("MEMORY");
     fs.writeFileSync(path.join(root, "memory", "MEMORY.md"), "# MEMORY\n\nv2 changed\n");
-    assert.notStrictEqual(idx.fileHash("MEMORY"), h1, "lever 8 sees the change at once");
+    assert.notStrictEqual(idx.noteText("MEMORY"), h1, "the levers see the change at once");
   } finally { srv.close(); }
 });

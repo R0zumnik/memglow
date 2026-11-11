@@ -11,7 +11,6 @@ const os = require("os");
 const path = require("path");
 const http = require("http");
 const L = require("../lib/proxy-levers");
-const D = require("../lib/delta-read");
 const { journalChantier } = require("./fixtures/journal-chantier");
 
 const MTIME_MS = Date.UTC(2026, 9, 13); // 2026-10-13, matching the fixture's own "today"
@@ -40,9 +39,8 @@ function setup(fx, env = {}) {
   });
   const index = L.createNoteIndex(cfg);
   const savings = L.createSavings({ ...cfg, savingsFile: false, log: false });
-  const deltaReadStore = D.createDeltaReadStore(cfg);
-  const engine = L.createLevers({ config: cfg, index, savings, deltaReadStore, serverName: "basic-memory" });
-  return { cfg, index, engine, savings, deltaReadStore };
+  const engine = L.createLevers({ config: cfg, index, savings, serverName: "basic-memory" });
+  return { cfg, index, engine, savings };
 }
 
 function read(engine, sid, id, identifier, opts = {}) {
@@ -139,43 +137,6 @@ test("stateView + dedupe: dedupe never fires off a partial (state-viewed) delive
     const r3 = read(engine, "s1", 3, "Chantier Rénovation Grange")(fx.journal); // unchanged, read again
     assert.strictEqual(r3.msg.result.content.length, 1);
     assert.match(r3.msg.result.content[0].text, /^memglow: .*unchanged since you read it earlier in this session/, "read #3: NOW dedupe has a full delivery (read #2) to compare against");
-  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-});
-
-test("stateView + deltaRead: a change is diffed against the last FULL delivery, never against a state-viewed (partial) one — the safe choice", () => {
-  const fx = makeNotes();
-  try {
-    const { engine } = setup(fx, { MEMGLOW_PROXY_DELTA_READ: "1" });
-    const marker = "## Mise à jour 12/10\nAvancement du chantier, détail ligne 0 sur les travaux en cours.";
-    assert.ok(fx.journal.includes(marker), "sanity: the marker uniquely locates the most recent section's first line");
-    const changed = fx.journal.replace(marker, marker.replace("Avancement du chantier,", "Avancement du chantier CHANGÉ,"));
-    read(engine, "s1", 1, "Chantier Rénovation Grange")(fx.journal); // #1: state-view (partial) — never seeds deltaRead
-    read(engine, "s1", 2, "Chantier Rénovation Grange")(fx.journal); // #2: forced full -> version A delivered, in full
-    const r3 = read(engine, "s1", 3, "Chantier Rénovation Grange")(changed); // #3: version B
-    const texts = r3.msg.result.content.map((c) => c.text);
-    assert.strictEqual(texts.length, 2, "header + diff, not a 3rd state-view and not a full re-send");
-    assert.match(texts[0], /changed since you read it earlier in this session; only the changes below/);
-    assert.ok(texts[1].startsWith(D.DELTA_READ_MARKER));
-    assert.strictEqual(D.applyDiff(fx.journal, texts[1]), changed, "the diff, applied to the FULL version from read #2, reconstructs read #3 exactly");
-  } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
-});
-
-test("stateView + alreadyLoaded: alreadyLoaded's own stub still wins for an always-loaded note, stateView never gets a turn", () => {
-  const fx = makeNotes();
-  try {
-    // The index note itself (theme "index") is always considered already loaded (lever 8).
-    fs.writeFileSync(path.join(fx.notes, "MEMORY.md"), "---\ntitle: MEMORY\ntheme: index\n---\n# idx\n" + "x ".repeat(500));
-    const { engine } = setup(fx, { MEMGLOW_PROXY_ALREADY_LOADED: "1" });
-    // Lever 8 rule 2 (alreadyLoadedRequireActivity) never stubs a session's very FIRST call (that
-    // shape is what an injection hook itself looks like) — a tools/list first, like a real
-    // assistant session, satisfies it.
-    engine.clientMessage({ id: -1, method: "tools/list" }, "s1");
-    engine.serverMessage({ id: -1, result: { tools: [] } }, "s1");
-    const r0 = read(engine, "s1", 0, "MEMORY")(fs.readFileSync(path.join(fx.notes, "MEMORY.md"), "utf8"));
-    assert.match(r0.msg.result.content[0].text, /already in your context/);
-    // The journal note itself is unaffected (not an index note) — still gets stateView.
-    const r1 = read(engine, "s1", 1, "Chantier Rénovation Grange")(fx.journal);
-    assert.strictEqual(r1.msg.result.content.length, 2);
   } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });
 

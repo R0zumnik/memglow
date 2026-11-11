@@ -312,15 +312,15 @@ test("accountingSummary: reads proxy-savings.json — per-lever tokens/calls, la
   fs.writeFileSync(path.join(dir, "proxy-savings.json"), JSON.stringify({
     version: 1,
     days: {
-      [day(1)]: { dedupe: 300, dedupeCalls: 3, alreadyLoaded: 900, alreadyLoadedCalls: 4, clients: { "claude-code": { tokens: 500, calls: 10 } } },
+      [day(1)]: { dedupe: 300, dedupeCalls: 3, stateView: 900, stateViewCalls: 4, clients: { "claude-code": { tokens: 500, calls: 10 } } },
       [day(3)]: { toc: 50, tocCalls: 1 },
       [day(40)]: { dedupe: 99999, dedupeCalls: 99 }, // outside the 7-day window: ignored
     },
   }));
   const summary = MC.accountingSummary({ dataDir: dir, now });
   assert.match(summary, /^memglow: proxy accounting, last 7 days/);
-  // alreadyLoaded (900) saved more than dedupe (300): named first.
-  assert.match(summary, /alreadyLoaded ≈900t\/4.*dedupe ≈300t\/3.*toc ≈50t\/1/);
+  // stateView (900) saved more than dedupe (300): named first.
+  assert.match(summary, /stateView ≈900t\/4.*dedupe ≈300t\/3.*toc ≈50t\/1/);
   assert.match(summary, /≈500 tokens relayed to 1 client/);
   assert.ok(!summary.includes("99999"), "the 40-day-old entry is outside the 7-day window");
 });
@@ -365,7 +365,7 @@ test("buildMemoryCore: no match, no top-read hubs, but proxy-savings.json has re
   // Real savings, but note ids topReadHubs would never surface a "most read" hub from this file
   // alone (proxy-savings.json carries no per-note counts at all).
   fs.writeFileSync(path.join(dir, "proxy-savings.json"), JSON.stringify({
-    version: 1, days: { [today]: { alreadyLoaded: 450, alreadyLoadedCalls: 2 } },
+    version: 1, days: { [today]: { stateView: 450, stateViewCalls: 2 } },
   }));
   const { tree, entries, notesById } = fixture();
   const built = MC.buildMemoryCore({ cwd: "/nowhere/zzz", tree, entries, notesById, coreMap: {}, dataDir: dir });
@@ -373,7 +373,7 @@ test("buildMemoryCore: no match, no top-read hubs, but proxy-savings.json has re
   assert.strictEqual(built.meta.usedTopRead, false, "proxy-savings.json alone never resolves a hub id to show in full");
   assert.match(built.text, /No project hub matched for this folder/);
   assert.ok(!built.text.includes("no accounting data is available yet"), "there plainly IS accounting data — just not of the per-note kind");
-  assert.match(built.text, /memglow: proxy accounting, last 7 days — alreadyLoaded ≈450t\/2/);
+  assert.match(built.text, /memglow: proxy accounting, last 7 days — stateView ≈450t\/2/);
 });
 
 test("buildMemoryCore: no match and a dataDir with truly nothing in either file → the honest 'no accounting data' wording, unchanged", () => {

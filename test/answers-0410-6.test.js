@@ -56,10 +56,10 @@ test("--no-structured-read: read_note's text answer carries the note once", () =
   assert.strictEqual(parseArgs([]).structuredRead, true);
 });
 
-test("the levers still resolve every hit of the new format (permalinksIn / idsInText, resultIds, searchDetails)", async () => {
+test("the levers still resolve every hit of the new format (permalinksIn / idsInText, resultIds)", async () => {
   const k = kb();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-short-"));
-  const env = { MEMGLOW_HOME: home, MEMGLOW_CONFIG: path.join(home, "none.json"), MEMGLOW_DATA_DIR: path.join(home, "d"), MEMGLOW_PROXY_SEARCH_DETAILS: "1" };
+  const env = { MEMGLOW_HOME: home, MEMGLOW_CONFIG: path.join(home, "none.json"), MEMGLOW_DATA_DIR: path.join(home, "d") };
   const srv = createMemoryServer({ root: k.root, watch: false, pollMs: 0, allInOne: { env, name: "memglow-memory", onReport: () => {} } });
   try {
     const index = srv.aio.lv.index;
@@ -73,10 +73,6 @@ test("the levers still resolve every hit of the new format (permalinksIn / idsIn
       assert.deepStrictEqual(L.resultIds(index, JSON.parse(JSON.stringify(r)), 50), want, "text path: " + q);
       assert.deepStrictEqual(L.resultIds(index, r, 50), want, "metadata path: " + q);
     }
-    const out = srv.rpc.handleAny({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "search_notes", arguments: { query: "garden" } } }, { sessionKey: "s" });
-    const all = out.result.content.map((c) => c.text).join("\n");
-    assert.match(all, /memglow: notes in these results/, "searchDetails still lists the notes");
-    assert.match(all, /`garden-project`/);
   } finally { srv.close(); k.cleanup(); }
 });
 

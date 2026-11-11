@@ -38,8 +38,9 @@ function leverEnv(home, extra = {}) {
   return {
     MEMGLOW_HOME: home, MEMGLOW_CONFIG: path.join(home, "none.json"), MEMGLOW_DATA_DIR: path.join(home, "data"),
     MEMGLOW_POLL_MS: "60000", MEMGLOW_LARGE_NOTE_TOKENS: "300",
-    MEMGLOW_PROXY_DEDUPE: "1", MEMGLOW_PROXY_DELTA_READ: "1", MEMGLOW_PROXY_DUPLICATE_HINT: "1", MEMGLOW_PROXY_ALREADY_LOADED: "1",
-    MEMGLOW_PROXY_SEARCH_DETAILS: "1", MEMGLOW_PROXY_INDEX_HINT: "1", MEMGLOW_PROXY_HIDE_UNSUPPORTED: "1",
+    MEMGLOW_PROXY_DEDUPE: "1", MEMGLOW_PROXY_DUPLICATE_HINT: "1", MEMGLOW_PROXY_HIDE_UNSUPPORTED: "1",
+    // removed levers still set in the environment on purpose: accepted and ignored (0.6.0)
+    MEMGLOW_PROXY_ALREADY_LOADED: "1", MEMGLOW_PROXY_DELTA_READ: "1", MEMGLOW_PROXY_SEARCH_DETAILS: "1",
     ...extra,
   };
 }
@@ -96,13 +97,13 @@ async function script(url) {
   await step("search + memglow_queries", call(3, "search_notes", { query: "tea", memglow_queries: ["rugby stade", "orleans"] }));
   await step("read_note #1 (sizeWarning)", call(4, "read_note", { identifier: "long-read" }));
   await step("read_note #2 (dedupe)", call(5, "read_note", { identifier: "long-read" }));
-  await step("read index (alreadyLoaded)", call(6, "read_note", { identifier: "MEMORY" }));
+  await step("read index", call(6, "read_note", { identifier: "MEMORY" }));
   await step("read small", call(7, "read_note", { identifier: "main/memory/projects/garden-project" }));
   await step("read fresh", call(8, "read_note", { identifier: "long-read", memglow_fresh: true }));
   await step("write_note (duplicateHint + sizeWarning)", call(9, "write_note", { title: "garden-project-ideas", directory: "memory/ideas", content: "Ideas for the garden project. " + "compost seeds rows. ".repeat(120) }));
   await step("write_note (exact duplicate)", call(10, "write_note", { title: "Rugby Club", directory: "memory/other", content: "A second rugby note." }));
   await step("edit_note", call(11, "edit_note", { identifier: "long-read", operation: "append", content: "\n- [todo] water the tomatoes at dusk" }));
-  await step("read after edit (delta)", call(12, "read_note", { identifier: "long-read" }));
+  await step("read after edit", call(12, "read_note", { identifier: "long-read" }));
   await step("read the new note", call(13, "read_note", { identifier: "garden-project-ideas" }));
   await step("search after write", call(14, "search_notes", { query: "compost seeds" }));
   await step("recent_activity", call(15, "recent_activity", { timeframe: "7d" }));
@@ -137,12 +138,11 @@ test("all-in-one ≡ proxy → memory server: the same scripted session gives by
     assert.ok(by["initialize"].includes(RULES_HEADER), "memory rules appended to instructions");
     assert.ok(/memglow_queries/.test(by["tools/list"]) && /memglow_fresh/.test(by["tools/list"]), "tools/list augmented");
     assert.match(by["read_note #2 (dedupe)"], /memglow:/, "dedupe stub");
-    assert.match(by["read index (alreadyLoaded)"], /already in your context/);
+    assert.match(by["read index"], /title: MEMORY/, "the index is delivered in full (alreadyLoaded was removed in 0.6.0)");
     assert.match(by["read_note #1 (sizeWarning)"], /⚠ memglow: this note is ≈\d+ tokens/);
     assert.match(by["write_note (duplicateHint + sizeWarning)"], /⚠ memglow: this note is now ≈\d+ tokens/);
     assert.match(by["write_note (duplicateHint + sizeWarning)"], /memglow: a note on this subject already exists — \[\[garden-project\]\]/);
     assert.match(by["write_note (exact duplicate)"], /memglow: a note with this title already exists: \[\[rugby-club\]\]/);
-    assert.match(by["read after edit (delta)"], /memglow: .*chang/i, "within-session delta");
     assert.ok(!/memglow_queries|memglow_fresh/.test(by["search + memglow_queries"]));
     // The activity reports match too (durationMs aside: timing).
     const strip = (r) => r.map(({ durationMs, ...e }) => e);

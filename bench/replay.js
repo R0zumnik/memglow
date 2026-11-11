@@ -20,11 +20,11 @@
  *                A name prefixed with "-" forces that lever OFF instead (e.g. "-multiQuery", to
  *                isolate a lever from multiQuery's own call-merging on a fixture where the two
  *                would otherwise interact — see bench/replay-aliases.jsonl).
- *                Lever names: sizeWarning, indexWarning, searchDetails, suggestions, dedupe, toc,
- *                archiveHint, hideUnsupportedTools, alreadyLoaded, multiQuery, aliases, learnAliases,
- *                negativeCache, indexHint, deltaRead, duplicateHint.
- * --always-loaded a,b   extra `alwaysLoaded` entries (note references) for lever 8, on top of the
- *                index note(s) it already covers by default.
+ *                Lever names: sizeWarning, indexWarning, dedupe, toc, archiveHint,
+ *                hideUnsupportedTools, multiQuery, aliases, learnAliases, negativeCache,
+ *                duplicateHint. (searchDetails, suggestions, alreadyLoaded, indexHint, deltaRead
+ *                and sessionBudget were removed in 0.6.0.)
+ * --always-loaded a,b   accepted and ignored since 0.6.0 (lever 8, alreadyLoaded, was removed).
  * --turn-tokens n   per-call overhead used for the "effective tokens" column (0.4.2.5), see
  *                DEFAULT_TURN_TOKENS above for how the default (5000) was derived.
  * --json         machine-readable output instead of the table.
@@ -33,11 +33,11 @@
  * never touch the original notes, and never leak between configurations), and is fed the SAME
  * event stream, in order, through `L.createLevers`. Two configurations are always run: "off" (all
  * nine levers off — the baseline every saving is measured against) and "defaults" (the shipped
- * defaults: sizeWarning + searchDetails + suggestions on, everything else off); --with adds more.
+ * defaults of the levers listed here: sizeWarning, multiQuery, aliases on); --with adds more.
  *
  * Exit code 1 if the correctness guard finds ANY violation, in ANY configuration — never 1 for
- * "defaults cost more tokens than off", which is expected (suggestions/searchDetails/sizeWarning
- * add explanatory text, they do not cut anything; only dedupe/toc/alreadyLoaded can save tokens,
+ * "defaults cost more tokens than off", which is expected (sizeWarning
+ * adds explanatory text, it does not cut anything; only dedupe/toc/stateView can save tokens,
  * and only by replacing an answer with a stub — which is exactly what the guard checks).
  *
  * "effective tokens" (0.4.2.5) = tokensTotal + calls * turnTokens — see DEFAULT_TURN_TOKENS below
@@ -56,7 +56,6 @@ const crypto = require("crypto");
 const L = require("../lib/proxy-levers");
 const LA = require("../lib/learned-aliases");
 const NC = require("../lib/negative-cache");
-const DR = require("../lib/delta-read");
 const { estimateTokens } = require("../lib/cost");
 
 const ROOT = path.join(__dirname, "..");
@@ -89,25 +88,20 @@ const DEFAULT_TURN_TOKENS = 5000; // see derivation above; falls back to 1000 if
 const LEVER_ENV = {
   sizeWarning: "MEMGLOW_PROXY_SIZE_WARNING",
   indexWarning: "MEMGLOW_PROXY_INDEX_WARNING",
-  searchDetails: "MEMGLOW_PROXY_SEARCH_DETAILS",
-  suggestions: "MEMGLOW_PROXY_SUGGESTIONS",
   dedupe: "MEMGLOW_PROXY_DEDUPE",
   toc: "MEMGLOW_PROXY_TOC",
   archiveHint: "MEMGLOW_PROXY_ARCHIVE_HINT",
   hideUnsupportedTools: "MEMGLOW_PROXY_HIDE_UNSUPPORTED",
-  alreadyLoaded: "MEMGLOW_PROXY_ALREADY_LOADED",
   multiQuery: "MEMGLOW_PROXY_MULTI_QUERY",
   aliases: "MEMGLOW_PROXY_ALIASES",
   learnAliases: "MEMGLOW_PROXY_LEARN_ALIASES",
   negativeCache: "MEMGLOW_PROXY_NEGATIVE_CACHE",
-  indexHint: "MEMGLOW_PROXY_INDEX_HINT",
-  deltaRead: "MEMGLOW_PROXY_DELTA_READ",
   duplicateHint: "MEMGLOW_PROXY_DUPLICATE_HINT",
 };
 const LEVER_NAMES = Object.keys(LEVER_ENV);
 // The shipped defaults (lib/proxy-levers.js DEFAULTS), named here explicitly so this file keeps
 // working unchanged even if that module's own defaults ever drift.
-const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, searchDetails: false, suggestions: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, alreadyLoaded: false, multiQuery: true, aliases: true, learnAliases: true, negativeCache: false, indexHint: false, deltaRead: false, duplicateHint: false };
+const SHIPPED_DEFAULTS = { sizeWarning: true, indexWarning: false, dedupe: false, toc: false, archiveHint: false, hideUnsupportedTools: false, multiQuery: true, aliases: true, learnAliases: true, negativeCache: false, duplicateHint: false };
 // multiQuery (lever 9, 0.4.2.2b): "no read in between, within 2 min" — see mergeSearchBursts below.
 const MULTI_QUERY_GAP_MS = 2 * 60 * 1000;
 
@@ -300,17 +294,9 @@ function mergeSearchBursts(calls, searchTools) {
 /**
  * Is the note's full CURRENT text still reachable for the model, given what was just delivered?
  *   - delivered in full just now (`deliveredText` contains `upstreamFull` verbatim) → yes
- *   - a lever `deltaRead` diff (deliveredText carries DR.DELTA_READ_MARKER, see lib/delta-read.js):
- *     reachable iff that diff, applied to `previousFullText` (version A, delivered earlier THIS
- *     session), truly reconstructs `upstreamFull` (version B) — DR.applyDiff is the SAME code
- *     the real proxy would need to get right; this is a REAL check, not the escape-hatch
- *     loophole below, so a diff that reconstructs the WRONG text is a violation even though its
- *     own header also names "memglow_fresh" (that only means "the model CAN ask again", not
- *     "what it was just handed was correct").
  *   - delivered in full earlier in this SAME session and unchanged since (`previousFullHash`
  *     equals the note's current hash) → yes
- *   - in the always-loaded context (index note, or a configured `alwaysLoaded` entry) and
- *     unchanged since the session began (`baselineHash` equals the current hash) → yes
+ *   - `baselineHash` (kept for the harness's callers; no lever sets it since 0.6.0) equals the current hash → yes
  *   - the stub names the escape hatch (`memglow_fresh`, `L.ARG_FRESH`) → yes, the model can ask again
  *   - otherwise → NO: a violation.
  */
@@ -318,12 +304,6 @@ function isReachable({ deliveredText, upstreamFull, previousFullHash = null, pre
   const currentHash = sha1(upstreamFull);
   const deliveredFull = deliveredText.includes(upstreamFull);
   if (deliveredFull) return { reachable: true, deliveredFull: true, reconstructed: false, hash: currentHash };
-  const markerAt = deliveredText.indexOf(DR.DELTA_READ_MARKER);
-  if (markerAt >= 0) {
-    const rebuilt = previousFullText != null ? DR.applyDiff(previousFullText, deliveredText.slice(markerAt)) : null;
-    const reconstructed = rebuilt === upstreamFull;
-    return { reachable: reconstructed, deliveredFull: false, reconstructed, hash: currentHash };
-  }
   const reachable = previousFullHash === currentHash || baselineHash === currentHash || deliveredText.includes(L.ARG_FRESH);
   return { reachable, deliveredFull: false, reconstructed: false, hash: currentHash };
 }
@@ -371,17 +351,13 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
   const dataDir = path.join(work, "data");
   fs.mkdirSync(dataDir, { recursive: true });
 
-  let configFile = null;
-  if (alwaysLoaded && alwaysLoaded.length) {
-    configFile = path.join(work, "memglow.config.json");
-    fs.writeFileSync(configFile, JSON.stringify({ alwaysLoaded }));
-  }
   const env = {
     MEMGLOW_MEMORY_DIR: notesDir, MEMGLOW_DATA_DIR: dataDir, MEMGLOW_HOME: dataDir,
     MEMGLOW_LARGE_NOTE_TOKENS: "5000", MEMGLOW_POLL_MS: "500",
     MEMGLOW_PROXY_SAVINGS_FILE: "0", MEMGLOW_PROXY_LOG: "0",
+    // stateView and the tools profile are measured on their own (they are not part of this harness's lever list).
+    MEMGLOW_PROXY_STATE_VIEW: "0", MEMGLOW_TOOLS_PROFILE: "full",
   };
-  if (configFile) env.MEMGLOW_CONFIG = configFile;
   for (const name of LEVER_NAMES) env[LEVER_ENV[name]] = flags[name] ? "1" : "0";
 
   const config = L.proxyConfig(env);
@@ -389,8 +365,7 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
   const savings = L.createSavings(config, () => {});
   const aliasStore = LA.createAliasStore(config);
   const negativeCacheStore = NC.createNegativeCacheStore(config);
-  const deltaReadStore = DR.createDeltaReadStore(config);
-  const engine = L.createLevers({ config, index, savings, serverName: "basic-memory", aliasStore, negativeCacheStore, deltaReadStore });
+  const engine = L.createLevers({ config, index, savings, serverName: "basic-memory", aliasStore, negativeCacheStore });
   const upstream = makeUpstream(notesDir);
   const memory = index._memory();
 
@@ -411,13 +386,7 @@ async function runConfig(flags, events, { memoryDir, alwaysLoaded }) {
     let s = sessions.get(key);
     if (s) return s;
     if (memory) memory.scan();
-    const baseline = new Map();
-    if (index.available()) {
-      for (const id of index.alwaysLoadedIds(config.alwaysLoaded)) {
-        const h = index.fileHash(id);
-        if (h) baseline.set(id, h);
-      }
-    }
+    const baseline = new Map(); // empty since 0.6.0 (alreadyLoaded removed)
     s = { fullDelivered: new Map(), fullText: new Map(), baseline };
     sessions.set(key, s);
     return s;

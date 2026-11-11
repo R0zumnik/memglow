@@ -36,10 +36,10 @@ test("all-in-one: the levers' note index reads the store — same graph as lib/m
     const cfg = srv.aio.lv.config;
     const ref = () => createMemory({ dir: path.join(kb.root, "memory"), config: cfg.memory, pollMs: 0 });
     assert.deepStrictEqual(strip(mem.graph()), strip(ref().graph()), "same nodes and links as a lib/memory.js scan");
-    // Lever 8's hash: the in-memory text, byte-identical to the file (BOM included).
+    // The in-memory text, byte-identical to the file (BOM included).
     for (const id of ["alice", "bom-note", "MEMORY"]) {
-      const disk = crypto.createHash("sha1").update(fs.readFileSync(path.join(kb.root, "memory", mem.fileOf(id)))).digest("hex");
-      assert.strictEqual(srv.aio.lv.index.fileHash(id), disk, id);
+      const disk = fs.readFileSync(path.join(kb.root, "memory", mem.fileOf(id)));
+      assert.ok(Buffer.from(srv.aio.lv.index.noteText(id), "utf8").equals(disk), id);
     }
     // Writes: the index follows at once, without a rescan; a frontmatter-only change keeps the
     // body-change date, as lib/memory.js does.
