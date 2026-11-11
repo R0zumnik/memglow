@@ -1,0 +1,28 @@
+# CI on every push and pull request (release.yml only runs on version tags, so two releases
+# once failed late). Node 22 and 24; the Node 24 job runs the suite twice to surface flakiness.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci
+      - run: npm test
+      - name: Second run (flakiness check)
+        if: matrix.node == 24
+        run: npm test
