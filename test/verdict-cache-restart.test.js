@@ -67,9 +67,12 @@ function writeKb(root) {
   }
 }
 
-/** Waits until `mock`'s call count has not moved for `quietMs`, or `maxMs` elapses. */
-async function waitQuiet(mock, quietMs = 200, maxMs = 15000) {
+/** Waits until `mock` has seen at least `minCalls` (the workers start asynchronously: on a slow
+ * shared runner a bare "quiet for 200ms" can elapse before the first call ever happens), then until
+ * its call count has not moved for `quietMs`, or `maxMs` elapses. */
+async function waitQuiet(mock, quietMs = 200, maxMs = 20000, minCalls = 0) {
   const start = Date.now();
+  while (mock.count() < minCalls && Date.now() - start < maxMs) await new Promise((r) => setTimeout(r, 25));
   let last = -1, lastChangeAt = Date.now();
   for (;;) {
     const c = mock.count();
@@ -83,7 +86,7 @@ async function waitQuiet(mock, quietMs = 200, maxMs = 15000) {
 /** Spawns the real CLI, waits for it to report "listening", waits for the AI traffic to go
  * quiet, then sends a real SIGTERM and waits for the process to actually exit — the exact
  * sequence `docker stop`/systemd would produce. */
-function spawnAndStop(root, dataDir, configPath, mock) {
+function spawnAndStop(root, dataDir, configPath, mock, { minCalls = 0, quietMs = 200 } = {}) {
   return new Promise((resolve, reject) => {
     const script = path.join(__dirname, "..", "memory-server", "memglow-memory-server.js");
     const child = spawn(process.execPath, [script, "--root", root, "--read-write", "--no-fsync", "--poll-ms", "0", "--no-watch", "--listen", "127.0.0.1:0"], {
@@ -96,7 +99,7 @@ function spawnAndStop(root, dataDir, configPath, mock) {
     (async () => {
       while (!ready && Date.now() - start < 10000) await new Promise((r) => setTimeout(r, 25));
       if (!ready) { child.kill("SIGKILL"); return reject(new Error("server never reported listening — stderr: " + err)); }
-      await waitQuiet(mock);
+      await waitQuiet(mock, quietMs, 20000, minCalls);
       child.once("exit", () => resolve());
       child.kill("SIGTERM");
       setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already gone */ } }, 8000).unref();
@@ -125,12 +128,12 @@ test("real restart (two spawned OS processes, SIGTERM, same --root/MEMGLOW_DATA_
     },
   }));
   try {
-    await spawnAndStop(root, dataDir, configPath, mock);
+    await spawnAndStop(root, dataDir, configPath, mock, { minCalls: 3, quietMs: 1000 });
     const afterRun1 = mock.count();
     assert.ok(afterRun1 >= 3, `expected at least 3 real AI calls (archive + duplicates + R4) in process 1, got ${afterRun1}`);
     assert.ok(!mock.prompts.some((p) => /"undefined"/.test(p)), "every prompt names the real note(s) — never \"undefined\"");
 
-    await spawnAndStop(root, dataDir, configPath, mock);
+    await spawnAndStop(root, dataDir, configPath, mock, { quietMs: 2000 }); // nothing to wait FOR: a longer quiet window only makes a false pass less likely
     const afterRun2 = mock.count();
     assert.strictEqual(afterRun2, afterRun1, `process 2 (same root + same MEMGLOW_DATA_DIR, unchanged notes) made ${afterRun2 - afterRun1} extra AI call(s) — the verdict cache did not survive the restart`);
 
