@@ -6,7 +6,7 @@
  * conversation, so a stateless MCP 2026-07-28 session (no `Mcp-Session-Id`: Claude Code opens a
  * new TCP connection between calls) is still recognised as the SAME session by
  * memory-server/http.js's sessionKeyFor() — without it, the per-session levers
- * (lib/proxy-levers.js: alreadyLoaded, dedupe, deltaRead…) never see a repeat and save 0 tokens.
+ * (lib/proxy-levers.js: dedupe, stateView…) never see a repeat and save 0 tokens.
  *
  * Claude Code runs a `headersHelper` command ONCE per conversation, reads its stdout as one JSON
  * object of headers, and sends those headers back on every request of that MCP server for the

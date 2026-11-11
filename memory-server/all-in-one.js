@@ -21,7 +21,7 @@
  *   sub-calls never go through the levers again), merged by the levers' own merge code.
  * - After every successful write tool call the levers' note index is rescanned at once
  *   (index.afterWrite), before the levers look at the answer, so sizeWarning / duplicateHint /
- *   alreadyLoaded / the negative-cache fingerprint never work from a stale view of our own write.
+ *   the negative-cache fingerprint never work from a stale view of our own write.
  * - Activity is reported like the proxy does (lib/agent-core.js reportInProcess: after the answer,
  *   in process, no child process), channel "memory-server".
  * - Session key (`ctx.sessionKey`, set by memory-server/http.js): the Mcp-Session-Id; for an
@@ -36,7 +36,6 @@ const core = require("../lib/agent-core");
 const levers = require("../lib/proxy-levers");
 const learnedAliases = require("../lib/learned-aliases");
 const negativeCacheLib = require("../lib/negative-cache");
-const deltaReadLib = require("../lib/delta-read");
 const { setupRules, createWatcher, subCallParams } = require("../mcp-proxy/memglow-mcp-proxy");
 const { createStoreMemory } = require("./store-memory");
 
@@ -59,6 +58,7 @@ function leverMemoryDir(root, env = process.env) {
 function setupServerLevers({ root, env = process.env, serverName = "", log = () => {}, store = null }) {
   try {
     const config = levers.proxyConfig({ ...env, MEMGLOW_MEMORY_DIR: leverMemoryDir(root, env) });
+    levers.logIgnoredLevers(config, log);
     if (!levers.anyLever(config)) return null;
     // 0.4.10.3: one index — the levers' note index reads this server's own store (already parsed
     // notes, in-memory text) instead of scanning the same folder a second time (lib/memory.js).
@@ -69,9 +69,8 @@ function setupServerLevers({ root, env = process.env, serverName = "", log = () 
     const savings = levers.createSavings(config);
     const aliasStore = learnedAliases.createAliasStore(config);
     const negativeCacheStore = negativeCacheLib.createNegativeCacheStore(config);
-    const deltaReadStore = deltaReadLib.createDeltaReadStore(config);
-    const engine = levers.createLevers({ config, index, savings, serverName, aliasStore, negativeCacheStore, deltaReadStore });
-    return { ...engine, index, savings, aliasStore, negativeCacheStore, deltaReadStore, config };
+    const engine = levers.createLevers({ config, index, savings, serverName, aliasStore, negativeCacheStore });
+    return { ...engine, index, savings, aliasStore, negativeCacheStore, config };
   } catch (e) {
     log(`memglow memory server: levers disabled (${e.message})`);
     return null;
@@ -181,7 +180,7 @@ function createAllInOne({ rpc, root, env = process.env, name = "memglow-memory",
   function close() {
     if (closed || !lv) return;
     closed = true;
-    for (const f of [() => lv.savings.flush(), () => lv.aliasStore.flush(), () => lv.negativeCache.flushPending(), () => lv.negativeCacheStore.flush(), () => lv.deltaReadStore.flush()]) {
+    for (const f of [() => lv.savings.flush(), () => lv.aliasStore.flush(), () => lv.negativeCache.flushPending(), () => lv.negativeCacheStore.flush()]) {
       try { f(); } catch { /* best effort */ }
     }
   }

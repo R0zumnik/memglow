@@ -45,7 +45,6 @@ const core = require("../lib/agent-core");
 const levers = require("../lib/proxy-levers");
 const learnedAliases = require("../lib/learned-aliases");
 const negativeCacheLib = require("../lib/negative-cache");
-const deltaReadLib = require("../lib/delta-read");
 const memoryRules = require("../lib/memory-rules");
 const { StringDecoder } = require("string_decoder");
 const { connKey, validHeaderSid } = require("../memory-server/http");
@@ -205,14 +204,14 @@ function sseRelay(write, transform) {
 function setupLevers(env = process.env, serverName = "") {
   try {
     const config = levers.proxyConfig(env);
+    levers.logIgnoredLevers(config, (l) => process.stderr.write(`memglow-mcp-proxy: ${l}\n`));
     if (!levers.anyLever(config)) return null;
     const index = levers.createNoteIndex(config);
     const savings = levers.createSavings(config);
     const aliasStore = learnedAliases.createAliasStore(config);
     const negativeCacheStore = negativeCacheLib.createNegativeCacheStore(config);
-    const deltaReadStore = deltaReadLib.createDeltaReadStore(config);
-    const engine = levers.createLevers({ config, index, savings, serverName, aliasStore, negativeCacheStore, deltaReadStore });
-    return { ...engine, savings, aliasStore, negativeCacheStore, deltaReadStore, config };
+    const engine = levers.createLevers({ config, index, savings, serverName, aliasStore, negativeCacheStore });
+    return { ...engine, savings, aliasStore, negativeCacheStore, config };
   } catch (e) {
     process.stderr.write(`memglow-mcp-proxy: levers disabled (${e.message})\n`);
     return null;
@@ -326,7 +325,7 @@ function runStdio(o) {
     process.stdin.on("end", () => { up.end(); child.stdin.end(); });
     child.stdout.on("data", (c) => down.push(c));
     child.stdout.on("end", () => down.end());
-    if (lv) process.on("exit", () => { lv.savings.flush(); lv.aliasStore.flush(); lv.negativeCache.flushPending(); lv.negativeCacheStore.flush(); lv.deltaReadStore.flush(); });
+    if (lv) process.on("exit", () => { lv.savings.flush(); lv.aliasStore.flush(); lv.negativeCache.flushPending(); lv.negativeCacheStore.flush(); });
   } else {
     const fromClient = lineTap((m) => w.fromClient(m));
     const fromServer = lineTap((m) => w.fromServer(m));

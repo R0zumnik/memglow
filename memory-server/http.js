@@ -8,7 +8,7 @@
  *  - MCP 2026-07-28 per-request mode: no session, version in the `MCP-Protocol-Version` header
  *    and/or `params._meta`. 0.5.3: Claude Code opens a NEW TCP connection between calls even
  *    within the same conversation, so the per-connection fallback alone gave the all-in-one
- *    layer's per-session levers (lib/proxy-levers.js: alreadyLoaded, dedupe, deltaRead…) a fresh
+ *    layer's per-session levers (lib/proxy-levers.js: dedupe, stateView…) a fresh
  *    key on every call — never a repeat, 0 tokens saved. A request may now carry its own
  *    `x-memglow-session` header (validated: 8-128 characters of [A-Za-z0-9._:-], else ignored),
  *    sent by Claude Code's `headersHelper` mechanism (hooks/memglow-headers.js) from its own
