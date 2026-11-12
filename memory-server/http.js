@@ -104,7 +104,7 @@ function sessionKeyFor(req, sid, payload, propose, hdrSid) {
   return connKey(req.socket);
 }
 
-function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, allowOrigins = [], token = "", readOnly = true, fsyncMode = null, autoSplit = null, structure = null, archive = null, duplicates = null }) {
+function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, allowOrigins = [], token = "", readOnly = true, fsyncMode = null, autoSplit = null, structure = null, archive = null }) {
   const origins = new Set((allowOrigins || []).map((o) => String(o).trim().replace(/\/+$/, "").toLowerCase()).filter(Boolean));
   const sessions = new Map(); // id → { version, lastSeen }
 
@@ -147,8 +147,10 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
   function weeklyStatus() {
     const since = weeklyReport.weeklyReportSince(Date.now());
     const evOf = (w) => (w && typeof w.recentEvents === "function" ? w.recentEvents(since) : []);
+    const stat = structure && structure.status ? structure.status() : null;
     return weeklyReport.buildWeeklyReport({
-      autoSplitEvents: evOf(autoSplit), structureEvents: evOf(structure), archiveEvents: evOf(archive), duplicatesEvents: evOf(duplicates),
+      autoSplitEvents: evOf(autoSplit), structureEvents: evOf(structure), archiveEvents: evOf(archive),
+      duplicateCandidates: stat && stat.issues && stat.issues.byRule ? stat.issues.byRule.D1 || 0 : 0,
     });
   }
   function maintenanceStatus() {
@@ -156,12 +158,15 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
     const st = structure && structure.status ? structure.status() : { enabled: false, ai: { enabled: false, provider: "", model: "" }, issues: { total: 0, fixable: 0, needsReview: 0, byRule: {} }, issueList: [], lastScanAt: null, nextScanAt: null, lastError: null };
     // 0.5.5 (A, B): same shape/fallback pattern as autoSplit/structure above.
     const ar = archive && archive.status ? archive.status() : { enabled: false, provider: "", model: "", keySet: false, keepDays: 0, lastScanAt: null, nextScanAt: null, lastError: null };
-    const du = duplicates && duplicates.status ? duplicates.status() : { enabled: false, autoMerge: false, provider: "", model: "", keySet: false, reported: [], lastScanAt: null, nextScanAt: null, lastError: null };
+    // 0.6.0: "duplicates" is the structure audit's report-only D1 list (no AI, no merge, no worker of its own).
+    const dl = Array.isArray(st.duplicates) ? st.duplicates : [];
+    const du = { enabled: !!st.enabled, autoMerge: false, provider: "", model: "", keySet: false, foundCount: dl.length, checkedCount: dl.length,
+      reported: dl.map((r) => ({ a: r.a, b: r.b, score: r.score, duplicate: true })), lastScanAt: st.lastScanAt, nextScanAt: st.nextScanAt, lastError: null };
     return {
       autoSplit: { ...as, lastScanAt: iso(as.lastScanAt), nextScanAt: iso(as.nextScanAt), lastError: errorOf(as.lastError), recent: recentOf(autoSplit) },
       structure: { ...st, lastScanAt: iso(st.lastScanAt), nextScanAt: iso(st.nextScanAt), lastError: errorOf(st.lastError), recent: recentOf(structure) },
       archive: { ...ar, lastScanAt: iso(ar.lastScanAt), nextScanAt: iso(ar.nextScanAt), lastError: errorOf(ar.lastError), recent: recentOf(archive) },
-      duplicates: { ...du, reported: (du.reported || []).map((r) => ({ ...r, t: iso(r.t) })), lastScanAt: iso(du.lastScanAt), nextScanAt: iso(du.nextScanAt), lastError: errorOf(du.lastError), recent: recentOf(duplicates) },
+      duplicates: { ...du, reported: (du.reported || []).map((r) => ({ ...r, t: iso(r.t) })), lastScanAt: iso(du.lastScanAt), nextScanAt: iso(du.nextScanAt), lastError: null, recent: [] },
       // 0.5.8: additive only — every existing field/key above is unchanged (backward compatible).
       weekly: weeklyStatus(),
     };

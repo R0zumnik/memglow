@@ -217,7 +217,8 @@ test("HTTP /api/maintenance (0.5.4): the auto-split/structure workers' status, g
     assert.deepStrictEqual(j.weekly, { notesSplit: 0, structureFixes: 0, structureFixesByKind: {}, sectionsArchived: 0, duplicatesFound: 0, aiCalls: 0, cachedVerdicts: 0, errors: 0 });
     assert.deepStrictEqual(Object.keys(j.autoSplit).sort(), ["enabled", "keySet", "lastError", "lastScanAt", "model", "nextScanAt", "pendingCount", "provider", "recent", "thresholdTokens"]);
     assert.strictEqual(j.archive.enabled, false);
-    assert.strictEqual(j.duplicates.enabled, false);
+    assert.strictEqual(j.duplicates.autoMerge, false, "0.6.0: no AI duplicates, no merge — report-only D1 candidates");
+    assert.deepStrictEqual(j.duplicates.reported, []);
     assert.strictEqual(j.autoSplit.enabled, true);
     assert.strictEqual(j.autoSplit.provider, "anthropic");
     assert.strictEqual(j.autoSplit.keySet, false, "SOME_KEY is not actually set in the environment");
@@ -225,7 +226,7 @@ test("HTTP /api/maintenance (0.5.4): the auto-split/structure workers' status, g
     assert.ok(Array.isArray(j.autoSplit.recent));
     // 0.5.5 (C): "r4Verdicts" — the AI's {action,reason} verdict for every R4 issue asked about
     // in the most recent scan (report-only unless structure.ai.allowSiblingLineRemoval).
-    assert.deepStrictEqual(Object.keys(j.structure).sort(), ["ai", "enabled", "issueList", "issues", "lastError", "lastScanAt", "nextScanAt", "r4Verdicts", "recent"]);
+    assert.deepStrictEqual(Object.keys(j.structure).sort(), ["ai", "duplicates", "enabled", "issueList", "issues", "lastError", "lastScanAt", "nextScanAt", "r4Verdicts", "recent"]);
     assert.strictEqual(j.structure.enabled, true);
     assert.strictEqual(j.structure.lastError, null);
     assert.strictEqual(typeof j.structure.issues.total, "number");

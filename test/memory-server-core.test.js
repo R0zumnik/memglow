@@ -147,35 +147,36 @@ test("memory_core: a coreMap target that is NOT listed in the index is still res
   } finally { kb.cleanup(); }
 });
 
-test("memory_core (0.5.4/0.5.6): a one-line \"maintenance: …\" summary from the auto-split/structure/archive/duplicates workers, on by default (every worker always exists, inert unless configured)", () => {
+test("memory_core (0.5.4/0.5.6): a one-line \"maintenance: …\" summary from the auto-split/structure/archive workers, on by default (every worker always exists, inert unless configured)", () => {
   const kb = makeHubKb();
   try {
     const off = createMemoryServer({ root: kb.root, watch: false, pollMs: 0 });
     const outOff = off.tools.call("memory_core", {}).content[0].text;
-    assert.match(outOff, /maintenance: 0 structure issues, 0 notes over threshold \(auto-split off, archive off, duplicates off\)\.\n/);
+    assert.match(outOff, /maintenance: 0 structure issues, 0 notes over threshold \(auto-split off, archive off\)\.\n/);
     // 0.5.8: WEEKLY MAINTENANCE REPORT — a second, trailing line, same gate as maintenanceLine.
-    assert.match(outOff, /maintenance this week: 0 split, 0 structure fixes, 0 archived, 0 duplicates found, 0 AI calls\.\n$/);
+    assert.match(outOff, /maintenance this week: 0 split, 0 structure fixes, 0 archived, 0 possible duplicates, 0 AI calls\.\n$/);
     off.close();
 
     const on = createMemoryServer({ root: kb.root, watch: false, pollMs: 0, readOnly: false, autoSplit: { enabled: true, thresholdTokens: 50 }, structure: { enabled: true } });
     const outOn = on.tools.call("memory_core", {}).content[0].text;
-    assert.match(outOn, /maintenance: \d+ structure issues?, \d+ notes? over threshold \(auto-split on, archive off, duplicates off\)\.\n/);
-    assert.match(outOn, /maintenance this week: \d+ split, \d+ structure fix(es)?, \d+ archived, \d+ duplicates? found, \d+ AI calls?\.\n$/);
+    assert.match(outOn, /maintenance: \d+ structure issues?, \d+ notes? over threshold \(auto-split on, archive off\)\.\n/);
+    assert.match(outOn, /maintenance this week: \d+ split, \d+ structure fix(es)?, \d+ archived, \d+ possible duplicates?, \d+ AI calls?\.\n$/);
     const json = JSON.parse(on.tools.call("memory_core", { output_format: "json" }).content[0].text);
     assert.match(json.text, /maintenance: /);
     on.close();
   } finally { kb.cleanup(); }
 });
 
-test("memory_core (0.5.6): the maintenance line also names archive/duplicates on/off, and duplicates' own reported count, when those workers are configured", () => {
+test("memory_core (0.5.6): the maintenance line also names archive on/off when that worker is configured; the removed duplicates option is accepted and ignored", () => {
   const kb = makeHubKb();
   try {
     const srv = createMemoryServer({
       root: kb.root, watch: false, pollMs: 0, readOnly: false,
-      archive: { enabled: true }, duplicates: { enabled: true },
+      archive: { enabled: true }, duplicates: { enabled: true, autoMerge: true },
     });
     const out = srv.tools.call("memory_core", {}).content[0].text;
-    assert.match(out, /\(auto-split off, archive on, duplicates on \(0 found, 0 pairs checked\)\)\.\n/);
+    assert.match(out, /\(auto-split off, archive on\)\.\n/);
+    assert.ok(!/duplicates (on|off)/.test(out));
     srv.close();
   } finally { kb.cleanup(); }
 });

@@ -108,7 +108,7 @@ const dirOf = (rel) => { const d = path.posix.dirname(rel); return d === "." ? "
 // (`--serve-files any`), the behaviour before 0.4.9.1.
 const SERVE_EXT = new Set([".md", ".txt", ".json", ".csv", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf"]);
 
-function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, archive = null, duplicates = null, searchUsage: searchUsageIn, archivePenalty: archivePenaltyIn }) {
+function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, archive = null, searchUsage: searchUsageIn, archivePenalty: archivePenaltyIn }) {
   // Optional, local-first semantic search (lib/store/semantic.js) — self-configuring from env /
   // memglow.config.json, OFF unless a provider is actually set there (see that module's header
   // comment). `semanticIn` (tests): pass an engine to control it directly, or `null` to force it
@@ -687,18 +687,12 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     if (!autoSplit || typeof autoSplit.status !== "function" || !structure || typeof structure.status !== "function") return "";
     const as = autoSplit.status();
     const st = structure.status();
-    const issues = st.issues.total;
+    const issues = st.issues.total - ((st.issues.byRule && st.issues.byRule.D1) || 0); // D1 candidates are listed on the "À regarder" line
     const over = as.pendingCount;
     let paren = `auto-split ${as.enabled ? "on" : "off"}`;
     if (archive && typeof archive.status === "function") {
       const ar = archive.status();
       paren += `, archive ${ar.enabled ? "on" : "off"}`;
-    }
-    if (duplicates && typeof duplicates.status === "function") {
-      const du = duplicates.status();
-      const checked = typeof du.checkedCount === "number" ? du.checkedCount : (du.reported || []).length;
-      const found = typeof du.foundCount === "number" ? du.foundCount : (du.reported || []).filter((r) => r && r.duplicate).length;
-      paren += du.enabled ? `, duplicates on (${found} found, ${checked} pairs checked)` : ", duplicates off";
     }
     return `maintenance: ${issues} structure issue${issues === 1 ? "" : "s"}, ${over} note${over === 1 ? "" : "s"} over threshold (${paren}).`;
   }
@@ -711,15 +705,40 @@ function createTools({ store, project = store.project, readOnly = true, startedA
    * that does not wire this in). archive/duplicates/structure are each optional on top of that,
    * same as maintenanceLine(). Never a secret — only counts.
    */
+  /**
+   * 0.6.0 — the "À regarder" line: ONE compact line naming what needs the owner's eye, and nothing
+   * else: the structure issues still standing (count by rule), the D1 possible-duplicate candidates,
+   * the last AI error a worker reported. Omitted entirely (empty string) when nothing is pending.
+   */
+  function watchLine() {
+    if (!structure || typeof structure.status !== "function") return "";
+    const st = structure.status();
+    const byRule = (st.issues && st.issues.byRule) || {};
+    const parts = [];
+    const rules = Object.keys(byRule).filter((r) => r !== "D1" && byRule[r] > 0).sort();
+    const nIssues = rules.reduce((a, r) => a + byRule[r], 0);
+    if (nIssues) parts.push(`${nIssues} structure issue${nIssues === 1 ? "" : "s"} (${rules.map((r) => `${r} ×${byRule[r]}`).join(", ")})`);
+    const nDup = byRule.D1 || 0;
+    if (nDup) parts.push(`${nDup} possible duplicate${nDup === 1 ? "" : "s"} (D1)`);
+    let lastErr = null;
+    for (const w of [structure, autoSplit, archive]) {
+      const e = w && typeof w.status === "function" ? w.status().lastError : null;
+      if (e && e.message && (!lastErr || (e.t || 0) > (lastErr.t || 0))) lastErr = e;
+    }
+    if (lastErr) parts.push(`last AI error: ${String(lastErr.message).replace(/\s+/g, " ").slice(0, 120)}`);
+    return parts.length ? `À regarder : ${parts.join(" · ")}.` : "";
+  }
+
   function weeklyLine() {
     if (!autoSplit || typeof autoSplit.recentEvents !== "function" || !structure || typeof structure.recentEvents !== "function") return "";
     const since = weeklyReport.weeklyReportSince(Date.now());
     const evOf = (w) => (w && typeof w.recentEvents === "function" ? w.recentEvents(since) : []);
     const wk = weeklyReport.buildWeeklyReport({
-      autoSplitEvents: evOf(autoSplit), structureEvents: evOf(structure), archiveEvents: evOf(archive), duplicatesEvents: evOf(duplicates),
+      autoSplitEvents: evOf(autoSplit), structureEvents: evOf(structure), archiveEvents: evOf(archive),
+      duplicateCandidates: structure.status().issues.byRule.D1 || 0,
     });
     return `maintenance this week: ${wk.notesSplit} split, ${wk.structureFixes} structure fix${wk.structureFixes === 1 ? "" : "es"}, `
-      + `${wk.sectionsArchived} archived, ${wk.duplicatesFound} duplicate${wk.duplicatesFound === 1 ? "" : "s"} found, ${wk.aiCalls} AI call${wk.aiCalls === 1 ? "" : "s"}.`;
+      + `${wk.sectionsArchived} archived, ${wk.duplicatesFound} possible duplicate${wk.duplicatesFound === 1 ? "" : "s"}, ${wk.aiCalls} AI call${wk.aiCalls === 1 ? "" : "s"}.`;
   }
 
   /**
@@ -776,7 +795,8 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     if (now - coreTailCache.at > CORE_TAIL_MAX_AGE_MS) {
       const ml = maintenanceLine();
       const wl = weeklyLine();
-      coreTailCache = { at: now, text: [ml, wl].filter(Boolean).join("\n") };
+      const al = watchLine();
+      coreTailCache = { at: now, text: [ml, wl, al].filter(Boolean).join("\n") };
     }
     return coreTailCache.text;
   }

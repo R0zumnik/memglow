@@ -441,7 +441,7 @@ test("setup: memoryMaintenanceStatus (0.5.6) — archive/duplicates, bounded and
       // checkedCount of its own, same "older memory server" fallback as every other field).
       foundCount: 1, checkedCount: 1,
       lastScanAt: "2026-10-28T10:00:00.000Z", nextScanAt: null, lastError: null,
-      reported: [{ a: "coffee-a", b: "coffee-b", duplicate: true, keep: "a", reason: "same subject, b is a superset", merged: false, t: "2026-10-28T09:30:00.000Z" }],
+      reported: [{ a: "coffee-a", b: "coffee-b", duplicate: true, keep: "a", reason: "same subject, b is a superset", merged: false, t: "2026-10-28T09:30:00.000Z", score: null }],
       recent: [],
     });
     assert.ok(!JSON.stringify(r).includes("sk-ant-should-never-appear") && !JSON.stringify(r).includes("sk-ant-nope"), "only known-safe fields copied through, even inside archive/duplicates");

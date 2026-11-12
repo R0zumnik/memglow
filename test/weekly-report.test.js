@@ -75,22 +75,13 @@ test("buildWeeklyReport: sectionsArchived — sums the leading section count of 
   assert.strictEqual(wk.errors, 1, "only ask-failed is an error here");
 });
 
-test("buildWeeklyReport: duplicatesFound — 'duplicate' (not merged) and 'merged' (merged) are the two real-duplicate kinds, never 'not-duplicate'/'merge-skipped'", () => {
-  const duplicatesEvents = [
-    { t: 1, kind: "duplicate", note: "a / b", detail: "same subject" },
-    { t: 2, kind: "merged", note: "c <- d", detail: "same subject" },
-    { t: 3, kind: "not-duplicate", note: "e / f", detail: "merely related" },
-    { t: 4, kind: "merge-skipped", note: "g / h", detail: "different hub" },
-    { t: 5, kind: "cache-reused", note: null, detail: "3 cached verdicts reused" },
-    { t: 6, kind: "auth-error", note: null, detail: "bad key" },
-  ];
-  const wk = buildWeeklyReport({ duplicatesEvents });
-  assert.strictEqual(wk.duplicatesFound, 2, "duplicate + merged only");
-  assert.strictEqual(wk.cachedVerdicts, 3);
-  assert.strictEqual(wk.errors, 1);
-  // aiCalls: duplicate, merged, not-duplicate, auth-error — merge-skipped excluded (it always
-  // accompanies the already-counted "duplicate" kind for the same fresh call, never its own).
-  assert.strictEqual(wk.aiCalls, 4);
+test("buildWeeklyReport (0.6.0): duplicatesFound is the number of D1 possible-duplicate candidates, never an AI event count", () => {
+  assert.strictEqual(buildWeeklyReport({ duplicateCandidates: 3 }).duplicatesFound, 3);
+  assert.strictEqual(buildWeeklyReport({ duplicateCandidates: -1 }).duplicatesFound, 0);
+  assert.strictEqual(buildWeeklyReport({ duplicateCandidates: "x" }).duplicatesFound, 0);
+  // an old caller still passing duplicatesEvents is simply ignored: no AI calls, no errors counted from it
+  const wk = buildWeeklyReport({ duplicatesEvents: [{ t: 1, kind: "duplicate" }, { t: 2, kind: "auth-error" }] });
+  assert.deepStrictEqual([wk.duplicatesFound, wk.aiCalls, wk.errors], [0, 0, 0]);
 });
 
 test("buildWeeklyReport: a full week across all four workers combines additively", () => {

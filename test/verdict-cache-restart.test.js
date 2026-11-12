@@ -123,14 +123,16 @@ test("real restart (two spawned OS processes, SIGTERM, same --root/MEMGLOW_DATA_
       // only would wrongly exclude MEMORY.md and turn every note in it into a spurious R5
       // orphan — unrelated noise this test is not about.
       archive: { enabled: true, idleMinutes: 0, minTokens: 400, ...provider },
-      duplicates: { enabled: true, idleMinutes: 0, ...provider },
+      // 0.6.0: the AI duplicates worker is gone — this old setting must be accepted, ignored, and cost 0 AI calls.
+      duplicates: { enabled: true, autoMerge: true, idleMinutes: 0, ...provider },
       structure: { enabled: true, ai: { enabled: true, maxDecisionsPerScan: 10, ...provider } },
     },
   }));
   try {
-    await spawnAndStop(root, dataDir, configPath, mock, { minCalls: 3, quietMs: 1000 });
+    await spawnAndStop(root, dataDir, configPath, mock, { minCalls: 2, quietMs: 1000 });
     const afterRun1 = mock.count();
-    assert.ok(afterRun1 >= 3, `expected at least 3 real AI calls (archive + duplicates + R4) in process 1, got ${afterRun1}`);
+    assert.ok(afterRun1 >= 2, `expected at least 2 real AI calls (archive + R4) in process 1, got ${afterRun1}`);
+    assert.ok(!mock.prompts.some((p) => /truly duplicate|true duplicates/i.test(p)), "0.6.0: no duplicates prompt is ever sent to the AI");
     assert.ok(!mock.prompts.some((p) => /"undefined"/.test(p)), "every prompt names the real note(s) — never \"undefined\"");
 
     await spawnAndStop(root, dataDir, configPath, mock, { quietMs: 2000 }); // nothing to wait FOR: a longer quiet window only makes a false pass less likely
@@ -138,9 +140,7 @@ test("real restart (two spawned OS processes, SIGTERM, same --root/MEMGLOW_DATA_
     assert.strictEqual(afterRun2, afterRun1, `process 2 (same root + same MEMGLOW_DATA_DIR, unchanged notes) made ${afterRun2 - afterRun1} extra AI call(s) — the verdict cache did not survive the restart`);
 
     const archiveCache = JSON.parse(fs.readFileSync(path.join(dataDir, "auto-archive-cache.json"), "utf8"));
-    const dupCache = JSON.parse(fs.readFileSync(path.join(dataDir, "auto-duplicates-cache.json"), "utf8"));
     const r4Cache = JSON.parse(fs.readFileSync(path.join(dataDir, "structure-r4-cache.json"), "utf8"));
-    assert.strictEqual(Object.keys(dupCache.entries).length, 1, "one duplicate pair cached, never doubled under a second key by process 2");
     assert.strictEqual(Object.keys(r4Cache.entries).length, 1, "the one R4 line cached, never doubled by process 2");
     assert.strictEqual(Object.keys(archiveCache.entries).length, 1);
   } finally {

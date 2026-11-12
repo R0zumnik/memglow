@@ -66,14 +66,14 @@ var EN_CONTROL = {
   "control.workerAuthError": "{worker}: stopped — auth error: {message}",
   "control.archiveOn": { one: "Auto-archive: on — {n} note archived recently", other: "Auto-archive: on — {n} notes archived recently" },
   "control.archiveOff": "Auto-archive: off",
-  "control.duplicatesOn": { one: "Duplicates: on — {n} duplicate found ({checked} pairs checked)", other: "Duplicates: on — {n} duplicates found ({checked} pairs checked)" },
+  "control.duplicatesOn": { one: "Possible duplicates: {n} (report only, no AI)", other: "Possible duplicates: {n} (report only, no AI)" },
   "control.duplicatesOff": "Duplicates: off",
   "control.workerArchive": "Auto-archive",
   "control.workerDuplicates": "Duplicates",
   "control.recentArchivesTitle": "Recently archived",
-  "control.reportedDuplicatesTitle": "Reported duplicate pairs",
+  "control.reportedDuplicatesTitle": "Possible duplicate pairs",
   "control.duplicatePairReason": "{a} / {b}: {reason}",
-  "control.weeklyReport": "This week: {split} split, {fixes} structure fixes, {archived} archived, {dup} duplicates found, {ai} AI calls",
+  "control.weeklyReport": "This week: {split} split, {fixes} structure fixes, {archived} archived, {dup} possible duplicates, {ai} AI calls",
   "control.weeklyErrors": { one: "{n} error this week", other: "{n} errors this week" },
   "control.measuresEmpty": "No measurements yet.",
   "control.byClientTitle": "By AI tool (7 days)",
@@ -319,7 +319,7 @@ function controlRenderMaintenanceWorkers(mm, T) {
   // `checkedCount` (lib/setup.js memoryMaintenanceStatus(), itself falling back to deriving them
   // from `reported` for an older memory server) are the two real numbers.
   const duChecked = typeof du.checkedCount === "number" ? du.checkedCount : (du.reported || []).length;
-  const duFound = typeof du.foundCount === "number" ? du.foundCount : (du.reported || []).filter(function (r) { return r && r.duplicate; }).length;
+  const duFound = typeof du.foundCount === "number" ? du.foundCount : (du.reported || []).length;
   const duLine = du.enabled ? T("control.duplicatesOn", { n: duFound, checked: duChecked }) : T("control.duplicatesOff");
   var out = '<p class="mg-control__line">' + cEsc(asLine) + '</p><p class="mg-control__line">' + cEsc(stLine) + '</p>' +
     '<p class="mg-control__line">' + cEsc(arLine) + '</p><p class="mg-control__line">' + cEsc(duLine) + '</p>';
@@ -329,7 +329,6 @@ function controlRenderMaintenanceWorkers(mm, T) {
   if (as.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerAutoSplit"), message: as.lastError.message || "?" })) + '</p>';
   if (st.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerStructure"), message: st.lastError.message || "?" })) + '</p>';
   if (ar.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerArchive"), message: ar.lastError.message || "?" })) + '</p>';
-  if (du.lastError) out += '<p class="mg-control__line mg-control__line--bad">' + cEsc(T("control.workerAuthError", { worker: T("control.workerDuplicates"), message: du.lastError.message || "?" })) + '</p>';
   // 0.5.10: the structure guardian's own issue sample (bounded, GET /api/maintenance's
   // `structure.issueList`) — collapsed by default, same <details>/<summary> pattern as the
   // "Token savings" section's "Advanced" lever list, so a long list never pushes the rest of the
@@ -356,10 +355,10 @@ function controlRenderMaintenanceWorkers(mm, T) {
   }
   // 0.5.8 bug fix: this list is titled "duplicate pairs" — it now only ever holds the ones
   // actually confirmed as duplicates (duplicate === true), never every pair merely CHECKED.
-  var duConfirmed = (du.reported || []).filter(function (r) { return r && r.duplicate; });
+  var duConfirmed = du.reported || [];
   if (du.enabled && duConfirmed.length) {
     out += '<p class="mg-control__subhead">' + cEsc(T("control.reportedDuplicatesTitle")) + '</p><ul class="mg-control__clients">' +
-      duConfirmed.map(function (r) { return "<li>" + cEsc(T("control.duplicatePairReason", { a: r.a || "?", b: r.b || "?", reason: r.reason || "?" })) + "</li>"; }).join("") +
+      duConfirmed.map(function (r) { return "<li>" + cEsc(T("control.duplicatePairReason", { a: r.a || "?", b: r.b || "?", reason: "score " + (r.score != null ? r.score : "?") })) + "</li>"; }).join("") +
       '</ul>';
   }
   // 0.5.8: WEEKLY MAINTENANCE REPORT — the last 7 days of all four workers' own activity

@@ -28,7 +28,7 @@ const memoryCore = require("../lib/memory-core");
 const { createAutoSplitWorker, autoSplitSettings } = require("../lib/auto-split");
 const { createStructureWorker, structureSettings } = require("../lib/star-audit");
 const { createArchiveWorker, archiveSettings } = require("../lib/auto-archive");
-const { createDuplicatesWorker, duplicatesSettings } = require("../lib/auto-duplicates");
+const { ignoredDuplicatesNote } = require("../lib/duplicate-candidates");
 const { usageBoostSettings } = require("../lib/learned-aliases");
 const { archivePenaltySettings } = require("../lib/store/search");
 
@@ -234,12 +234,14 @@ function resolveArchive(env = process.env) {
   return archiveSettings(raw, env);
 }
 
-/** Same trust boundary — "maintenance.duplicates" top-level key. */
-function resolveDuplicates(env = process.env) {
+/** 0.6.0: the AI duplicates worker is gone; its old config / env are accepted and ignored (one log line). */
+function resolveDuplicates(env = process.env, log = () => {}) {
   let cfg = {};
   try { cfg = defaultsLib.resolveConfigFiles({ env, allowCwd: false }).config || {}; } catch { cfg = {}; }
   const raw = (cfg.maintenance && typeof cfg.maintenance === "object" && cfg.maintenance.duplicates) || {};
-  return duplicatesSettings(raw, env);
+  const note = ignoredDuplicatesNote(raw, env);
+  if (note) { try { log(note); } catch { /* ignore */ } }
+  return null;
 }
 
 /** Same trust boundary — "search.usageBoost" top-level key (E — usage-aware search). */
@@ -281,7 +283,6 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
   // 0.5.5 (A, B — PRUNE STALE → ARCHIVE, DUPLICATES): same shape as the two workers above —
   // OFF by default, inert without `writer`/`store`, started/stopped alongside them.
   const archiveWorker = createArchiveWorker({ store, writer, config: archive || {}, dataDir, log, indexNote });
-  const duplicatesWorker = createDuplicatesWorker({ store, writer, config: duplicates || {}, dataDir, log, indexNote });
   const startupChecks = () => {
     if (!writer) return;
     try { const w = ownershipWarning(require("fs").statSync(root)); if (w) log(w); } catch { /* no root: nothing to warn about */ }
@@ -290,7 +291,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     const col = store.collisions();
     if (twins.length || col.length) log(`memglow memory server: ${twins.length + col.length} note(s) present under several paths or permalinks (an interrupted move?) — see basic_memory_diagnostics`);
   };
-  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, log, coreMap, dataDir, indexNote, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove }, autoSplit: autoSplitWorker, structure: structureWorker, archive: archiveWorker, duplicates: duplicatesWorker, searchUsage, archivePenalty });
+  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, log, coreMap, dataDir, indexNote, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove }, autoSplit: autoSplitWorker, structure: structureWorker, archive: archiveWorker, searchUsage, archivePenalty });
   let ready;
   if (!deferStart) {
     store.start();
@@ -310,7 +311,6 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     try { autoSplitWorker.start(); } catch { /* inert is the safe default */ }
     try { structureWorker.start(); } catch { /* inert is the safe default */ }
     try { archiveWorker.start(); } catch { /* inert is the safe default */ }
-    try { duplicatesWorker.start(); } catch { /* inert is the safe default */ }
   });
   const rawRpc = createRpc({ tools, instructions: readOnly ? INSTRUCTIONS : INSTRUCTIONS_RW });
   const aio = allInOne ? createAllInOne({ rpc: rawRpc, root, log, store, ...(allInOne === true ? {} : allInOne) }) : null;
@@ -322,8 +322,8 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     handleAny: (m, ctx) => (isReady ? inner.handleAny(m, ctx) : ready.then(() => inner.handleAny(m, ctx))),
   } : inner;
   return {
-    store, tools, rpc, rawRpc, aio, writer, ready, isReady: () => isReady, autoSplit: autoSplitWorker, structure: structureWorker, archive: archiveWorker, duplicates: duplicatesWorker,
-    close: () => { if (warmTimer) { clearImmediate(warmTimer); warmTimer = null; } autoSplitWorker.stop(); structureWorker.stop(); archiveWorker.stop(); duplicatesWorker.stop(); store.stop(); if (writer) writer.flushHook(); if (aio) aio.close(); },
+    store, tools, rpc, rawRpc, aio, writer, ready, isReady: () => isReady, autoSplit: autoSplitWorker, structure: structureWorker, archive: archiveWorker,
+    close: () => { if (warmTimer) { clearImmediate(warmTimer); warmTimer = null; } autoSplitWorker.stop(); structureWorker.stop(); archiveWorker.stop(); store.stop(); if (writer) writer.flushHook(); if (aio) aio.close(); },
   };
 }
 
@@ -394,7 +394,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   const autoSplit = resolveAutoSplit(env);
   const structure = resolveStructure(env);
   const archive = resolveArchive(env);
-  const duplicates = resolveDuplicates(env);
+  const duplicates = resolveDuplicates(env, log);
   const searchUsage = resolveSearchUsage(env);
   const archivePenalty = resolveSearchArchivePenalty(env);
   // 0.4.10.2: the port opens at once; the notes folder is loaded and indexed in the background
@@ -421,7 +421,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
     const m = /^(?:\[?([^\]]*)\]?:)?(\d+)$/.exec(o.listen.trim());
     if (!m) { process.stderr.write(`memglow-memory-server: bad --listen "${o.listen}" (expected HOST:PORT)\n`); return 2; }
     const host = m[1] || "127.0.0.1", port = Number(m[2]);
-    const server = createHttpServer({ rpc: srv.rpc, store: srv.store, log, allowOrigins: o.allowOrigins, token: o.token, readOnly: o.readOnly, fsyncMode: srv.writer ? srv.writer.fsyncMode : null, autoSplit: srv.autoSplit, structure: srv.structure, archive: srv.archive, duplicates: srv.duplicates });
+    const server = createHttpServer({ rpc: srv.rpc, store: srv.store, log, allowOrigins: o.allowOrigins, token: o.token, readOnly: o.readOnly, fsyncMode: srv.writer ? srv.writer.fsyncMode : null, autoSplit: srv.autoSplit, structure: srv.structure, archive: srv.archive });
     server.once("error", (e) => { process.stderr.write(`memglow-memory-server: cannot listen on ${host}:${port}: ${e.message}\n`); srv.close(); process.exit(1); });
     server.listen(port, host, () => log(`memglow memory server: listening on http://${host}:${server.address().port}/mcp`));
     // Writes in progress — and, with --fsync-mode deferred, their pending fsyncs — finish first
