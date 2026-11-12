@@ -1,5 +1,10 @@
 # memglow bench
 
+> **0.6.0.** The levers `searchDetails`, `suggestions`, `alreadyLoaded`, `indexHint`, `deltaRead` and
+> `sessionBudget` were removed, along with `lib/delta-read.js` and the `replay-delta-read*` fixtures. The
+> measurements below that mention them are kept as history only; `bench/replay.js` no longer knows those
+> lever names (and ignores `--always-loaded`).
+
 Two very different tools live here:
 
 - **`bench/run.js`** — real `claude -p` runs against a real memory server. Costs real money,

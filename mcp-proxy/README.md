@@ -83,6 +83,13 @@ Values: `read`, `search`, `write`, `ignore`.
 
 ## Token-saving and speed levers (v0.4)
 
+> **0.6.0.** Levers `searchDetails` (2), `suggestions` (3), `alreadyLoaded` (8), `indexHint` (12),
+> `deltaRead` (13) and `sessionBudgetTokens` (18) were **removed**: measured as a net cost or never
+> used. Their variables and `proxy` keys are still accepted and ignored, with one start-up log line
+> each. New in 0.6.0: `stateView` is **on** by default, and `tools.profile` (`minimal` by default,
+> `MEMGLOW_TOOLS_PROFILE=full` to list every tool) hides the compat tools from `tools/list` — they stay
+> callable by name. The sections below keep their historical numbering; the removed ones are gone.
+
 The proxy sees every answer of the memory server before the assistant does, so it can add what
 the server does not know: how big a note is, which notes go with it, what each search hit is
 about. Rules, for every lever:
@@ -110,49 +117,16 @@ about. Rules, for every lever:
 | # | Lever | Default | What the assistant gets |
 |---|---|---|---|
 | 1 | `sizeWarning` | **on** | Before the content of a note over `largeNoteTokens` (default 5,000): `⚠ memglow: this note is ≈N tokens (threshold T). Consider offering the user to split it into smaller notes within the same theme "<theme>"; memglow's split_plan tool can propose sections.` Also after a `write_note` / `edit_note` that leaves the note over the threshold (`…this note is now ≈N tokens…`). Once per note and per session. |
-| 2 | `searchDetails` | off (was on through 0.4.2.1b) | After search results: one line per note found — title, id, theme/sub-theme, ≈tokens, description — so the right note is picked without opening several. The description is shown once per note **per session**; a note found again by a later search in the same session gets the compact line (no description), and a note already read **in full** this session gets no line at all. |
-| 3 | `suggestions` | off (was on through 0.4.2.1b) | After a note is read: `memglow: related notes: A (≈t), B (≈t), C (≈t)` — linked notes, same sub-theme and, when activity counters exist, notes usually read the same days. 3 by default (`suggestionsMax`, up to 5); notes already read in the session are skipped, and shown **once per note per session** (re-reading the same note later in the session does not repeat it). |
 | 4 | `dedupe` | off | A note re-read in the same session with **exactly the same answer** gets a short "unchanged since you read it earlier in this session (≈N tokens saved)" instead of its content (only when that is shorter). |
 | 5 | `toc` | off | A note over the threshold first comes back as its description plus its sections with ≈tokens each; the assistant then asks for one section (`"memglow_section": "Decisions"` or `"3"`), cut verbatim from the server's answer. |
 | 6 | `archiveHint` | off | A search that finds nothing in the live memory (an empty answer such as `No results` or `"results": []`, or hits only in the [archive folder](../README.md#archive)) → after the server's answer: `memglow: nothing found in the live memory — the archive summary lists: "Router setup" (from \`home-net\`, archived 2026-06-01 in \`habits-archive\`, ≈420 tokens)`. Titles of the archived sections matching the query (up to `archiveHintMax`, 5), read from the archive summary note — never their text. Nothing matches: a one-line pointer to the summary note. No archive summary: nothing added. |
 | 7 | `hideUnsupportedTools` | off | Removes, from `tools/list`, the tools a per-server table marks unsupported for the client that just said hello — never from a `tools/call`, which always reaches the real server untouched. |
-| 8 | `alreadyLoaded` | off | A single-note read (never `build_context` or another `multiNoteTools` entry) of a note memglow knows is loaded into the context at the start of **every** session — the index note(s), or an `alwaysLoaded` entry (see `README.md`'s "Always loaded" cost, `lib/always-loaded.js`) that resolves to a note — gets `memglow: "<label>" (≈N tokens) is already in your context — it is loaded at the start of every session and has not changed since this session began (sha <8 hex chars>). Use it from there. To get the full text anyway, call again with "memglow_fresh": true.` instead of its content, for as long as the note's file (read directly off disk) matches the hash captured at the start of the session. A note that changed meanwhile is never stubbed: its full, current text comes back with one extra line saying so. 0.4.3.1: never stubs (nor alters) a read for a session whose `clientInfo` matches `alreadyLoadedExemptClients`, and the stub itself additionally requires prior activity this session (`alreadyLoadedRequireActivity`, default on) — see the dedicated section below. |
 | 9 | `multiQuery` | **on** | A search tool call carrying `memglow_queries` (2-4 extra phrasings, up to `MULTI_QUERY_MAX` total, added to the search tools' schemas in `tools/list`) is sent upstream as ONE call per phrasing — sequentially, the original query first — instead of the assistant spending a separate turn on each one. Hits are merged, deduped by note id (found by more phrasings ranks higher), capped to the biggest single phrasing's own hit count, and returned as ONE result: in the upstream's own format when safe (plain-text hits reassembled from the server's own blocks), else a compact listing of whatever note ids resolve; a later phrasing's failed call fails the whole thing open to the FIRST phrasing's own result — what a plain single search would have returned. `memglow_queries` is always stripped before a call reaches the server, even with this lever off. |
 | 10 | `aliases` + `learnAliases` | **on** | **`learnAliases`** (0.4.2.3, "query log"): when a search is followed, in the SAME session within 2 minutes and before another search, by a single-note read of a note NOT in that search's own results, the query's significant words (lowercased, EN+FR stop-words dropped, ≥ 3 letters, secret-masked) are learned as aliases of that note, with a count — in one small local file, `learned-aliases.json` (mode 600, bounded to `aliasesMax` = 2,000 entries, oldest dropped). Nothing is ever sent anywhere. **`aliases`** (0.4.2.4, "learned aliases"): on a LATER search, a note whose learned aliases match ≥ 2 of the query's words (or 1 alias seen ≥ 2 times), and that is not already among this search's own results, is added at the TOP of the answer — the upstream's own per-hit row shape when the answer is plain text, else one compact line `memglow: likely relevant — <label> (<id>), learned from your past searches`. Never removes a result, never duplicates a note already present; an alias whose note no longer exists is forgotten. The two switches are independent (recording vs. using what was recorded). Since 0.4.2.5, a search carrying lever 9's own `memglow_queries` no longer bypasses this lever: it learns from every phrasing's words and can inject into the merged result too. **On by default since 0.4.2.5** — see that stage's section below for why a lever that costs slightly MORE raw tokens now ships on. |
 | 11 | `negativeCache` | off | A search in a session not followed by a read (of anything) within 2 minutes, or superseded first by another search or a write in the same session, is remembered, locally, as "futile" for the live memory's current FINGERPRINT (note count + latest mtime — `lib/negative-cache.js`). A LATER search with the same significant words, while the fingerprint is unchanged, gets one line PREPENDED: `memglow: this search found nothing you used last time (<date>); the memory has not changed since.` The results that follow are always relayed right after, unchanged — this never hides anything. Any write anywhere changes the fingerprint, invalidating every remembered entry at once. A single switch gates both recording and using it. Off by default — see 0.4.2.6 below: a clear win on its own dedicated fixture (one dropped retry call), but `bench/replay-heavy.jsonl` triggers the hint for real on a naturally recurring search with no call saved there to offset it, since that fixture was never built to model the dropped turn. |
-| 12 | `indexHint` | off | A search whose own results are ONLY the index note, or a read of the index itself while `alreadyLoaded` (lever 8) is off, gets a suffix: `memglow: the index already says:` followed by up to 3 lines of the index's OWN text (secret-masked, each capped to 160 characters) that mention one of the query's significant words — grepped, not summarised. The read case reuses lever 10's own "search right before a read" correlation to know what to grep for; no recent search at all → nothing added. Never replaces the note's own content. Off by default: a pure, unconditional add wherever it fires — same bucket as `searchDetails`/`suggestions`/`archiveHint`. |
-| 13 | `deltaRead` | off | Two mechanisms for the hottest notes, re-read in every new session — see 0.4.3 below: (1) CROSS-SESSION — the first read of a note in a session is always full (correctness); if it changed since the LAST time this same client read it, in an EARLIER session, one line is added: `memglow: changed since your last read on <date> — sections changed: <## titles>` (up to 5), remembered in a small per-client ledger, `delta-read.json` (mode 600, bounded). (2) WITHIN-SESSION — a note already delivered in full THIS session, re-read after it changed, gets ONLY the diff to the current text (`lib/delta-read.js`, reusing `lib/assistant/diff.js`'s line diff), with a header naming the escape hatch; too large a diff (> 60% of the note) falls back to the full text. Same escape hatch (`memglow_fresh`) and "repeat the call" rule as 4/5/8. |
 | 14 | `duplicateHint` | off | After a **`write_note`** (never `edit_note`/`move_note`) whose `title` already names an existing note — the title itself, its kebab slug, or its label (whatever `index.resolve` already matches) — a short line: `memglow: a note with this title already exists: [[<id>]] — this write_note may replace or duplicate it; prefer edit_note.` When the title does not already name a note but is close to one (shares ≥ 2 significant words with an existing note's own id+label+description, EN+FR, secret-masked, ≥ 3 characters, AND those words cover ≥ 60% of the title's own significant words — index notes and archive-folder notes never count), up to 2 candidates instead: `memglow: a note on this subject already exists — [[<id1>]] (<label1>); [[<id2>]] (<label2>). Prefer edit_note on it (append / replace_section) over a new note.` Matched BEFORE the write reaches the server, so the note being created is never mistaken for its own duplicate; same note never hinted twice per session. Advisory only — never blocks, never changes the arguments sent upstream, never touches the write's own confirmation text (one block appended). Off by default: a pure, unconditional add wherever it fires, same bucket as `searchDetails`/`suggestions`/`archiveHint`/`indexHint` — see 0.4.4.1 below. |
 | 15 | `slugHint` | off | After a successful **`write_note`** whose `title` is not a kebab slug, or whose `directory` is the notes root (empty, `/`, `memory`): one advisory line appended, `memglow: title "…" is not a kebab slug — prefer "<slug>" in a memory/<folder>/ directory (title = kebab slug, file = slug.md).` (or, for a slug title at the root, `prefer a memory/<folder>/ directory`). The slug is the file name the memory server's `--kebab-filenames` gives (accents transliterated). Never blocks, never changes the arguments. Off by default (a house style). `MEMGLOW_PROXY_SLUG_HINT=1` / `"proxy": { "slugHint": true }`. |
 | — | `indexWarning` | off | Before the content of the **index** note when it is over `indexWarningTokens` (top-level key, default 2,000): `⚠ memglow: the index note "…" is ≈N tokens (index threshold T) and it is loaded at every session. Consider offering the user to trim it…`. Once per session. Replaces lever 1 for the index note when on. |
-
-### Stage 0.4.2.2 — "lean defaults"
-
-Through 0.4.2.1b, `searchDetails` and `suggestions` were on by default, same as `sizeWarning`.
-Measured with the free replay harness (`bench/replay.js`, see [bench/README.md](../bench/README.md))
-and against a real 2-day usage log (91 calls), `defaults` delivered MORE tokens than `off` —
-−19.7% on the shipped demo, +14% on the real log (116,052 → 132,257 tokens). Both levers only
-ever ADD explanatory text (never cut anything), and the harness cannot credit the extra reads or
-searches that text might avoid, so any amount of it reads as a pure loss; the real log's own
-+14% is the same effect at a larger, noisier scale. Neither lever is "short" the way `sizeWarning`
-is (a search's `searchDetails` suffix can be close to the size of the search results themselves),
-and neither has a measured upside, so this stage turns both OFF by default. They are shortened
-either way, for whoever opts back in (`MEMGLOW_PROXY_SEARCH_DETAILS=1` /
-`MEMGLOW_PROXY_SUGGESTIONS=1`, or the `proxy` config keys):
-
-- `searchDetails`: a note already read **in full** this session gets no teaser line at all (its
-  real content, not a guess at it, is already in context); a note merely *described* once this
-  session (an earlier search mentioned it) gets the compact line (no description) on a later
-  search that turns it up again.
-- `suggestions`: shown once per note **per session** — re-reading the same note later in the same
-  session does not repeat its related-notes suffix.
-
-`sizeWarning` stays on by default: one short line, once per large note per session, that
-plausibly prevents a wasted call (the model blindly reading, or growing, an oversized note) —
-exactly the "keep" case the other two did not meet. `node bench/replay.js --each` prints what
-each lever adds or saves alone, against `off`, independent of every other lever; that is the
-table this decision was made from, and the one to re-run before changing any lever's default
-again.
 
 ### Lever 7 — `hideUnsupportedTools`: one client, one tool list
 
@@ -205,7 +179,7 @@ behind a non-OpenAI client: `MEMGLOW_PROXY_HIDE_UNSUPPORTED=1`.
 [bench/RESULTS.md](../bench/RESULTS.md)): the default levers 1-3 made no measurable difference;
 `toc` cut the note text the assistant received by about two thirds with every answer still
 correct, but added a round trip (≈ +12 % input tokens and time, ≈ −13 % cost with Haiku);
-`dedupe` could not be judged with one question per session. `alreadyLoaded` (stage 0.4.2.1) has
+`dedupe` could not be judged with one question per session. the (since removed) `alreadyLoaded` lever had
 not been benchmarked yet — see variant `I` in `bench/run.js`, not run by default.
 
 **Getting the full note back (levers 4, 5 and 8).** When any of them is on, the proxy adds an
@@ -225,79 +199,6 @@ whole note from the server and returns the outline or the requested section itse
 log: `memglow-mcp-proxy: dedupe saved ≈5291 tokens on garden-project (session total ≈5291)`) and
 added per day to `proxy-savings.json` in memglow's data folder (`~/.memglow` by default, never the
 notes folder). The read itself is still reported to the viewer, which lights the note up as usual.
-
-### Lever 8 — `alreadyLoaded`: skip what the assistant's context already has
-
-Prompted by real basic-memory usage logs where the always-loaded index note (already injected at
-session start by a host's own mechanism — a `SessionStart` hook, a `CLAUDE.md` import) was ALSO
-read explicitly several times through the MCP server: a pure duplicate, every time.
-
-"Known always loaded" is the index note(s) (`memory.indexNote` / `indexNote`, default
-`["MEMORY", "index"]`) plus any `alwaysLoaded` entry (the main config's own list, used for the
-Memory cost panel's "Always loaded" figure, `lib/always-loaded.js`) that **resolves to an existing
-note** — an instruction file outside the notes folder (`CLAUDE.md`, `AGENTS.md`…) simply never
-matches and is harmlessly skipped: this lever can only ever replace an answer the memory server
-itself would have returned.
-
-**Default: off.** memglow has no way to know whether your setup truly re-injects the index at the
-start of every session — turning this on when it does not would hide a note the assistant has
-in fact never seen. `memglow init` does not install any such injection itself (checked: it only
-offers to add memglow's own *memory rules* to `CLAUDE.md`/`AGENTS.md`, instructions to use the MCP
-tools — never the index's actual content); if your own setup does inject it (your own
-`SessionStart` hook, or a `CLAUDE.md` `@import` of the index file), turn this on with
-`MEMGLOW_PROXY_ALREADY_LOADED=1` or `"proxy": { "alreadyLoaded": true }`.
-
-**"Has not changed since this session began"** is checked against a sha1 of the note's file, read
-directly off disk (never through the memory server) and captured once per proxy session — at
-`initialize` (every reconnect gets a fresh one), or lazily at the first read if a read arrives
-first. A note that changed since is **never stubbed**: its full, current text comes back, with one
-extra line saying it changed — the assistant's in-context copy of it really is stale, so handing it
-the short stub back would be actively wrong, not just unhelpful. A file that cannot be read at the
-moment of the check (removed, permissions) is treated the same as "not already loaded": full
-content, no note.
-
-**0.4.3.1 — if you are writing an injection hook, your own read must get the full text.** This
-lever has one sharp edge: the SAME mechanism that is supposed to put the index into the
-assistant's context in the first place — a `SessionStart` hook, or anything else that reads the
-index through this proxy in order to inject it — is itself just another read, and lever 8 cannot
-tell it apart from the assistant re-reading a note it already saw. If YOUR hook's read gets
-stubbed, the session starts with no index at all: the bug this stage fixed.
-
-Two independent safety nets, neither needs the other to be enabled:
-
-- **`alreadyLoadedExemptClients`** (config) / `MEMGLOW_PROXY_ALREADY_LOADED_EXEMPT` (env,
-  comma-separated) — a session is never stubbed (not even given the "changed since session
-  start" notice — the exact upstream text, every time) once its `clientInfo.name` or `.title`
-  (sent at `initialize`) contains one of these substrings, case-insensitively. Default: `["hook",
-  "inject", "session-start", "sessionstart", "memglow-init"]` — `[]` (or env set to an empty
-  string) disables the exemption entirely. **If your hook announces a `clientInfo.name` that
-  contains one of the default words, you need to do nothing.** If it does not, either rename it or
-  add your own substring:
-  ```json
-  { "proxy": { "alreadyLoadedExemptClients": ["hook", "inject", "my-injector"] } }
-  ```
-- **`alreadyLoadedRequireActivity`** (default `true`) — independently of any name, the stub itself
-  is refused unless this session has already made at least one OTHER tool call, or a
-  `tools/list`, before this read. An injection hook is characteristically the FIRST thing to
-  happen after `initialize`; by the time an assistant re-reads the index it has almost always
-  listed tools or made another call first. `MEMGLOW_PROXY_ALREADY_LOADED_REQUIRE_ACTIVITY=0` /
-  `"proxy": { "alreadyLoadedRequireActivity": false }` turns this off if you ever need lever 8 to
-  stub a session's very first call (e.g. a trusted, named client you do not want to rely on
-  `tools/list` timing for).
-
-**The reliable way to write the hook itself**: whatever your hook's `clientInfo.name` ends up
-being, make its read of the index explicit about wanting the full text rather than relying on
-either safety net alone — pass the escape hatch:
-
-```json
-{"jsonrpc":"2.0","id":2,"method":"tools/call",
- "params":{"name":"read_note","arguments":{"identifier":"MEMORY","memglow_fresh":true}}}
-```
-
-`memglow_fresh: true` bypasses every one of levers 4/5/8/13, unconditionally, for that one call —
-the only thing that is true regardless of exempt lists, activity, or any future lever this stage
-did not anticipate. A hook author who sets it never has to track which of memglow's levers might
-one day apply to their own injection read.
 
 ### Lever 9 — `multiQuery`: several phrasings, one call
 
@@ -327,7 +228,7 @@ or as a JSON-RPC batch — and merges the hits into ONE answer:
    blank lines, the same convention basic-memory and this proxy's own test fixtures use) — "the
    upstream's own format", just reordered and deduped, never a line memglow invented. Otherwise
    (a non-text part, or real structured hit data the proxy does not understand) it falls back to a
-   compact listing of whatever note ids it can resolve, same style as lever 2 (`searchDetails`).
+   compact listing of whatever note ids it can resolve, compact text style.
 4. **Fail open**: a phrasing's call that errors or rejects stops the run right there. If it was the
    FIRST phrasing, its own error is relayed — exactly what a plain single search would have
    returned. If it was a LATER one, the FIRST phrasing's own successful result is relayed
@@ -417,69 +318,6 @@ fixture was never built with a `dropIfHinted` retry modelling the model actually
 repeat. The rule needs every tested file to pass, and this one real, unmodelled cost is enough to
 keep it off by default — exactly the "measure honestly: it only saves if the model then stops
 searching" caution this lever was built with.
-
-**`indexHint`** (lever 12): a search whose own results are ONLY the index note, or a read of the
-index itself while lever 8 (`alreadyLoaded`) is off, gets a suffix — `memglow: the index already
-says:` followed by up to 3 lines of the index's OWN text (secret-masked, each capped to 160
-characters) that mention one of the query's significant words, grepped straight off the already
-cached note body, never summarised. The read case reuses lever 10's own "search right before a
-read" correlation (`s.lastSearch`) to know what to grep for; with no recent search at all, nothing
-is added — never a bare "says:" line with nothing after it. Measured the same way: a pure,
-unconditional ADD everywhere it fires (demo +96, heavy +391, its own fixture +78 tokens; a no-op
-only on `replay-aliases.jsonl`, which never reads the index) — same bucket as
-`searchDetails`/`suggestions`/`archiveHint`, so it ships off too.
-
-Both remain fully available: `MEMGLOW_PROXY_NEGATIVE_CACHE=1` / `"proxy": { "negativeCache": true
-}`, `MEMGLOW_PROXY_INDEX_HINT=1` / `"proxy": { "indexHint": true }`.
-
-### Stage 0.4.3 — "cross-session delta reads"
-
-The owner's own log shows the hottest notes re-read in every new session (one note at
-≈21 reads/7 days). Lever 4 (`dedupe`) only covers a re-read in the SAME session: a brand new
-session has an EMPTY context, so its short "unchanged" stub would be WRONG there — the model has
-never seen this note's text in THIS session. `deltaRead` (lever 13, `lib/delta-read.js`) adds two
-mechanisms instead, neither ever touched by `dedupe`:
-
-1. **Cross-session.** The first read of a note in a session always gets the full current text
-   (correctness, never shortened for this). The only thing added is a one-line header, at most
-   once, when the note changed since the LAST time this SAME CLIENT read it, in an EARLIER
-   session: `memglow: changed since your last read on <date> — sections changed: <## titles>` (up
-   to 5 — "(intro)" for the untitled lead section). Remembered in a small persisted ledger, per
-   client ([`clientBucket`](../lib/proxy-levers.js)), `delta-read.json` in memglow's data folder
-   (mode 600, bounded to `deltaReadMax` = 5,000 entries, atomic writes, same house style as
-   `negative-cache.json`/`learned-aliases.json`). This never shortens anything — it costs a few
-   tokens whenever it fires, to help the model focus on what changed.
-2. **Within-session, note CHANGED.** The gap `dedupe`'s own "unchanged" stub leaves open: a note
-   already delivered in full THIS session (version A), re-read after it changed (now version B),
-   falls through to a SECOND full delivery today. Since the model already has A, only the DIFF
-   between A and B needs to cross the wire — a compact, bounded, reconstructable line diff
-   (`renderDiff`, reusing [`lib/assistant/diff.js`](../lib/assistant/diff.js)'s prefix/suffix +
-   bounded-LCS line diff), with a header naming the escape hatch. Too large a diff (> 60 % of B)
-   falls back to B in full instead — a diff is only worth it when it is actually small. Same
-   escape hatch (`memglow_fresh`) and "repeat the call → full content" rule as levers 4/5/8.
-
-Measured with the same merge rule as levers 10-12 (`--each`, 0 violations AND effective tokens
-`<=` off's AND (raw tokens `<=` off's OR calls `<` off's)) on `bench/replay-demo.jsonl`,
-`bench/replay-heavy.jsonl`, `bench/replay-aliases.jsonl`, `bench/replay-negative-cache.jsonl` and a
-new, dedicated [`bench/replay-delta-read.jsonl`](../bench/replay-delta-read.jsonl) (one note edited
-and re-read within a session, then edited again and read from a brand new session): the rule holds
-on all five — mechanism 2 saves a small -11 raw/effective tokens on `replay-demo.jsonl` and
-`replay-heavy.jsonl` (each already has an edit-then-reread in one session), 0 elsewhere, and
--5,992 on its own dedicated fixture; mechanism 1 never even fires outside that dedicated fixture,
-so it never costs anything there either. Still **off by default**, though: unlike levers 9/10
-(`multiQuery`, `aliases`), this one has not yet been checked against a REAL usage log the way
-those two were before their own flip to on — a clean sweep on hand-built replay files is not the
-same evidence, and it starts a new per-client ledger file the moment it is turned on.
-`MEMGLOW_PROXY_DELTA_READ=1` / `"proxy": { "deltaRead": true }` to opt in now.
-
-A note on the "owner-style portal format" (`{ "evenements": [...] }`, see `bench/README.md`):
-replayed against [`bench/replay-delta-read-portal.json`](../bench/replay-delta-read-portal.json),
-`deltaRead` is a pure no-op (identical to `defaults`) — **by construction**, not because the lever
-is inert. The portal log's `ecriture` events carry only a note id, never its content (the whole
-point of that format is to avoid storing text), so `portalToCalls()` turns one into an
-`edit_note` call with `content: ""` — a no-op against the replay fixture's own copy of the note,
-so nothing ever actually changes for either mechanism to notice. This is an honest limit of the
-MEASUREMENT format, not a claim about real usage (where notes really do change between reads).
 
 ### Stage 0.4.4.1 — "duplicate-write hint"
 
@@ -572,34 +410,24 @@ sets `memoryDir`), or the file named by `MEMGLOW_CONFIG`:
   "alwaysLoaded": ["~/.claude/CLAUDE.md"],
   "proxy": {
     "sizeWarning": true,
-    "searchDetails": false,
-    "suggestions": false,
-    "suggestionsMax": 3,
     "dedupe": false,
     "toc": false,
     "archiveHint": false,
     "archiveHintMax": 5,
     "hideUnsupportedTools": false,
     "unsupportedTools": { "basic-memory": { "search": ["openai-mcp"], "fetch": ["openai-mcp"] } },
-    "alreadyLoaded": false,
-    "alreadyLoadedExemptClients": ["hook", "inject", "session-start", "sessionstart", "memglow-init"],
-    "alreadyLoadedRequireActivity": true,
     "multiQuery": true,
     "aliases": true,
     "learnAliases": true,
     "aliasesMax": 2000,
     "negativeCache": false,
     "negativeCacheMax": 1000,
-    "indexHint": false,
-    "deltaRead": false,
-    "deltaReadMax": 5000,
     "duplicateHint": false,
     "slugHint": false,
     "readTools": ["read_note", "view_note", "read_content", "fetch", "build_context"],
     "multiNoteTools": ["build_context"],
     "searchTools": ["search_notes", "search"],
     "writeTools": ["write_note", "edit_note"],
-    "searchDetailsMax": 10,
     "savingsFile": true,
     "log": true
   }
@@ -614,7 +442,7 @@ Environment variables win over the file:
 
 | Variable | Meaning |
 |---|---|
-| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_INDEX_WARNING`, `MEMGLOW_PROXY_SEARCH_DETAILS`, `MEMGLOW_PROXY_SUGGESTIONS`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT`, `MEMGLOW_PROXY_HIDE_UNSUPPORTED`, `MEMGLOW_PROXY_ALREADY_LOADED`, `MEMGLOW_PROXY_MULTI_QUERY`, `MEMGLOW_PROXY_ALIASES`, `MEMGLOW_PROXY_LEARN_ALIASES`, `MEMGLOW_PROXY_NEGATIVE_CACHE`, `MEMGLOW_PROXY_INDEX_HINT`, `MEMGLOW_PROXY_DELTA_READ`, `MEMGLOW_PROXY_DUPLICATE_HINT`, `MEMGLOW_PROXY_SLUG_HINT` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
+| `MEMGLOW_PROXY_SIZE_WARNING`, `MEMGLOW_PROXY_INDEX_WARNING`, `MEMGLOW_PROXY_DEDUPE`, `MEMGLOW_PROXY_TOC`, `MEMGLOW_PROXY_ARCHIVE_HINT`, `MEMGLOW_PROXY_HIDE_UNSUPPORTED`, `MEMGLOW_PROXY_MULTI_QUERY`, `MEMGLOW_PROXY_ALIASES`, `MEMGLOW_PROXY_LEARN_ALIASES`, `MEMGLOW_PROXY_NEGATIVE_CACHE`, `MEMGLOW_PROXY_DUPLICATE_HINT`, `MEMGLOW_PROXY_SLUG_HINT` | `1`/`0` (also `true`/`false`, `on`/`off`) for each lever |
 | `MEMGLOW_PROXY_READ_TOOLS`, `MEMGLOW_PROXY_MULTI_NOTE_TOOLS`, `MEMGLOW_PROXY_SEARCH_TOOLS`, `MEMGLOW_PROXY_WRITE_TOOLS` | comma-separated tool names (defaults above: basic-memory's) |
 | `MEMGLOW_LARGE_NOTE_TOKENS` | the threshold (default 5000) |
 | `MEMGLOW_MEMORY_DIR` (or `MEMORY_DIR`) | the notes folder, if not in the config file |

@@ -26,6 +26,7 @@
 </p>
 
 <p align="center">
+  <a href="#five-minute-start">5-minute start</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#works-with">Works with</a> ·
   <a href="#memory-cost">Memory cost</a> ·
@@ -40,6 +41,64 @@
   <a href="#faq">FAQ</a> ·
   <a href="#pro-coming-soon">Pro</a>
 </p>
+
+---
+
+<a id="five-minute-start"></a>
+## ⏱️ 5-minute start
+
+The shortest path to a memory your AI reads cheaply (memglow 0.6.0).
+
+1. **Install and run the memory server** (Node 18+, no build, zero dependencies) on your notes folder:
+
+   ```bash
+   npx memglow memory-server --root ~/knowledge --listen 127.0.0.1:8000 --read-write --levers
+   ```
+
+   (`--root` is your Markdown folder; drop `--read-write` to try it read-only first. `--levers` is the
+   all-in-one mode that applies the token levers below — see [All-in-one](#all-in-one). A Docker image of
+   the viewer is described under [Docker](#docker).)
+
+2. **Connect Claude Code**, with the `headersHelper` so every call of a conversation shares one session
+   (the per-session savings need it, see [Session identity with Claude Code](#memory-server)):
+
+   ```json
+   {
+     "mcpServers": {
+       "memglow": {
+         "type": "http",
+         "url": "http://127.0.0.1:8000/mcp",
+         "headersHelper": "node /path/to/memglow/hooks/memglow-headers.js"
+       }
+     }
+   }
+   ```
+
+3. **Open the viewer** (`npx memglow`, then http://127.0.0.1:4747) to watch the memory light up.
+
+**Recommended profile — it is already the default, there is nothing to configure:**
+
+| Setting | Default since 0.6.0 | Why |
+|---|---|---|
+| `tools.profile` | `minimal` | 11 tools listed instead of 23: the compat tools (`schema_*`, `view_note`, `read_content`, `list_workspaces`, `list_memory_projects`, `create_memory_project`, `delete_project`, `basic_memory_diagnostics`, ChatGPT's `search`/`fetch`) are not listed (≈ -2,500 tokens at every session start) but stay callable by name. `MEMGLOW_TOOLS_PROFILE=full` lists everything. |
+| `stateView` | on | A journal-style note (appended dated sections) is read as its current state plus the 2 latest entries; the older ones are named, one call away. The only token lever with a measured gain in production. `MEMGLOW_PROXY_STATE_VIEW=0` turns it off. |
+| `multiQuery`, `aliases`, `sizeWarning` | on | Fewer search round trips, learned synonyms, one-line "this note is large" hint. |
+| Everything else | off | Opt-in, see [Advanced](#advanced-levers). |
+
+These defaults apply wherever the levers run (the all-in-one server with `--levers`, or the MCP proxy).
+The memory server also tells you what it costs: the `memory_core` accounting line ends with
+**"Session start ≈ N tokens"** (average `memory_core` + `tools/list` answer served), and so does the
+control panel.
+
+<a id="removed-in-060"></a>
+### Removed in 0.6.0
+
+Dead weight, measured and removed: `deltaRead` (13), `alreadyLoaded` (8, with its exempt-clients and
+require-activity rules), `indexHint` (12), `searchDetails` (2), `suggestions` (3) and
+`sessionBudget` (18). Their environment variables and `proxy` keys are still **accepted and ignored** —
+one start-up log line each (`memglow: ignored: lever X removed in 0.6.0`) — so an existing
+deployment keeps starting. The AI duplicates worker is gone too: possible duplicates are listed by the
+structure audit as rule **D1** (report-only, no AI, no merge). See the [CHANGELOG](CHANGELOG.md).
 
 ---
 
@@ -740,12 +799,19 @@ memglow's [built-in memory rules](#memory-rules) to the wrapped server's `initia
 Streamable HTTP servers too: `memglow-mcp-proxy --upstream http://127.0.0.1:8000/mcp --listen 127.0.0.1:8765`.
 Tool-name mapping is configurable. Details: [mcp-proxy/README.md](mcp-proxy/README.md).
 
+<a id="advanced-levers"></a>
+### Advanced: lever by lever
+
+Most people never touch these — the [5-minute start](#five-minute-start) profile is the default. Levers
+2, 3, 8, 12, 13 and 18 (`searchDetails`, `suggestions`, `alreadyLoaded`, `indexHint`, `deltaRead`,
+`sessionBudget`) were removed in 0.6.0 and are not listed; `tools.profile` and `stateView` are described above.
+
 **Token-saving and speed levers (v0.4).** The proxy annotates the memory server's *answers* —
 never your notes, which it only reads. Levers 1-3 only add a short block before or after the
 server's own content; 4, 5 and 8 may replace a read answer, so they are off by default; 9
 (`multiQuery`) replaces a search call's one request/response pair with several upstream calls
 merged into one, so it is its own case (see below). `searchDetails` and `suggestions` (2 and 3)
-were on by default through 0.4.2.1b; measured with the free replay harness
+were on by default through 0.4.2.1b and are gone since 0.6.0; measured with the free replay harness
 ([bench/README.md](bench/README.md)) and against a real 2-day usage log, they only added
 delivered tokens without a measurable upside, so stage 0.4.2.2 turned them off by default too
 (shortened either way, for whoever turns them back on). `sizeWarning` and `multiQuery` are the
@@ -756,28 +822,22 @@ real usage log (stage 0.4.2.2b — [bench/README.md](bench/README.md)).
 | # | Lever (`proxy` key / variable) | Default | Effect |
 |---|---|---|---|
 | 1 | `sizeWarning` / `MEMGLOW_PROXY_SIZE_WARNING` | on | `⚠ memglow: this note is ≈N tokens (threshold T)…` before a large note, or after a write that makes it large — suggests a split within the same theme. Once per note and session. |
-| 2 | `searchDetails` / `MEMGLOW_PROXY_SEARCH_DETAILS` | off | After search results: title · theme · ≈tokens · description of each note found — description shown once per note per session, and no line at all for a note already read in full this session. |
-| 3 | `suggestions` / `MEMGLOW_PROXY_SUGGESTIONS` | off | After a read: up to 3-5 related notes (links, sub-theme, co-usage), names and sizes only — once per note per session. |
 | 4 | `dedupe` / `MEMGLOW_PROXY_DEDUPE` | off | An unchanged note re-read in the same session → a short "unchanged, ≈N tokens saved" notice. |
 | 5 | `toc` / `MEMGLOW_PROXY_TOC` | off | A large note → its outline with ≈tokens per section first; then one section on demand. |
 | 6 | `archiveHint` / `MEMGLOW_PROXY_ARCHIVE_HINT` | off | A search that finds nothing in the live memory (no result, or only [archive](#archive) notes) → `memglow: nothing found in the live memory — the archive summary lists: …` with the **titles** of the archived sections that match the query (never their text). |
 | 7 | `hideUnsupportedTools` / `MEMGLOW_PROXY_HIDE_UNSUPPORTED` | off | Hides, from `tools/list` and **per client session**, the tools a config table marks unsupported for that client — default: basic-memory's `search`/`fetch` (its ChatGPT-only adapters) hidden from any client that is not OpenAI's MCP client. A client that calls a hidden tool anyway is relayed unchanged; one unrecognised client is never filtered. |
-| 8 | `alreadyLoaded` / `MEMGLOW_PROXY_ALREADY_LOADED` | off | A read of a note memglow knows is **already loaded into the assistant's context at the start of every session** (the index note(s), or an `alwaysLoaded` entry that resolves to a note) → `memglow: "…" is already in your context — … has not changed since this session began (sha …)`, instead of its content, for as long as it stays unchanged. Off by default: memglow cannot know whether your setup truly re-injects the index at session start (a `SessionStart` hook, a `CLAUDE.md` import…) — turn it on only when it does; `memglow init` does not install such an injection on its own. |
 | 9 | `multiQuery` / `MEMGLOW_PROXY_MULTI_QUERY` | on | A search call carrying `memglow_queries` (2-4 extra phrasings, advertised in `tools/list`) is sent upstream as ONE call per phrasing, sequentially, the original first — instead of a separate model turn per phrasing. Hits merged, deduped by note id (found by more phrasings ranks higher), capped to one call's usual result count, returned as ONE result (the server's own hit blocks when safe, else a compact listing); any later phrasing's failed call fails the whole thing open to the first phrasing's own result. |
 | 10 | `aliases` + `learnAliases` / `MEMGLOW_PROXY_ALIASES` + `MEMGLOW_PROXY_LEARN_ALIASES` | **on** (since 0.4.2.5) | `learnAliases` (recording): a search followed within 2 minutes by a single-note read of a note NOT in its results teaches that search's significant words as aliases of it, locally, nothing ever sent anywhere. `aliases` (using it): a LATER search sharing ≥ 2 learned aliases of a note (or 1 seen ≥ 2 times) gets that note added at the top, in the upstream's own row shape when safe. Independent switches. On by default since the harness learned to count a dropped retry call, not just raw tokens (0.4.2.5) — see that stage below. |
 | 11 | `negativeCache` / `MEMGLOW_PROXY_NEGATIVE_CACHE` | off | A search not followed by any read within 2 minutes in the same session (or superseded by another search/write first) is remembered, locally, as "futile" for the memory's current state. A LATER search with the same significant words, while nothing has changed since, gets one line prepended: `memglow: this search found nothing you used last time (<date>); the memory has not changed since.` The results themselves are always still relayed right after — never hidden. Off by default: a clear win on its own dedicated fixture (a dropped retry call), but a real, unmodelled cost on `bench/replay-heavy.jsonl` (a naturally recurring search gets the hint with no call saved there) — see 0.4.2.6 below. |
-| 12 | `indexHint` / `MEMGLOW_PROXY_INDEX_HINT` | off | A search whose own results are ONLY the index note, or a read of the index itself while `alreadyLoaded` is off, gets a short suffix: `memglow: the index already says:` followed by up to 3 lines of the index's own text (secret-masked) that mention one of the query's significant words. Off by default: it only ever adds a line, same bucket as `searchDetails`/`suggestions`/`archiveHint`. |
-| 13 | `deltaRead` / `MEMGLOW_PROXY_DELTA_READ` | off | The hottest notes get re-read in every new session — `dedupe` cannot help there (a new session's context is empty). Two mechanisms: cross-session, the first read of a note in a session is always full, plus one header when it changed since this SAME client's own last read, in an earlier session (`memglow: changed since your last read on <date> — sections changed: …`), remembered in a small per-client ledger (`delta-read.json`); within-session, a note re-read after it changed THIS session gets ONLY the diff since its first read, falling back to the full text past a 60% size ratio. Off for now: a clean sweep on hand-built replay files, but not yet checked against a real usage log the way `multiQuery`/`aliases` were — see 0.4.3 in `bench/README.md`/`mcp-proxy/README.md`. |
 | 14 | `duplicateHint` / `MEMGLOW_PROXY_DUPLICATE_HINT` | off | After a `write_note` (never `edit_note`/`move_note`) whose title already names an existing note: `memglow: a note with this title already exists: [[<id>]] — this write_note may replace or duplicate it; prefer edit_note.` A title close to (but not matching) an existing note's id/label/description gets up to 2 candidates instead, with the same "prefer edit_note" suggestion. Checked before the write reaches the server, so the note being created is never mistaken for its own duplicate; same note never hinted twice per session. Advisory only — never blocks the write, never changes its arguments. Off by default: a pure, unconditional add, same bucket as `searchDetails`/`suggestions`/`archiveHint`/`indexHint` — see 0.4.4.1 below. |
 | 15 | `slugHint` / `MEMGLOW_PROXY_SLUG_HINT` | off | After a successful `write_note` (never `edit_note`/`move_note`) whose title is not a kebab slug (lower-case ASCII words joined by `-`), or that lands directly in the notes root (`directory` empty, `/` or `memory`): `memglow: title "Chantier eau cave Choisy – état au 2026-10-11 soir" is not a kebab slug — prefer "chantier-eau-cave-choisy-etat-au-2026-10-11-soir" in a memory/<folder>/ directory (title = kebab slug, file = slug.md).` The suggested slug is the file name `--kebab-filenames` gives (accents transliterated). Advisory only — never blocks the write, never changes its arguments. Off by default: a house style (title = kebab slug, file = `slug.md`, inside `memory/<folder>/`), not a general rule. |
 | 16 | `hubHint` / `MEMGLOW_PROXY_HUB_HINT` | off | For a memory that uses hub-and-spoke notes (a hub lists its parts under a `## Parts` heading, and/or a part declares itself with frontmatter `part_of`/`parent`): an `edit_note` append/prepend/insert-before/insert-after, or a `write_note` overwrite, that adds more than `hubHintTokens` (default 400) tokens of new content to a note that HAS parts gets one advisory line: `memglow: "<hub>" is a hub — add detail to one of its parts instead: [[part-a]] (topic), [[part-b]] (topic)…`, parts ranked by shared significant words with the added text, best match first. Same hub never hinted twice per session. Advisory only — never blocks the write. Off by default: useful only to a memory that actually follows this convention; see `docs/hub-and-spoke.md`. |
 | 18 | `orphanHint` / `MEMGLOW_PROXY_ORPHAN_HINT` | off | After a `write_note` that creates a BRAND NEW note (never an edit, never an overwrite of a note that already existed) whose id, once written, memglow's own graph finds no link to or from (either direction — a dangling `[[future-note]]` elsewhere in the memory counts once this write resolves it): `memglow: note [[<id>]] links to nothing and nothing links to it — add an "Up: [[hub]]" line or list it in its hub/index, or it will float alone in the graph.` The index note never qualifies. Same note never hinted twice per session. Advisory only — never blocks the write, never changes its arguments. Off by default: same bucket as `duplicateHint`/`slugHint`/`hubHint` — a pure, unconditional add on the one note it fires for. |
 | — | `indexWarning` / `MEMGLOW_PROXY_INDEX_WARNING` | off | The **index** note read while above `indexWarningTokens` (default 2,000): `⚠ memglow: the index note … is loaded at every session` — suggests trimming it. Once per session. |
 
-Levers 4, 5 and 8 change what the assistant receives: **measure answer quality before enabling
-them**. Adding `"memglow_fresh": true` always brings the full note back; for 4 and 5, repeating
-the same read works too (lever 8 keeps stubbing a still-unchanged, still-already-loaded note on
-every read, so only `memglow_fresh` escapes it). Configuration (`memglow.config.json` →
+Levers 4, 5 and 17 (`stateView`) change what the assistant receives: **measure answer quality before
+enabling 4 and 5**. Adding `"memglow_fresh": true` always brings the full note back; repeating the
+same read works too. Configuration (`memglow.config.json` →
 `"proxy": {…}`), examples and the exact rules:
 [mcp-proxy/README.md](mcp-proxy/README.md#token-saving-and-speed-levers-v04).
 
@@ -1054,7 +1114,7 @@ and hardware will differ.
 Claude Code talks MCP 2026-07-28: **stateless**, no `Mcp-Session-Id` at all. Without one, the
 server (and the [MCP proxy](#mcp-proxy) in front of it) falls back to one session key per TCP
 connection — and Claude Code opens a **new connection between calls**, even within the same
-conversation. The per-session levers (`dedupe`, `alreadyLoaded`, `deltaRead`…) then never see a
+conversation. The per-session levers (`dedupe`, `stateView`…) then never see a
 repeat: every call looks like a brand new session, and they save nothing in practice.
 
 The fix (0.5.3) is a request header, `x-memglow-session` (validated: 8-128 characters of
@@ -1334,30 +1394,17 @@ maxShare, idleMinutes, scanHours, maxChecksPerScan, maxActionsPerScan, includeFo
 model, … }`. `test/auto-archive.test.js`.
 
 <a id="auto-duplicates"></a>
-### Duplicate notes (optional)
+### Possible duplicate notes (report-only, no AI)
 
-Same family again — **off by default**: `"maintenance": { "duplicates": { "enabled": true } }` or
-`MEMGLOW_AUTO_DUPLICATES=1`. Candidate pairs are found cheaply from title/description word overlap
-(reusing — but with a stricter threshold than — the MCP proxy's own `duplicateHint` helper, tuned
-for a different purpose; a short `GENERIC_WORDS` list — "memglow", "project", "note", … — and any
-bare number or date-shaped token are dropped from the overlap first, too common across unrelated
-notes to mean anything on their own), excluding a pair where one note is `part_of` the other (a
-hub and its own part — never "duplicates") or where both declare a DIFFERENT `theme`, then the AI
-confirms each remaining pair with `{"duplicate":
-true|false, "keep": "a"|"b", "reason": "…"}`. **`maxChecksPerScan` (default 5) caps the AI CALLS
-themselves** — independent of `maxActionsPerScan` (which only ever caps applied merges, and so
-never limits anything at all while `autoMerge` is off, the default). Every verdict, duplicate or
-not, is cached by the pair's own content hash, written to disk at once (never debounced — never
-re-asked about two unchanged notes, surviving even an abrupt process exit). **Default: report
-only** — every verdict lands in `GET /api/maintenance`'s
-`duplicates.reported` and the control panel, nothing is ever written. `maintenance.duplicates.
-autoMerge: true` (its own flag, off by default even with detection on; env
-`MEMGLOW_AUTO_DUPLICATES_MERGE`) additionally appends the other note's body under a `## Merged
-from [[x]] (date)` heading into the kept note, then reduces the other note to a 2-line stub (its
-own frontmatter untouched, body replaced with `Merged into [[kept]].`) — never across two notes
-that declare different hubs, or no hub at all; that call needs a human. Config:
-`maintenance.duplicates: { enabled, autoMerge, idleMinutes, scanHours, maxChecksPerScan,
-maxActionsPerScan, provider, model, … }`. `test/auto-duplicates.test.js`.
+Since 0.6.0 duplicates no longer call an AI and nothing is ever merged. When the **structure guardian**
+is on, its audit lists candidate pairs as rule **D1 "possible duplicate"**, with a score, in
+`GET /api/maintenance` (`structure.issueList`, `structure.duplicates`), the control panel and the
+`memory_core` "À regarder" line. The pairs come from a cheap lexical pre-filter (title / description /
+id word overlap: at least 3 shared significant words covering 70 % of the shorter side, generic words,
+bare numbers and dates dropped, never across two different declared themes or a hub and its own part,
+never a `feedback-*` against a `project-*` note). What to do with a pair is your call.
+`maintenance.duplicates` (`enabled`, `autoMerge`, `ai`…) and `MEMGLOW_AUTO_DUPLICATES[_MERGE]` are
+accepted and ignored, with one log line. `test/duplicate-candidates.test.js`.
 
 <a id="usage-aware-search"></a>
 ### Usage-aware search (optional, on by default)
@@ -1539,7 +1586,7 @@ docker run -d --name memglow -p 127.0.0.1:4747:4747 \
   -v /path/to/notes:/memory:ro \
   -v memglow-data:/data \
   -e MEMGLOW_TOKEN=$(cat ~/.memglow/token) \
-  ghcr.io/r0zumnik/memglow:0.5.11
+  ghcr.io/r0zumnik/memglow:0.6.0
 ```
 
 `/data` keeps the Memory cost counts (note ids and numbers only) and the saved view (settings,
@@ -1548,7 +1595,7 @@ layout, camera) across restarts.
 Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
 then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
 
-Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.5.11`.
+Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.6.0`.
 
 The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
 container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.

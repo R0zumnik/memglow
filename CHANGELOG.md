@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.6.0 — 2026-11-12
+
+Token savings and simplification, from an independent review of what actually pays off in production.
+Only one lever has a measured gain (`stateView`, ≈216k tokens over 12 days), so it is now on; the
+listing of tools that cost tokens at every session start is cut; the levers that never earned their keep
+are removed.
+
+### Breaking / behaviour changes
+
+- **`stateView` is ON by default** (was off). A journal-style note (≥ 3 dated sections, over 1,500
+  tokens) is read as intro + undated sections + its 2 latest entries, the older ones named.
+  Opt out: `MEMGLOW_PROXY_STATE_VIEW=0` or `"proxy": { "stateView": false }`.
+- **Minimal tools profile by default** — `tools.profile`: `"minimal"` (default) or `"full"`
+  (`MEMGLOW_TOOLS_PROFILE`, or `"tools": { "profile": … }` in `memglow.config.json`). Minimal hides from
+  `tools/list` the compat tools: `schema_infer`, `schema_validate`, `schema_diff`,
+  `create_memory_project`, `delete_project`, `list_memory_projects`, `list_workspaces`, `view_note`,
+  `read_content`, `basic_memory_diagnostics` and the ChatGPT-style `search`/`fetch` (kept listed for the
+  `openai-mcp` client). **Hidden tools stay callable by name.** Measured: the default `tools/list` goes
+  from 23 tools / ≈8,260 tokens to 11 tools / ≈5,680 tokens (-31 %). Applies wherever the levers run (all-in-one
+  `--levers`, MCP proxy). The per-client `hideUnsupportedTools` lever (7) is unchanged.
+- **Removed levers** (code, config keys, docs, tests): `deltaRead` (13, with `lib/delta-read.js` and
+  `delta-read.json`), `alreadyLoaded` (8, with `alreadyLoadedExemptClients` / `…RequireActivity`),
+  `indexHint` (12), `searchDetails` (2), `suggestions` (3, +14 % tokens measured) and `sessionBudget` (18,
+  never used). Their environment variables and `proxy` keys are **accepted and ignored**, with one
+  start-up log line each (`memglow: ignored: lever X removed in 0.6.0`) — an existing deployment keeps
+  starting. Kept: `sizeWarning`, `indexWarning`, `dedupe`, `toc`, `archiveHint`, `multiQuery`, `aliases`,
+  `negativeCache`, `duplicateHint`, `slugHint`, `hubHint`, `orphanHint`, `stateView`.
+- **Duplicates no longer call the AI.** `lib/auto-duplicates.js` (the AI-confirmed worker and its
+  `autoMerge`) is removed. The lexical pre-filter is kept (`lib/duplicate-candidates.js`); candidate pairs
+  appear in the structure audit as rule **D1 "possible duplicate"**, with a score, report-only (no AI, no
+  merge, no write). `maintenance.duplicates.*` and `MEMGLOW_AUTO_DUPLICATES[_MERGE]` are accepted and
+  ignored with a log line. `GET /api/maintenance`: `duplicates` is now derived from the structure audit
+  (`autoMerge` always false); the weekly report's `duplicatesFound` is the current D1 count, and the
+  "possible duplicates" wording replaces "duplicates found" in the panel (all 8 languages).
+- **Store polling**: while `fs.watch` is active on every note folder, the fallback rescan period is
+  `max(configured, 15 s)` (the configured value is kept when watching is unavailable; `pollMs` in
+  `stats()` is unchanged, `effectivePollMs` is new).
+
+### Added
+
+- **`memory_core` "À regarder" line**: one compact line — unfixed structure issues (count by rule),
+  D1 candidates, the last AI error if any — omitted entirely when nothing is pending.
+- **Session-start cost, measured**: the token size of each `memory_core` and `tools/list` answer served is
+  recorded per day in `proxy-savings.json` (`memoryCoreTokens/Served`, `toolsListTokens/Served`) and shown
+  as "Session start ≈ N tokens" on the `memory_core` accounting line.
+- README: a "5-minute start" at the top (install, run, connect Claude Code with `headersHelper`, the
+  recommended profile = the defaults); the lever-by-lever detail is under "Advanced"; a "Removed in 0.6.0" note.
+
 ## 0.5.11 — 2026-11-11
 
 ### Added
