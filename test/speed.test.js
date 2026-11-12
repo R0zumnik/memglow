@@ -202,14 +202,19 @@ test("server: /api/cost exposes the MCP proxy's per-client token accounting (cou
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
     const before = await (await fetch(base + "/api/cost")).json();
-    assert.deepStrictEqual(before.clientTokens, { days: 7, byClient: {}, byLever: {} }, "no proxy-savings.json yet: empty, not missing");
+    // 0.6.0: clientTokens also carries sessionStart (session-start cost accounting) — checked apart.
+    const { sessionStart: ss0, ...ct0 } = before.clientTokens;
+    assert.deepStrictEqual(ct0, { days: 7, byClient: {}, byLever: {} }, "no proxy-savings.json yet: empty, not missing");
+    assert.ok(ss0 && typeof ss0 === "object", "sessionStart accounting present");
 
     const today = new Date().toISOString().slice(0, 10);
     fs.writeFileSync(path.join(dataDir, "proxy-savings.json"), JSON.stringify({
       version: 1, days: { [today]: { clients: { "claude-code": { tokens: 1234, calls: 5 }, cursor: { tokens: 6, calls: 1 } }, dedupe: 400, dedupeCalls: 4 } },
     }));
     const after = await (await fetch(base + "/api/cost")).json();
-    assert.deepStrictEqual(after.clientTokens, {
+    const { sessionStart: ss1, ...ct1 } = after.clientTokens;
+    assert.ok(ss1 && typeof ss1 === "object");
+    assert.deepStrictEqual(ct1, {
       days: 7, byClient: { "claude-code": { tokens: 1234, calls: 5 }, cursor: { tokens: 6, calls: 1 } },
       byLever: { dedupe: { tokens: 400, calls: 4 } },
     });
