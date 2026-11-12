@@ -319,3 +319,12 @@ test("greedyEnginePlan: null when there is nothing useful to propose (no heading
   assert.strictEqual(engine.greedyEnginePlan("just a paragraph, no headings at all.\n"), null);
   assert.strictEqual(engine.greedyEnginePlan("## Only one\ntext\n"), null);
 });
+
+test("normalizeSlug (0.6.1): strips the leading run of the hub's own words the AI slug repeats", () => {
+  const { normalizeSlug } = require("../lib/split-engine");
+  const n = (raw, hub) => normalizeSlug(raw, hub, new Set(), new Set());
+  const hub = "reference-family-admin-and-documents-archive-map";
+  assert.strictEqual(n("reference-family-admin-and-documents-photo-lot-4", hub), hub + "-photo-lot-4");
+  assert.strictEqual(n("photo-lot-4", hub), hub + "-photo-lot-4");
+  assert.strictEqual(n("archive-map-photo-lot-4", hub), hub + "-photo-lot-4"); // trailing-overlap rule intact
+});

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.1 — 2026-11-12
+
+Fixes from the first production run of 0.6.0.
+
+- **"D1 possible duplicate" false positives.** 20 reports, almost all siblings of one hub (photo lots
+  of a split archive map, two archived scripts of one audit, `feedback-autonomy-*` notes). A pair is now
+  never reported when both notes declare the same `part_of`, when one is the other's hub, or when both
+  share a slug prefix of 3+ words that is itself a hub's slug. The word gate is stricter: at least 6
+  significant shared words (was 3) covering at least 0.7 of the smaller note's words.
+- **Split slugs no longer repeat the hub's name.** When the AI slug starts with a leading run (2+ words)
+  of the hub's own words, that run is stripped before the hub prefix is added:
+  `reference-family-admin-and-documents-photo-lot-4` under hub
+  `reference-family-admin-and-documents-archive-map` is now
+  `reference-family-admin-and-documents-archive-map-photo-lot-4`.
+
 ## 0.6.0 — 2026-11-12
 
 Token savings and simplification, from an independent review of what actually pays off in production.

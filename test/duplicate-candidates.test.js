@@ -38,8 +38,8 @@ test("findDuplicatePairs (0.5.5 bug fix): ignores generic words (memglow, projec
 
 test("findDuplicatePairs (0.5.5 bug fix): requires the SAME declared theme when BOTH notes set one — a strong word overlap is not enough across declared themes", () => {
   const notes = [
-    { id: "reference-ha-automations", label: "Home Assistant Automations Reference", description: "Automation triggers and conditions reference", theme: "home-assistant" },
-    { id: "project-automations-journal", label: "Automations Journal Project", description: "Automation triggers and conditions, project journal", theme: "project" },
+    { id: "reference-ha-automations", label: "Home Assistant Automations Reference", description: "Automation triggers conditions blueprints scripts entities devices reference", theme: "home-assistant" },
+    { id: "project-automations-journal", label: "Automations Journal Project", description: "Automation triggers conditions blueprints scripts entities devices, project journal", theme: "project" },
   ];
   assert.deepStrictEqual(dup.findDuplicatePairs(notes), [], "different declared themes: excluded outright, whatever the word overlap");
   // 0.5.6: same theme is no longer enough on its own either — their titles only share
@@ -68,10 +68,10 @@ test("findDuplicatePairs (0.5.6 bug fix): two project/* notes sharing only the b
     { id: "project-memglow-v04-strategy", label: "Memglow v0.4 strategy", description: "Strategy covering memglow api token rotation and secrets handling for the project", theme: "project", subtheme: "memglow" },
     { id: "project-r0zumnik-hub-bento-shares-secrets", label: "R0zumnik hub bento shares and secrets", description: "How the r0zumnik project hub shares bento config and secrets handling", theme: "project", subtheme: "r0zumnik" },
   ];
-  // Sanity: the pre-existing (theme/word-overlap) gates alone DO still pass this pair — both
-  // notes' own content masks to the identical secret placeholder, a 100% "overlap" on its own.
+  // 0.6.1: the masked placeholder leaves only 4 significant words, below MIN_SHARED (6) — excluded
+  // even with the same subtheme.
   const sameSubtheme = notes.map((n) => ({ ...n, subtheme: "shared-infra" }));
-  assert.strictEqual(dup.findDuplicatePairs(sameSubtheme).length, 1, "same subtheme: the older gates alone already pass this pair");
+  assert.strictEqual(dup.findDuplicatePairs(sameSubtheme).length, 0, "0.6.1: too few shared words");
   // With their REAL, different subthemes and titles that share nothing, the new guard excludes it.
   assert.deepStrictEqual(dup.findDuplicatePairs(notes), [], "different subthemes, no title overlap: no longer paired");
 });
@@ -90,8 +90,8 @@ test("findDuplicatePairs (0.5.8 bug fix): never pairs two notes of the same spli
 
 test("findDuplicatePairs (0.5.8 bug fix): never pairs two notes sharing the same declared part_of when one slug starts with the other's (even without a '-' boundary)", () => {
   const withPartOf = [
-    { id: "alpha", label: "Alpha project beta notes shared", description: "Alpha project beta notes shared", partOf: "hub-x" },
-    { id: "alphabeta", label: "Alpha project beta notes shared extra", description: "Alpha project beta notes shared extra", partOf: "hub-x" },
+    { id: "alpha", label: "Alpha project beta notes shared gamma delta epsilon zeta eta", description: "Alpha project beta notes shared gamma delta epsilon zeta eta", partOf: "hub-x" },
+    { id: "alphabeta", label: "Alpha project beta notes shared gamma delta epsilon zeta eta extra", description: "Alpha project beta notes shared gamma delta epsilon zeta eta extra", partOf: "hub-x" },
   ];
   assert.deepStrictEqual(dup.findDuplicatePairs(withPartOf), [], "same part_of + slug-prefix: excluded");
   const noPartOf = withPartOf.map((n) => ({ ...n, partOf: null }));
@@ -105,4 +105,29 @@ test("significantWordsOf: drops GENERIC_WORDS and bare numbers/dates, keeps ever
   assert.ok(words.includes("espresso") && words.includes("grind"));
   assert.ok(!words.includes("memglow") && !words.includes("project") && !words.includes("notes"));
   assert.ok(!words.some((w) => /^\d+$/.test(w) || /^\d{4}-\d{2}-\d{2}$/.test(w)));
+});
+
+test("findDuplicatePairs (0.6.1): hub siblings, hub/part and 4-shared-word pairs are never reported; a real duplicate is", () => {
+  const hub = "reference-family-admin-and-documents-archive-map";
+  const d = "Scanned photo lot of the family administrative documents archive map for the household";
+  const sib = (n) => ({ id: `${hub}-photo-lot-${n}`, label: `Archive map photo lot ${n}`, description: d, partOf: hub, tokens: 50 });
+  assert.deepStrictEqual(dup.findDuplicatePairs([sib(1), sib(4)]), []);
+  assert.deepStrictEqual(dup.findDuplicatePairs([sib(1), { id: hub, label: "Archive map", description: d, tokens: 50 }]), []);
+  // same long slug prefix equal to a hub slug, even without a declared partOf on the notes
+  assert.deepStrictEqual(dup.findDuplicatePairs([
+    { id: hub + "-photo-lot-1", label: "Archive map photo lot", description: d, tokens: 5 },
+    { id: hub + "-scans-b", label: "Archive map photo lot", description: d, tokens: 5 },
+    { id: "x", label: "x", description: "y", partOf: hub, tokens: 1 }]), []);
+  const ha = "Heating alarmo script archived yaml cleanup audit lot home assistant";
+  assert.deepStrictEqual(dup.findDuplicatePairs([
+    { id: "project-ha-audit-2026-11-cleanup-lot-b-archived-yaml-heating-alarmo-script", label: "Heating alarmo script", description: ha, partOf: "project-ha-audit-2026-11", tokens: 9 },
+    { id: "project-ha-audit-2026-11-cleanup-lot-b-archived-yaml-ac-alarmo-script", label: "AC alarmo script", description: ha, partOf: "project-ha-audit-2026-11", tokens: 9 }]), []);
+  assert.deepStrictEqual(dup.findDuplicatePairs([
+    { id: "project-memglow-v04-strategy", label: "Memglow v04 strategy backlog bugs", description: "strategy backlog bugs release", tokens: 9 },
+    { id: "project-memglow-backlog-bugs", label: "Memglow backlog bugs strategy", description: "backlog bugs strategy release roadmap", tokens: 9 }]), []);
+  const g = "espresso grinder calibration burr timing dosing brewing temperature extraction";
+  const pairs = dup.findDuplicatePairs([
+    { id: "coffee-grinder-a", label: "Espresso grinder calibration", description: g, partOf: "hub-one", tokens: 9 },
+    { id: "coffee-grinder-b", label: "Espresso grinder calibration", description: g, partOf: "hub-two", tokens: 9 }]);
+  assert.strictEqual(pairs.length, 1);
 });
