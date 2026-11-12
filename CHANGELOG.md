@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.2 — 2026-11-12
+
+### Fixed
+
+- **Store: a folder deleted and recreated in quick succession could stay unwatched** (`lib/store/store.js`): the
+  folder event was checked once, possibly while the folder was half there, so a note written in it right
+  after was missed until the next poll (for good with `pollMs: 0`; the 0.6.1 release run failed on
+  `test/review-0410-6b.test.js`). Every folder event is now re-checked ONCE, 1.5 s later; a re-check never
+  schedules another (tested: the apply counter settles), so it cannot loop.
+
 ## 0.6.1 — 2026-11-12
 
 Fixes from the first production run of 0.6.0.

@@ -66,3 +66,18 @@ test("childEnv keeps Claude Code's Foundry key; the rules relay's session set is
   r.clientMessage({ jsonrpc: "2.0", id: 2, method: "initialize" }, "k0");
   assert.ok(r.serverMessage({ jsonrpc: "2.0", id: 2, result: {} }, "k0").changed);
 });
+
+test("a folder event is re-checked once 1.5 s later, never in a loop (0.6.2)", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-6b-loop-"));
+  fs.mkdirSync(path.join(root, "x")); fs.writeFileSync(path.join(root, "x", "a.md"), "# a\n");
+  const store = createStore({ root, pollMs: 0 }).start();
+  try {
+    await until(() => has(store, "x/a.md"), 5000);
+    fs.mkdirSync(path.join(root, "y"));
+    const t0 = Date.now(); let applies0 = null;
+    // after the event, its single re-check and a margin, the event-apply counter must settle (no endless re-checks)
+    await sleep(4500); applies0 = store.stats().eventApplies; await sleep(3500);
+    assert.strictEqual(store.stats().eventApplies, applies0, "no further applies once the one re-check is done");
+    assert.ok(Date.now() - t0 >= 7000);
+  } finally { store.stop(); }
+});
