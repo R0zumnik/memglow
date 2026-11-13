@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.3 — 2026-11-13
+
+### Fixed
+
+- **Store: a folder deleted and recreated at once kept a dead watcher on ext4** (`lib/store/store.js`): a
+  folder was identified by its inode number only, and ext4 (e.g. GitHub's runners) often gives a folder
+  recreated right away the SAME inode, so the old, dead watcher was kept and the new folder's notes were
+  missed until the next poll (the 0.6.1 and 0.6.2 release runs failed on `test/review-0410-6b.test.js`;
+  btrfs, used on the NAS, does not reuse inodes, so it never failed there). Identity is now the inode AND
+  the folder's birth time. The 0.6.2 one-shot re-check stays as a safety net.
+
 ## 0.6.2 — 2026-11-12
 
 ### Fixed
