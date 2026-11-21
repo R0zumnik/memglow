@@ -725,4 +725,6 @@ if (typeof module !== "undefined" && module.exports) {
     }
   });
   if (cfg.setupPending) openWizard();
+  // The control panel (/panel) links here to open AI settings directly.
+  else if (window.location && window.location.hash === "#ai-settings") openAiset();
 })();
