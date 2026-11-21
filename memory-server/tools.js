@@ -108,7 +108,23 @@ const dirOf = (rel) => { const d = path.posix.dirname(rel); return d === "." ? "
 // (`--serve-files any`), the behaviour before 0.4.9.1.
 const SERVE_EXT = new Set([".md", ".txt", ".json", ".csv", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf"]);
 
-function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, archive = null, searchUsage: searchUsageIn, archivePenalty: archivePenaltyIn }) {
+// core-perf — lean answers (--lean-answers, off by default): the tools whose answer is NOT a
+// FastMCP { result } wrap of a text / an object, so keep their structuredContent and outputSchema.
+const LEAN_KEEPS_STRUCTURED = new Set(["read_content", "search", "fetch"]);
+/** tools/list for lean answers: no outputSchema on the tools that no longer send structuredContent
+ * (a tool that declares one must send it), build_context's default format shown as "text". */
+function leanToolList(tools) {
+  return tools.map((t) => {
+    if (LEAN_KEEPS_STRUCTURED.has(t.name)) return t;
+    const { outputSchema, ...rest } = t;
+    if (t.name !== "build_context" || !rest.inputSchema || !rest.inputSchema.properties || !rest.inputSchema.properties.output_format) return rest;
+    const of = rest.inputSchema.properties.output_format;
+    return { ...rest, description: String(rest.description).replace('JSON by default, or compact Markdown with output_format="text".', 'Compact Markdown by default, or JSON with output_format="json".'),
+      inputSchema: { ...rest.inputSchema, properties: { ...rest.inputSchema.properties, output_format: { ...of, default: "text", enum: ["text", "json"] } } } };
+  });
+}
+
+function createTools({ store, project = store.project, readOnly = true, startedAt = Date.now(), writer = null, writeOptions = {}, serveFiles = "text", structuredRead = true, leanAnswers = false, log = () => {}, semantic: semanticIn, coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, archive = null, searchUsage: searchUsageIn, archivePenalty: archivePenaltyIn }) {
   // Optional, local-first semantic search (lib/store/semantic.js) — self-configuring from env /
   // memglow.config.json, OFF unless a provider is actually set there (see that module's header
   // comment). `semanticIn` (tests): pass an engine to control it directly, or `null` to force it
@@ -131,6 +147,9 @@ function createTools({ store, project = store.project, readOnly = true, startedA
   // MEMGLOW_SEARCH_ARCHIVE_PENALTY, same env-only trust boundary as searchUsage above).
   const archivePenalty = archivePenaltyIn !== undefined ? archivePenaltyIn : archivePenaltySettings({}, process.env);
   const engine = createSearch(store, semantic, searchUsage, archivePenalty);
+  // core-perf — lean answers: every answer once (no structuredContent copy of the text), and the
+  // text itself without what the model cannot use (see README "Lean answers").
+  const lean = leanAnswers === true;
   const writes = !readOnly && writer ? createWriteTools({ store, writer, project, ...writeOptions }) : null;
   const projectId = stableId("memglow-project:" + project);
 
@@ -218,15 +237,16 @@ function createTools({ store, project = store.project, readOnly = true, startedA
       const where = r.page > 1 && r.total ? ` on page ${r.page} (${r.total} results in all)` : "";
       return textResult(`No results found for '${query}' in project '${project}'${where}. Try broader or different words, or call recent_activity(project="${project}") to see what changed lately.`);
     }
-    const lines = [query ? `# Search Results: ${query}` : "# Search Results", `*project: ${project}*`, ""];
+    // Lean answers: no "*project: …*" line (one project), no "- score:" line (the order says it).
+    const lines = lean ? [query ? `# Search Results: ${query}` : "# Search Results", ""] : [query ? `# Search Results: ${query}` : "# Search Results", `*project: ${project}*`, ""];
     // 0.4.10.5: the blocks this text is made of, with their note references, handed to the
     // levers out of band (lib/search-meta.js) — they never re-split or re-scan this text.
-    const head = lines[0] + "\n" + lines[1];
+    const head = lean ? lines[0] : lines[0] + "\n" + lines[1];
     let pure = !REF_LIKE.test(query) && !REF_LIKE.test(project);
     const chunks = [{ text: head, ...(pure ? { perm: [], ids: [] } : refsOf(head)) }];
     for (const h of r.results) {
       const j = hitJson(h);
-      const blk = [`### ${j.title}`, `- permalink: ${j.permalink}`, `- score: ${h.score.toFixed(4)}`];
+      const blk = lean ? [`### ${j.title}`, `- permalink: ${j.permalink}`] : [`### ${j.title}`, `- permalink: ${j.permalink}`, `- score: ${h.score.toFixed(4)}`];
       // An excerpt that only repeats the title (the note's "# Title" heading line, or the title
       // itself when no line matched) says nothing new: no match line then.
       const rawMatch = h.match ? h.match.replace(/\s+/g, " ").trim() : "";
@@ -416,7 +436,7 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     const page = int(args.page, 1, { min: 1, name: "page" });
     const pageSize = int(args.page_size, 10, { min: 1, max: 50, name: "page_size" });
     const maxRelated = int(args.max_related, 10, { min: 0, max: 100, name: "max_related" });
-    const format = fmtOf(args.output_format, "json");
+    const format = fmtOf(args.output_format, lean ? "text" : "json"); // lean answers: compact Markdown unless JSON is asked for
     const now = Date.now();
     const tf = args.timeframe == null || args.timeframe === "" ? "7d" : str(args.timeframe);
     let since = parseTimeframe(tf, now);
@@ -538,7 +558,7 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     const rels = pageItems.filter((i) => i.kind === "relation");
     if (ents.length) {
       lines.push("", `**📄 Recent Notes & Documents (${ents.length}):**`);
-      for (const it of ents) { const d = dirOf(it.note.rel); lines.push(`  • ${it.note.title || "Untitled"}${d ? ` (${d})` : ""} [id: ${it.note.external_id}]`); }
+      for (const it of ents) { const d = dirOf(it.note.rel); lines.push(`  • ${it.note.title || "Untitled"}${d ? ` (${d})` : ""}${lean ? "" : ` [id: ${it.note.external_id}]`}`); }
     }
     if (obs.length) {
       lines.push("", `**🔍 Recent Observations (${obs.length}):**`);
@@ -610,7 +630,7 @@ function createTools({ store, project = store.project, readOnly = true, startedA
       let l = `📄 ${f.name.padEnd(30)} ${f.path}`;
       if (f.title && f.title !== f.name) l += ` | ${f.title}`;
       if (f.updated_at) l += ` | ${f.updated_at.slice(0, 10)}`;
-      l += ` | id: ${f.external_id}`;
+      if (!lean) l += ` | id: ${f.external_id}`;
       out.push(l);
     }
     out.push("");
@@ -894,8 +914,20 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     memory_core, memory_index_level,
   })); // a Map: "toString", "constructor", "__proto__"… are unknown tools, not Object.prototype members
 
-  /** Runs a tool call: `call(name, args)` → MCP result (never throws). */
+  /** Lean answers: the answer once — its { result } structuredContent copy dropped (the same
+   * object is returned, so its out-of-band search metadata stays attached). */
+  function once(name, r) {
+    if (r && typeof r === "object" && "structuredContent" in r && !LEAN_KEEPS_STRUCTURED.has(name)) delete r.structuredContent;
+    return r;
+  }
   function call(name, args) {
+    const out = callFull(name, args);
+    if (!lean || !out) return out;
+    return isThenable(out) ? out.then((r) => once(name, r)) : once(name, out);
+  }
+
+  /** Runs a tool call: `call(name, args)` → MCP result (never throws). */
+  function callFull(name, args) {
     const a = args && typeof args === "object" && !Array.isArray(args) ? args : {};
     if (WRITE_TOOLS.has(name)) {
       if (readOnly) return errorResult(READ_ONLY_MESSAGE);
@@ -922,7 +954,7 @@ function createTools({ store, project = store.project, readOnly = true, startedA
     } catch (e) { return fail(e); }
   }
 
-  return { call, tools: TOOLS, engine, warm: () => engine.warm() };
+  return { call, tools: lean ? leanToolList(TOOLS) : TOOLS, engine, warm: () => engine.warm() };
 }
 
 /** Groups of notes that are the same file (same inode) under different paths. */
@@ -937,4 +969,4 @@ function sameFileTwins(notes) {
   return [...byIno.values()].filter((a) => a.length > 1);
 }
 
-module.exports = { SERVE_EXT, sameFileTwins, createTools, SERVER_VERSION, READ_ONLY_MESSAGE, WRITES_UNAVAILABLE, UNSUPPORTED_MESSAGE, MAX_QUERY_CHARS, MAX_QUERY_TERMS };
+module.exports = { leanToolList, SERVE_EXT, sameFileTwins, createTools, SERVER_VERSION, READ_ONLY_MESSAGE, WRITES_UNAVAILABLE, UNSUPPORTED_MESSAGE, MAX_QUERY_CHARS, MAX_QUERY_TERMS };
