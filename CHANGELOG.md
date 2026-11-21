@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.4 — 2026-11-21
+
+### Fixed
+
+- **Structure guardian: several fixes aimed at the same note overwrote each other** (`lib/star-audit.js`):
+  `applyDeterministicFixes` built every fix of a pass from one snapshot of the notes taken before the
+  loop. With nine parts missing from one hub's `## Parts`, each write rebuilt the hub from its ORIGINAL
+  text and replaced the previous fix; the scan spent its whole budget (20 rewrites) to leave 3 lines, so
+  `/api/maintenance` kept showing the other 6 as fixable. Each applied fix now updates the snapshot, so all
+  nine land in one scan (reproduced on a copy of the real knowledge base: 9 lines added, 0 lost).
+- **Structure guardian: a part whose `Up:` line names another note was never given its hub's** (R2):
+  any `Up:` line near the top blocked the fix, although hub-spoke still reported the missing back-link.
+  Only an `Up:` line that already links the hub counts now; the new line is ADDED above the old one
+  (add-only, nothing removed).
+- **Structure guardian: a fix that could not be applied was only logged.** A fix that builds to nothing, a
+  vanished note or a failed write now produces a `fix-failed` event, and a failed write also sets
+  `lastError` in `/api/maintenance` for that scan.
+
+### Changed
+
+- **Leaner `tools/list` (≈ -35 % tokens at every session start)**: tool descriptions and parameter texts
+  are shorter, an optional parameter is declared as its plain type (no `anyOf null` / `default: null`
+  wrapper; an explicit null is still accepted), the duplicate `annotations.title` and the long output
+  schemas are gone. Every tool, parameter, enum, required flag and non-null default is unchanged. The lean
+  text is the only text (every `tools.profile`); the longer explanations live in the README (search
+  syntax, edit operations, memory_core matching).
+
 ## 0.6.3 — 2026-11-13
 
 ### Fixed

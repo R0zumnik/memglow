@@ -7,24 +7,44 @@
 
 const nullable = (type, description, extra = {}) => ({ anyOf: [{ type }, { type: "null" }], default: null, description, ...extra });
 const strList = (description) => ({ anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }], default: null, description });
-const fmt = (def = "text", description = 'Response format: "text" (readable) or "json" (structured).') =>
-  ({ type: "string", enum: def === "json" ? ["json", "text"] : ["text", "json"], default: def, description });
+// 0.6.4: the enum says it all ("text" readable / "json" structured) — no per-tool description.
+const fmt = (def = "text", description) =>
+  ({ type: "string", enum: def === "json" ? ["json", "text"] : ["text", "json"], default: def, ...(description ? { description } : {}) });
 
 // Accepted for compatibility, ignored: the memglow memory server serves exactly one project.
 const PROJECT = {
-  project: nullable("string", "Project name. Accepted for compatibility and ignored: this server serves a single project."),
-  project_id: nullable("string", "Project id. Accepted for compatibility and ignored."),
+  project: nullable("string", "Ignored."),
+  project_id: nullable("string", "Ignored."),
 };
-const WORKSPACE = { workspace: nullable("string", "Workspace. Accepted for compatibility and ignored.") };
+const WORKSPACE = { workspace: nullable("string", "Ignored.") };
 
 const wrapSchema = (anyOf) => ({ type: "object", properties: { result: { anyOf } }, required: ["result"], "x-fastmcp-wrap-result": true });
-const OUT_TEXT_OR_OBJECT = wrapSchema([{ type: "object", additionalProperties: true }, { type: "string" }]);
+const OUT_TEXT_OR_OBJECT = { type: "object", properties: { result: {} }, required: ["result"], "x-fastmcp-wrap-result": true };
 const OUT_LIST = { type: "object", properties: { result: { type: "array", items: { type: "object", additionalProperties: true } } }, required: ["result"], "x-fastmcp-wrap-result": true };
 
-const RO = (title) => ({ title, readOnlyHint: true, destructiveHint: false, openWorldHint: false });
-const RW = (title, destructive) => ({ title, readOnlyHint: false, destructiveHint: destructive, openWorldHint: false });
+const RO = (title) => ({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
+const RW = (title, destructive) => ({ readOnlyHint: false, destructiveHint: destructive, openWorldHint: false });
+
+/**
+ * 0.6.4 lean listing: an optional parameter is simply left out, never sent as null, so the
+ * `anyOf: [X, {type: "null"}], default: null` wrapper only cost tokens at every session start.
+ * It becomes plain X (one remaining member inlined); non-null defaults and enums are untouched.
+ * The server itself still accepts an explicit null for any of them.
+ */
+function lean(prop) {
+  if (!prop || !Array.isArray(prop.anyOf)) return prop;
+  const rest = prop.anyOf.filter((m) => !(m && m.type === "null"));
+  if (rest.length === prop.anyOf.length) return prop;
+  const { anyOf, default: def, ...others } = prop;
+  const out = rest.length === 1 ? { ...rest[0], ...others } : { anyOf: rest, ...others };
+  if (def !== null && def !== undefined) out.default = def;
+  return out;
+}
 
 function tool(name, title, description, properties, required, annotations, outputSchema = OUT_TEXT_OR_OBJECT) {
+  const lp = {};
+  for (const [k, v] of Object.entries(properties)) lp[k] = lean(v);
+  properties = lp;
   const inputSchema = { type: "object", additionalProperties: false, properties };
   if (required && required.length) inputSchema.required = required;
   const t = { name, title, description, inputSchema, annotations };
@@ -38,14 +58,14 @@ const TOOLS = [
     {}, null, RO("Memory Server Diagnostics"), null),
 
   tool("delete_note", "Delete Note",
-    "Delete a note by title, permalink or memory:// URL (or every note of a directory with is_directory=true). Nothing is destroyed: files move to the project's .trash/<timestamp>/ folder, which is never indexed. Answers true / false for one note. Write tools answer an error when the server runs read-only.",
+    "Delete a note (or, with is_directory=true, every note of a directory). Files move to the project .trash/<timestamp>/ (never indexed). Errors when the server is read-only.",
     {
-      identifier: { type: "string", description: "Title or permalink of the note to delete, or a directory path when is_directory is true." },
-      is_directory: { type: "boolean", default: false, description: "Delete a whole directory instead of one note." },
+      identifier: { type: "string", description: "Title, permalink or (is_directory) directory path." },
+      is_directory: { type: "boolean", default: false, description: "Delete a directory." },
       ...PROJECT,
       output_format: fmt(),
     }, ["identifier"], RW("Delete Note", true),
-    wrapSchema([{ type: "boolean" }, { type: "string" }, { type: "object", additionalProperties: true }])),
+    OUT_TEXT_OR_OBJECT),
 
   tool("read_content", "Read Content",
     "Read a file of the knowledge base exactly as stored (Markdown with its frontmatter, or another text file), by path, permalink or memory:// URL. Returns type, text, content type and encoding.",
@@ -55,121 +75,121 @@ const TOOLS = [
     }, ["path"], RO("Read Content"), { type: "object", additionalProperties: true }),
 
   tool("build_context", "Build Context",
-    "Gather a note and what it is connected to, from a memory:// URL: the note itself (or every note matching a folder/* pattern), its observations, its relations and the related notes, following links up to `depth` hops. Related notes are limited to those updated within `timeframe` (e.g. 7d, 2 weeks, yesterday). JSON by default, or compact Markdown with output_format=\"text\".",
+    "A note and what it links to, from a memory:// URL (folder/* for a pattern): observations, relations and related notes, `depth` hops, related notes limited to `timeframe`. JSON by default, output_format=\"text\" for compact Markdown.",
     {
-      url: { type: "string", minLength: 1, maxLength: 2028, description: "memory:// URL or permalink, e.g. memory://folder/note or memory://folder/* ." },
+      url: { type: "string", minLength: 1, maxLength: 2028, description: "memory:// URL or permalink (folder/* allowed)." },
       ...PROJECT,
-      depth: { anyOf: [{ type: "string" }, { type: "integer" }, { type: "null" }], default: 1, description: "How many link hops to follow (1-3 is plenty)." },
-      timeframe: { anyOf: [{ type: "string" }, { type: "null" }], default: "7d", description: "Only related notes updated within this window: 7d, 24h, 2 weeks, \"3 days ago\", yesterday, 2026-01-01…" },
-      page: { type: "integer", default: 1, description: "Page of primary results (from 1)." },
-      page_size: { type: "integer", default: 10, description: "Primary results per page (max 50)." },
-      max_related: { type: "integer", default: 10, description: "Maximum related items in total (max 100)." },
-      output_format: fmt("json", 'Response format: "json" (structured, default) or "text" (compact Markdown).'),
+      depth: { anyOf: [{ type: "string" }, { type: "integer" }, { type: "null" }], default: 1, description: "Link hops (1-3)." },
+      timeframe: { anyOf: [{ type: "string" }, { type: "null" }], default: "7d", description: "Window for related notes: 7d, 24h, 2 weeks, yesterday, 2026-01-01…" },
+      page: { type: "integer", default: 1, description: "Page (from 1)." },
+      page_size: { type: "integer", default: 10, description: "Per page (max 50)." },
+      max_related: { type: "integer", default: 10, description: "Max related items (100)." },
+      output_format: fmt("json"),
     }, ["url"], RO("Build Context")),
 
   tool("recent_activity", "Recent Activity",
-    "What changed recently in the knowledge base: notes updated within `timeframe` (newest first), or their observations / relations with `type`. Paginated.",
+    "Notes updated within `timeframe`, newest first (or their observations / relations, via `type`). Paginated.",
     {
-      type: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], default: "", description: "What to list: \"entity\" (notes, the default), \"observation\", \"relation\", or a list of them." },
-      depth: { type: "integer", default: 1, description: "Accepted for compatibility (related items are not expanded here)." },
-      timeframe: { type: "string", default: "7d", description: "Time window: 7d, 24h, \"2 days ago\", \"last week\", yesterday, 2026-01-01…" },
-      page: { type: "integer", default: 1, description: "Page number (from 1)." },
-      page_size: { type: "integer", default: 10, description: "Items per page (max 100)." },
+      type: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], default: "", description: "entity (default), observation, relation, or a list." },
+      depth: { type: "integer", default: 1, description: "Ignored." },
+      timeframe: { type: "string", default: "7d", description: "7d, 24h, \"last week\", yesterday, 2026-01-01…" },
+      page: { type: "integer", default: 1, description: "Page (from 1)." },
+      page_size: { type: "integer", default: 10, description: "Per page (max 100)." },
       ...PROJECT,
-      output_format: fmt("text", 'Response format: "text" (readable summary) or "json" (a flat list of items).'),
+      output_format: fmt("text"),
     }, null, RO("Recent Activity"),
     wrapSchema([{ type: "string" }, { type: "array", items: { type: "object", additionalProperties: true } }])),
 
   tool("search_notes", "Search Notes",
-    "Search the knowledge base. Words are matched with accents folded and English/French stop-words ignored, the title counting most; \"quoted phrases\", AND, OR, NOT / -word, prefix* and tag:name are understood. search_type: text (default unless semantic search is configured), title, permalink (exact, prefix, or a * pattern); vector/semantic/hybrid run the same lexical engine UNLESS an optional, local-first embeddings provider is configured (off by default, no model ships with this server — see README \"Semantic search (optional)\"), in which case vector/semantic rank by embedding similarity and hybrid fuses that with the lexical ranking, and omitting search_type then defaults to hybrid. Filters: note_types, entity_types (entity, observation, relation), categories, tags, status, metadata_filters, after_date. Results are paginated and ordered by score, then permalink.",
+    "Search the notes. Accents folded, the title counts most; \"phrases\", AND, OR, NOT / -word, prefix* and tag:name work. search_type: text (default), title, permalink (exact, prefix or * pattern); vector/semantic/hybrid use the lexical engine unless an optional embeddings provider is configured (README \"Semantic search\"). Filters: note_types, entity_types, categories, tags, status, metadata_filters, after_date. Paginated.",
     {
-      query: nullable("string", "What to look for. Optional when filters are given."),
+      query: nullable("string", "Search text; optional with filters."),
       ...PROJECT,
-      search_all_projects: { type: "boolean", default: false, description: "Accepted for compatibility and ignored (single project)." },
-      page: { type: "integer", default: 1, description: "Page number (from 1)." },
+      search_all_projects: { type: "boolean", default: false, description: "Ignored." },
+      page: { type: "integer", default: 1, description: "Page (from 1)." },
       page_size: { type: "integer", default: 10, description: "Results per page." },
-      search_type: nullable("string", "text (default), title, permalink, or vector / semantic / hybrid (same lexical engine)."),
-      output_format: fmt("text", 'Response format: "text" (readable result blocks) or "json" (structured).'),
-      note_types: strList("Only notes whose frontmatter `type` is one of these, e.g. [\"note\", \"project\"]."),
-      entity_types: strList("What to return: \"entity\" (notes, the default), \"observation\", \"relation\"."),
-      categories: strList("Only observations of these categories (implies entity_types [\"observation\"] when that is not given)."),
-      after_date: nullable("string", "Only notes updated since: 2d, \"1 week\", 2026-01-01…"),
+      search_type: nullable("string", "text, title, permalink, vector, semantic or hybrid."),
+      output_format: fmt("text"),
+      note_types: strList("Frontmatter `type` in this list."),
+      entity_types: strList("entity (default), observation, relation."),
+      categories: strList("Observation categories (implies entity_types observation)."),
+      after_date: nullable("string", "Updated since: 2d, \"1 week\", 2026-01-01…"),
       metadata_filters: { anyOf: [{ type: "object", additionalProperties: true }, { type: "null" }], default: null, description: "Frontmatter filters, e.g. {\"status\": \"active\"}; values may be lists (any of) or {\"$in\"|\"$gt\"|\"$gte\"|\"$lt\"|\"$lte\"|\"$contains\": …}." },
-      tags: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "string" }, { type: "null" }], default: null, description: "Only notes carrying all these frontmatter tags (a list, or \"a,b\")." },
-      status: nullable("string", "Only notes whose frontmatter `status` is this."),
-      min_similarity: nullable("number", "Accepted for compatibility and ignored (no vector search)."),
+      tags: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "string" }, { type: "null" }], default: null, description: "Notes carrying all these tags (list or \"a,b\")." },
+      status: nullable("string", "Frontmatter `status`."),
+      min_similarity: nullable("number", "Ignored."),
     }, null, RO("Search Notes")),
 
   tool("read_note", "Read Note",
-    "Read one note in full, as stored (frontmatter included), by permalink, memory:// URL, title, file name or path. When nothing matches exactly, lists the closest notes instead. output_format=\"json\" gives title, permalink, file_path, content and frontmatter.",
+    "Read one note in full, as stored, by permalink, memory:// URL, title, file name or path. No exact match: lists the closest notes. output_format=\"json\" gives title, permalink, file_path, content, frontmatter.",
     {
-      identifier: { type: "string", description: "Permalink, memory:// URL, title, file name or path of the note." },
+      identifier: { type: "string", description: "Permalink, memory:// URL, title, file name or path." },
       ...PROJECT,
-      page: { type: "integer", default: 1, description: "Page of suggestions when the identifier matches no note." },
-      page_size: { type: "integer", default: 10, description: "Number of suggestions when the identifier matches no note." },
-      output_format: fmt("text", 'Response format: "text" (the note as stored) or "json" (structured).'),
-      include_frontmatter: { type: "boolean", default: false, description: "With output_format=\"json\": keep the frontmatter block in `content`." },
+      page: { type: "integer", default: 1, description: "Suggestions page (no exact match)." },
+      page_size: { type: "integer", default: 10, description: "Suggestions per page (no exact match)." },
+      output_format: fmt("text"),
+      include_frontmatter: { type: "boolean", default: false, description: "json: keep frontmatter in `content`." },
     }, ["identifier"], RO("Read Note")),
 
   tool("view_note", "View Note",
     "Read one note and ask the client to show it to the user as a Markdown document (artifact). Same lookup as read_note.",
     {
-      identifier: { type: "string", description: "Permalink, memory:// URL, title, file name or path of the note." },
+      identifier: { type: "string", description: "Permalink, memory:// URL, title, file name or path." },
       ...PROJECT,
     }, ["identifier"], RO("View Note"), wrapSchema([{ type: "string" }])),
 
   tool("write_note", "Write Note",
-    "Create a Markdown note: file <directory>/<title>.md, frontmatter title / type (note_type) / permalink, then the metadata keys and tags. The content may hold observations (`- [category] text #tag`) and relations (`- relation_type [[Other Note]]`). An existing note is not replaced unless overwrite=true (then its body is replaced and its other frontmatter keys and permalink are kept). For incremental changes use edit_note.",
+    "Create <directory>/<title>.md with frontmatter (title, type, permalink, metadata, tags). Content may hold observations (`- [category] text #tag`) and relations (`- relation_type [[Other Note]]`). Existing note: error unless overwrite=true (body replaced, other frontmatter and permalink kept). For small changes use edit_note.",
     {
       title: { type: "string", description: "Note title." },
-      content: { type: "string", description: "Markdown body (observations and relations allowed)." },
-      directory: { type: "string", description: "Folder, relative to the project root (\"\" or \"/\" for the root)." },
+      content: { type: "string", description: "Markdown body." },
+      directory: { type: "string", description: "Folder under the root (\"/\" = root)." },
       ...{ project: PROJECT.project },
       ...WORKSPACE,
       project_id: PROJECT.project_id,
       tags: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "string" }, { type: "null" }], default: null, description: "Tags (a list or \"a,b\")." },
       note_type: { type: "string", default: "note", description: "Frontmatter `type`." },
       metadata: { anyOf: [{ type: "object", additionalProperties: true }, { type: "null" }], default: null, description: "Extra frontmatter fields." },
-      overwrite: { anyOf: [{ type: "boolean" }, { type: "null" }], default: null, description: "Replace an existing note with the same title." },
+      overwrite: { anyOf: [{ type: "boolean" }, { type: "null" }], default: null, description: "Replace an existing note." },
       output_format: fmt(),
     }, ["title", "content", "directory"], { ...RW("Write Note", true), idempotentHint: false }),
 
   tool("list_directory", "List Directory",
-    "List folders and notes of the knowledge base under a directory, to a given depth, optionally filtered by a file-name glob and sorted. Folders first.",
+    "List folders and notes under a directory (folders first), to `depth`, optionally filtered by a file-name glob and sorted.",
     {
-      dir_name: { type: "string", default: "/", description: "Directory to list (\"/\" = root), e.g. /memory/project." },
-      depth: { type: "integer", default: 1, description: "How deep to go (1-10; 1 = direct children)." },
-      file_name_glob: nullable("string", "Only files whose name matches, e.g. *.md, *meeting*, project_*."),
+      dir_name: { type: "string", default: "/", description: "Directory (\"/\" = root)." },
+      depth: { type: "integer", default: 1, description: "Depth (1-10)." },
+      file_name_glob: nullable("string", "File-name glob, e.g. *.md, *meeting*."),
       sort: { anyOf: [{ type: "string", enum: ["title_asc", "title_desc", "updated_asc", "updated_desc"] }, { type: "null" }], default: null, description: "File order (folders stay first)." },
-      page: { type: "integer", default: 1, description: "Page number (from 1)." },
+      page: { type: "integer", default: 1, description: "Page (from 1)." },
       page_size: { type: "integer", default: 10, description: "Entries per page (max 200)." },
       output_format: fmt(),
       ...PROJECT,
     }, null, RO("List Directory")),
 
   tool("edit_note", "Edit Note",
-    "Edit a note: append, prepend (after the frontmatter), find_replace (exactly expected_replacements occurrences, default 1), replace_section (by heading; replace_subsections=false keeps its sub-headings), insert_before_section / insert_after_section. append/prepend create the note when it does not exist. metadata merges frontmatter keys (title, type, permalink excepted) with any operation; the rest of the file is kept byte-for-byte.",
+    "Edit a note: append, prepend, find_replace (exactly expected_replacements, default 1), replace_section (by heading; replace_subsections=false keeps sub-headings), insert_before_section / insert_after_section. append/prepend create a missing note. metadata merges frontmatter keys; the rest of the file is kept byte for byte.",
     {
-      identifier: { type: "string", description: "Exact title, permalink or memory:// URL of the note." },
+      identifier: { type: "string", description: "Title, permalink or memory:// URL." },
       operation: { type: "string", enum: ["append", "prepend", "find_replace", "replace_section", "insert_before_section", "insert_after_section"], description: "The edit to make." },
       content: { type: "string", description: "Text to add, or the replacement." },
       project: PROJECT.project,
       ...WORKSPACE,
       project_id: PROJECT.project_id,
-      section: nullable("string", "Heading the section operations apply to, e.g. \"## Notes\"."),
+      section: nullable("string", "Heading for section operations, e.g. \"## Notes\"."),
       find_text: nullable("string", "Text to find (find_replace)."),
       expected_replacements: nullable("integer", "Expected number of replacements (find_replace)."),
-      replace_subsections: nullable("boolean", "replace_section: include sub-headings in the replaced section."),
+      replace_subsections: nullable("boolean", "replace_section: replace sub-headings too."),
       metadata: { anyOf: [{ type: "object", additionalProperties: true }, { type: "null" }], default: null, description: "Frontmatter fields to merge." },
       output_format: fmt(),
     }, ["identifier", "operation", "content"], RW("Edit Note", true)),
 
   tool("move_note", "Move Note",
-    "Move or rename a note (destination_path with its .md, or destination_folder to keep the file name), or a whole directory (is_directory=true). Never replaces an existing file; the note keeps its permalink.",
+    "Move or rename a note (destination_path with .md, or destination_folder to keep the name), or a directory (is_directory=true). Never overwrites; the permalink is kept.",
     {
-      identifier: { type: "string", description: "Exact title, permalink or memory:// URL (or a directory path)." },
+      identifier: { type: "string", description: "Title, permalink, memory:// URL or directory path." },
       destination_path: { type: "string", default: "", description: "New path relative to the project root." },
-      destination_folder: nullable("string", "Move into this folder, keeping the file name."),
+      destination_folder: nullable("string", "Target folder (keeps the file name)."),
       is_directory: { type: "boolean", default: false, description: "Move a whole directory." },
       ...PROJECT,
       output_format: fmt(),
@@ -230,16 +250,16 @@ const TOOLS = [
     }, ["note_type"], RO("Infer Schema")),
 
   tool("memory_core", "Memory Core",
-    "Per-project core loading: instead of the whole memory index, a compact global index (one line per top-level group, hub titles only, no hooks) plus the project hub(s) matching `cwd` / `project`, in full. Matching order: an explicit coreMap entry (config), then a candidate's own `project_paths:`/`repo:` frontmatter, then a word match against the cwd's own name and the project hints; with no match, the top-3 most-read hubs (if accounting data is available). Meant to be called once, at session start (see a SessionStart hook in hooks/), instead of injecting the full index.",
+    "Per-project core loading, once at session start: a compact global index plus the project hub(s) matching `cwd` / `project` in full (config coreMap, then project_paths:/repo: frontmatter, then name match; none: the 3 most-read hubs).",
     {
-      cwd: { type: "string", default: "", description: "The session's working folder (an absolute path, e.g. process.cwd())." },
-      project: strList("Repo name / git remote hint(s), tried in addition to cwd."),
-      budget_tokens: { type: "integer", default: 1500, minimum: 100, maximum: 20000, description: "Truncates to whole lines to fit this many ≈tokens (bytes/4); says what was cut." },
+      cwd: { type: "string", default: "", description: "Absolute working folder." },
+      project: strList("Repo name / git remote hint(s)."),
+      budget_tokens: { type: "integer", default: 1500, minimum: 100, maximum: 20000, description: "Token budget (bytes/4); cuts whole lines." },
       output_format: fmt(),
     }, null, RO("Memory Core")),
 
   tool("memory_index_level", "Memory Index Level",
-    "A deterministic (no AI) view of the memory index's own structure, built from its headings and bullet lines: level 0 = group titles with their hubs only, one compact line each; level 1 = the same, as a `## group` + `- hub` block; level 2 = the index exactly as stored (every hook included). `group` restricts the answer to one group (by title, case/accent-insensitive).",
+    "Deterministic view of the memory index: level 0 = group titles with their hubs (compact), 1 = same as a `## group` + `- hub` block, 2 = the index as stored. `group` restricts to one group (by title).",
     {
       level: { type: "integer", default: 0, minimum: 0, maximum: 2, description: "0 = groups + hubs (compact), 1 = groups + hubs (block), 2 = the full index as stored." },
       group: nullable("string", "Restrict the answer to this one group (by title)."),

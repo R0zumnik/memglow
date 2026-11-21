@@ -47,7 +47,7 @@
 <a id="five-minute-start"></a>
 ## ⏱️ 5-minute start
 
-The shortest path to a memory your AI reads cheaply (memglow 0.6.3).
+The shortest path to a memory your AI reads cheaply (memglow 0.6.4).
 
 1. **Install and run the memory server** (Node 18+, no build, zero dependencies) on your notes folder:
 
@@ -1149,6 +1149,17 @@ instead of the connection, so the per-session levers finally see the repeats the
 save tokens on. No `headersHelper` configured, or an invalid/missing header on a given request:
 nothing breaks — it is exactly the pre-0.5.3 per-connection behaviour, just without the benefit.
 
+### Tool descriptions (lean listing)
+
+`tools/list` carries one-line purposes and short parameter texts (about 35 % fewer tokens than before 0.6.4). The details:
+
+- `search_notes`: accents folded, title weighs most; `"phrases"`, `AND`, `OR`, `NOT` / `-word`, `prefix*`, `tag:name`. `search_type` is `text` (default), `title`, `permalink` (exact, prefix or `*` pattern), or `vector` / `semantic` / `hybrid`, which use the lexical engine unless an embeddings provider is configured (see below). Filters: `note_types`, `entity_types`, `categories`, `tags`, `status`, `metadata_filters` (values may be lists or `{"$in"|"$gt"|"$gte"|"$lt"|"$lte"|"$contains": …}`), `after_date`. Results are ordered by score, then permalink.
+- `edit_note`: `append` / `prepend` create a missing note; `find_replace` needs exactly `expected_replacements` matches (default 1); `replace_section` keeps sub-headings only with `replace_subsections=false`; `metadata` merges frontmatter keys (never title, type or permalink); the rest of the file is kept byte for byte.
+- `write_note`: an existing note is refused unless `overwrite=true` (body replaced, other frontmatter and permalink kept).
+- `delete_note`: files move to `.trash/<timestamp>/`, which is never indexed. Write tools answer an error on a read-only server.
+- `memory_core`: matches, in order, a `coreMap` entry (config), the candidate's `project_paths:` / `repo:` frontmatter, a word match on the cwd name and project hints; no match: the 3 most-read hubs. Meant for one call at session start.
+- `project`, `project_id`, `workspace`, `search_all_projects`, `min_similarity`: accepted for basic-memory compatibility and ignored (one project).
+
 <a id="semantic-search"></a>
 ### Semantic search (optional)
 
@@ -1586,7 +1597,7 @@ docker run -d --name memglow -p 127.0.0.1:4747:4747 \
   -v /path/to/notes:/memory:ro \
   -v memglow-data:/data \
   -e MEMGLOW_TOKEN=$(cat ~/.memglow/token) \
-  ghcr.io/r0zumnik/memglow:0.6.3
+  ghcr.io/r0zumnik/memglow:0.6.4
 ```
 
 `/data` keeps the Memory cost counts (note ids and numbers only) and the saved view (settings,
@@ -1595,7 +1606,7 @@ layout, camera) across restarts.
 Or with Compose: copy [`docker-compose.example.yml`](docker-compose.example.yml), set `NOTES`,
 then `docker compose up -d` — `memglow init --docker` writes one for you in `~/.memglow/`.
 
-Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.6.3`.
+Images for amd64 and arm64 (Apple silicon, Raspberry Pi) are published on every release; pin a version with `ghcr.io/r0zumnik/memglow:0.6.4`.
 
 The hooks and the MCP proxy run next to your AI tools, not in the container: point them at the
 container with `MEMGLOW_URL` (default `http://127.0.0.1:4747`) and the same token.

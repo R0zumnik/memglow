@@ -956,3 +956,41 @@ test("R5 (0.5.11): ambiguous candidates — the AI sees at most 3 hubs, and its 
     assert.strictEqual(w2.recentEvents(0).filter((e) => e.kind === "ai-call").length, 1, "still only the first scan event (the log persists)");
   } finally { cleanup(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test("createStructureWorker (0.6.4): nine missing '## Parts' lines of ONE hub all land in one scan (none overwrites another), and an Up: line naming ANOTHER note no longer blocks the hub's own Up: — ADD-only, no line lost", async () => {
+  const hubText = "---\ntitle: hub\n---\n\n# Hub\n\n## Parts\n- [[p0]] — zero\n\n## Journal\n- keep this line\n";
+  const files = { "memory/MEMORY.md": "---\ntitle: MEMORY\n---\n\n- [[hub]] — hub\n", "memory/hub.md": hubText };
+  files["memory/p0.md"] = "---\ntitle: p0\npart_of: hub\n---\n\nUp: [[hub]] — part of hub.\n\nBody.\n";
+  for (let i = 1; i <= 9; i++) files[`memory/p${i}.md`] = `---\ntitle: p${i}\npart_of: hub\ndescription: part ${i}\n---\n\nUp: [[hub]] — part of hub.\n\nBody ${i}.\n`;
+  // the real shape of the stuck R2: a part whose existing Up: line names another note, not its hub
+  files["memory/odd.md"] = "---\ntitle: odd\npart_of: hub\n---\n\nUp: [[p1]] (§ step) — archive.\n\nBody odd.\n";
+  const { root, srv, cleanup } = makeSrv(files);
+  try {
+    const w = star.createStructureWorker({ store: srv.store, writer: srv.writer, config: { enabled: true, maxFixesPerScan: 20 } });
+    await w.scanOnce();
+    const hub = fs.readFileSync(path.join(root, "memory/hub.md"), "utf8");
+    for (let i = 0; i <= 9; i++) assert.ok(hub.includes(`- [[p${i}]]`), `p${i} listed`);
+    assert.ok(hub.includes("- [[odd]]"));
+    assert.ok(hub.includes("## Journal\n- keep this line"), "the next section is intact");
+    for (const l of hubText.split("\n")) assert.ok(hub.split("\n").includes(l), "original line kept: " + l);
+    const odd = fs.readFileSync(path.join(root, "memory/odd.md"), "utf8");
+    assert.ok(odd.includes("Up: [[hub]] — part of hub.") && odd.includes("Up: [[p1]] (§ step) — archive."), "hub Up: added, the old one kept");
+    await w.scanOnce();
+    assert.strictEqual(fs.readFileSync(path.join(root, "memory/hub.md"), "utf8"), hub, "idempotent");
+    assert.strictEqual(w.status().issues.fixable, 0);
+    assert.strictEqual(w.status().lastError, null);
+  } finally { cleanup(); }
+});
+
+test("applyDeterministicFixes (0.6.4): a failing write is reported (failures, scan event fix-failed, status().lastError), not just logged", async () => {
+  const files = { "memory/MEMORY.md": "---\ntitle: MEMORY\n---\n\n- [[hub]] — hub\n", "memory/hub.md": "---\ntitle: hub\n---\n\n## Parts\n- [[a]] — a\n",
+    "memory/a.md": "---\ntitle: a\npart_of: hub\n---\n\nUp: [[hub]] — x\n", "memory/b.md": "---\ntitle: b\npart_of: hub\n---\n\nUp: [[hub]] — x\n" };
+  const { srv, cleanup } = makeSrv(files);
+  try {
+    const writer = Object.assign(Object.create(srv.writer), { writeAtomic: async () => { throw new Error("disk full"); } });
+    const w = star.createStructureWorker({ store: srv.store, writer, config: { enabled: true } });
+    await w.scanOnce();
+    assert.ok(w.recentEvents(0).some((e) => e.kind === "fix-failed" && /disk full/.test(e.detail)));
+    assert.match(w.status().lastError.message, /disk full/);
+  } finally { cleanup(); }
+});
