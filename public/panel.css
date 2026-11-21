@@ -89,14 +89,17 @@ button, select, input { font: inherit; color: inherit; }
 .brand { display: flex; align-items: center; gap: 10px; font-family: var(--f-display); font-weight: 700; font-size: 1.22rem; letter-spacing: -.02em; text-decoration: none; }
 .brand__dot { width: 13px; height: 13px; border-radius: 50%; background: var(--glow); box-shadow: 0 0 0 4px var(--glow-soft), 0 0 18px var(--glow); }
 .server { display: flex; align-items: center; gap: 8px; font-size: .84rem; color: var(--ink-2); padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); min-width: 0; }
-.server__more { color: var(--ink-3); }
+.server > span:not(.pulse) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.server > span:nth-child(2) { flex: 0 0 auto; max-width: 100%; }
+.server__more { color: var(--ink-3); flex: 0 1 auto; min-width: 0; }
+@media (min-width: 900px) { .top__in { flex-wrap: nowrap; } .server { flex: 0 1 auto; } .top__tools { flex: none; flex-wrap: nowrap; } }
 .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--glow); box-shadow: 0 0 0 3px var(--glow-soft); flex: none; }
 .pulse--off { background: var(--line-2); box-shadow: none; }
 .pulse--bad { background: var(--crit); box-shadow: 0 0 0 3px var(--crit-soft); }
 .top__tools { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .toolink { display: inline-flex; align-items: center; gap: 7px; font-size: .85rem; color: var(--ink-2); text-decoration: none; padding: 6px 11px; border-radius: 999px; }
 .toolink:hover { background: var(--surface-2); color: var(--ink); }
-.select { appearance: none; -webkit-appearance: none; border: 1px solid var(--line-2); background-color: var(--surface); border-radius: 999px; padding: 6px 28px 6px 12px; font-size: .85rem; max-width: 100%;
+.select { appearance: none; -webkit-appearance: none; border: 1px solid color-mix(in srgb, var(--ink-3) 70%, var(--surface)); background-color: var(--surface); border-radius: 999px; padding: 6px 28px 6px 12px; font-size: .85rem; max-width: 100%;
   background-image: linear-gradient(45deg, transparent 50%, var(--ink-3) 50%), linear-gradient(135deg, var(--ink-3) 50%, transparent 50%); background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%; background-size: 5px 5px; background-repeat: no-repeat; }
 .nav { max-width: 1180px; margin: 0 auto; padding: 0 16px 9px; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
 .nav::-webkit-scrollbar { display: none; }
@@ -262,7 +265,7 @@ button, select, input { font: inherit; color: inherit; }
 .stack { display: flex; gap: 3px; height: 14px; margin: 10px 0 12px; }
 .stack span { display: block; min-width: 4px; border-radius: 4px; }
 .stack__a, .sq--a { background: var(--night-ink); }
-.stack__b, .sq--b { background: var(--line-2); }
+.stack__b, .sq--b { background: color-mix(in srgb, var(--ink-3) 60%, var(--surface)); }
 .stack__legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; font-size: .88rem; }
 .stack__legend li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .stack__legend b { font-weight: 600; }
@@ -304,7 +307,7 @@ button, select, input { font: inherit; color: inherit; }
 .restart { padding: 11px 14px; border-radius: var(--r-md); background: var(--warn-soft); color: var(--ink); font-size: .88rem; margin-bottom: 14px; border-left: 4px solid var(--warn); }
 .switch { position: relative; width: 42px; height: 25px; flex: none; display: inline-block; }
 .switch input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
-.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--line-2); transition: background .15s; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: color-mix(in srgb, var(--ink-3) 78%, var(--surface)); transition: background .15s; }
 .switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 19px; height: 19px; border-radius: 50%; background: var(--surface); transition: transform .15s; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
 .switch input:checked + span { background: var(--glow); }
 .switch input:checked + span::after { transform: translateX(17px); background: var(--on-glow); }
@@ -313,7 +316,7 @@ button, select, input { font: inherit; color: inherit; }
 .switch input:disabled + span { opacity: .45; }
 .fields { display: grid; gap: 12px; }
 .field { display: flex; flex-direction: column; gap: 5px; font-size: .88rem; color: var(--ink-2); }
-.field input { border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 8px 11px; background: var(--bg); color: var(--ink); min-width: 0; width: 100%; font-variant-numeric: tabular-nums; }
+.field input { border: 1px solid color-mix(in srgb, var(--ink-3) 70%, var(--surface)); border-radius: var(--r-sm); padding: 8px 11px; background: var(--bg); color: var(--ink); min-width: 0; width: 100%; font-variant-numeric: tabular-nums; }
 .field input:disabled { opacity: .6; }
 .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 .status { font-size: .85rem; color: var(--ink-2); min-height: 1.2em; }
@@ -324,7 +327,8 @@ button, select, input { font: inherit; color: inherit; }
 .line--bad { color: var(--crit); }
 .danger { border: 1px solid color-mix(in srgb, var(--crit) 38%, transparent); border-radius: var(--r-lg); padding: 18px 22px 6px; background: var(--surface); }
 .danger h3 { color: var(--crit); }
-.drow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line); }
+.drow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 14px 0; border-top: 1px solid var(--line); }
+.drow > .btn { justify-self: start; }
 .danger h3 + .drow { border-top: 0; }
 .drow b { font-weight: 600; }
 .drow p { font-size: .87rem; color: var(--ink-2); overflow-wrap: anywhere; }
@@ -372,8 +376,6 @@ button, select, input { font: inherit; color: inherit; }
   .field input, .select { font-size: 16px; }
   .switch input { inset: -8px; width: calc(100% + 16px); height: calc(100% + 16px); }
   .alert__act { margin-left: 32px; }
-  .drow { grid-template-columns: minmax(0, 1fr); }
-  .drow > .btn { justify-self: start; }
   .danger { padding: 16px 16px 4px; border-radius: 18px; }
 }
 @media (prefers-reduced-motion: reduce) {

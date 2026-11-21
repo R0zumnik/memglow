@@ -151,6 +151,8 @@ var EN_CONTROL = {
   "panel.prov.claude-code": "Claude Code subscription",
 
   "panel.bannerAuth": "Maintenance stopped {when}.",
+  "panel.bannerAuthToday": "Maintenance stopped at {time}.",
+  "panel.atTime": "at {time}",
   "panel.bannerAuthRest": "{message} Nothing in your memory was changed. Fix the key and the workers resume on their next pass.",
   "panel.bannerAuthBtn": "See AI provider",
 
@@ -368,6 +370,10 @@ function cSameDay(a, b) {
 /** "02:14" when `ms` is today, "Tue 17, 02:14" otherwise. */
 function cWhen(ms, now, lang) {
   return cSameDay(ms, now) ? cHM(ms, lang) : cDay(ms, lang) + ", " + cHM(ms, lang);
+}
+/** For a sentence: "at 02:14" today (in the page language), "Tue 17, 02:14" another day. */
+function cAt(ms, now, T, lang) {
+  return cSameDay(ms, now) ? T("panel.atTime", { time: cHM(ms, lang) }) : cWhen(ms, now, lang);
 }
 function cTimeOf(iso) {
   if (typeof iso === "number") return iso;
@@ -655,9 +661,10 @@ function cDot(id) { return '<i class="gl" style="background:var(--w-' + id + ')"
 function controlRenderBanner(m, T, lang) {
   T = T || defaultControlT;
   if (!m.auth) return "";
-  var when = m.auth.t != null ? cWhen(m.auth.t, m.now, lang) : "";
+  var today = m.auth.t != null && cSameDay(m.auth.t, m.now);
+  var head = today ? T("panel.bannerAuthToday", { time: cHM(m.auth.t, lang) }) : T("panel.bannerAuth", { when: m.auth.t != null ? cWhen(m.auth.t, m.now, lang) : "" });
   return '<div class="alert" role="alert">' + cIcon("warn", 20, 2) +
-    '<p><b>' + cEsc(T("panel.bannerAuth", { when: when })) + '</b> ' + cEsc(T("panel.bannerAuthRest", { message: cSentence(m.auth.message) })) + '</p>' +
+    '<p><b>' + cEsc(head) + '</b> ' + cEsc(T("panel.bannerAuthRest", { message: cSentence(m.auth.message) })) + '</p>' +
     '<a class="btn btn--danger-solid alert__act" href="#provider">' + cEsc(T("panel.bannerAuthBtn")) + '</a></div>';
 }
 /** A provider's raw message, trimmed and closed by a full stop (it is quoted inside a sentence). */
@@ -674,7 +681,7 @@ function controlRenderHero(m, T, lang) {
   var link = function (href, text) { return '<a href="' + href + '">' + cEsc(text) + '</a>'; };
   if (m.kind === "needs") {
     title = T("panel.heroStopped", { time: m.auth && m.auth.t != null ? cHM(m.auth.t, lang) : "?" });
-    when = T("panel.whenStopped", { when: m.auth && m.auth.t != null ? cWhen(m.auth.t, m.now, lang) : "" });
+    when = T("panel.whenStopped", { when: m.auth && m.auth.t != null ? cAt(m.auth.t, m.now, T, lang) : "" });
     verdict = '<div class="verdict__state verdict__state--crit">' + cIcon("alert") + cEsc(T("panel.verdictNeeds")) + '</div><p>' + cEsc(T("panel.verdictNeedsText", { n: m.paused.length })) + '</p>' + link("#provider", T("panel.verdictNeedsLink"));
   } else if (m.kind === "setup") {
     title = T("panel.heroSetup");
@@ -789,7 +796,7 @@ function controlRenderWorkers(m, T, lang) {
   return '<div class="workers">' + m.workers.map(function (w) {
     var state = !w.on ? cChip("off", cEsc(T("panel.statusOff"))) : w.err ? cChip("crit", cEsc(T("panel.statusPaused"))) : cChip("ok", cEsc(T("panel.statusRunning")));
     var err = w.on && w.err
-      ? '<p class="werr"><b>' + cEsc(T("panel.workerStopped", { when: w.err.t != null ? cWhen(w.err.t, m.now, lang) : "" })) + '</b> ' + cEsc(T("panel.workerStoppedRest", { message: cSentence(w.err.message) })) + ' <a href="#provider">' + cEsc(T("panel.bannerAuthBtn")) + '</a></p>' : "";
+      ? '<p class="werr"><b>' + cEsc(T("panel.workerStopped", { when: w.err.t != null ? cAt(w.err.t, m.now, T, lang) : "" })) + '</b> ' + cEsc(T("panel.workerStoppedRest", { message: cSentence(w.err.message) })) + ' <a href="#provider">' + cEsc(T("panel.bannerAuthBtn")) + '</a></p>' : "";
     var kv = "";
     if (w.on) {
       var ai = w.provider ? cProvLabel(w.provider, T) + (w.model ? ", " + w.model : "") : T("panel.kvAiNone");
@@ -815,7 +822,7 @@ function controlRenderMaintenance(m, T, lang) {
     : m.workers.some(function (w) { return w.events.length; })
       ? '<div class="chartbox" data-chart="lanes"></div>'
       : '<p class="empty empty--soft">' + cEsc(T("panel.lanesEmpty")) + '</p>';
-  var top = m.up
+  var top = m.up && m.anyOn
     ? '<div class="card"><div class="card__head"><h3>' + cEsc(T("panel.lanesTitle")) + '</h3><span class="hint">' + cEsc(T("panel.lanesHint")) + '</span></div>' + lanes + '</div>' +
       '<div class="card card--gap"><div class="card__head"><h3>' + cEsc(T("panel.ledgerTitle")) + '</h3></div>' + controlRenderLedger(m, T, lang) + '</div>'
     : "";
@@ -876,7 +883,7 @@ function controlRenderProvider(m, T, lang) {
   T = T || defaultControlT;
   var st = m.provState, line;
   if (st === "auth") {
-    line = '<div class="statusline statusline--crit" role="alert">' + cIcon("alert", 20, 2.4) + '<div class="statusline__t"><b>' + cEsc(T("panel.provAuthTitle", { when: m.auth.t != null ? cWhen(m.auth.t, m.now, lang) : "" })) + '</b><span>' + cEsc(T("panel.provAuthText", { message: cSentence(m.auth.message) })) + '</span></div></div>';
+    line = '<div class="statusline statusline--crit" role="alert">' + cIcon("alert", 20, 2.4) + '<div class="statusline__t"><b>' + cEsc(T("panel.provAuthTitle", { when: m.auth.t != null ? cAt(m.auth.t, m.now, T, lang) : "" })) + '</b><span>' + cEsc(T("panel.provAuthText", { message: cSentence(m.auth.message) })) + '</span></div></div>';
   } else if (st === "none") {
     line = '<div class="statusline"><div class="statusline__t"><b>' + cEsc(T("panel.provNoneTitle")) + '</b><span>' + cEsc(T("panel.provNoneText")) + '</span></div></div>';
   } else if (st === "nokey") {
@@ -1288,7 +1295,7 @@ if (typeof module !== "undefined" && module.exports) {
     links.forEach(function (a, i) { var s = document.getElementById(a.getAttribute("href").slice(1)); if (s && s.getBoundingClientRect().top + window.scrollY <= y) cur = i; });
     links.forEach(function (a, i) { if (i === cur) a.setAttribute("aria-current", "true"); else a.removeAttribute("aria-current"); });
   }
-  window.addEventListener("scroll", spy, { passive: true });
+  window.addEventListener("scroll", function () { hideTip(); spy(); }, { passive: true });
   var rt = null;
   window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(drawCharts, 120); });
 

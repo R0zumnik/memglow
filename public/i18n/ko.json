@@ -584,6 +584,8 @@
   "panel.prov.openai-compatible": "OpenAI 호환 API",
   "panel.prov.claude-code": "Claude Code 구독",
   "panel.bannerAuth": "유지 관리 중지: {when}.",
+  "panel.bannerAuthToday": "유지 관리가 {time}에 중지되었습니다.",
+  "panel.atTime": "{time}",
   "panel.bannerAuthRest": "{message} 메모리는 아무것도 변경되지 않았습니다. 키를 고치면 워커가 다음 실행 때 다시 시작합니다.",
   "panel.bannerAuthBtn": "AI 제공자 보기",
   "panel.maintTitle": "유지 관리",

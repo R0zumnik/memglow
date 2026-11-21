@@ -585,6 +585,8 @@
   "panel.prov.openai-compatible": "OpenAI-compatible API",
   "panel.prov.claude-code": "Claude Code subscription",
   "panel.bannerAuth": "Maintenance stopped {when}.",
+  "panel.bannerAuthToday": "Maintenance stopped at {time}.",
+  "panel.atTime": "at {time}",
   "panel.bannerAuthRest": "{message} Nothing in your memory was changed. Fix the key and the workers resume on their next pass.",
   "panel.bannerAuthBtn": "See AI provider",
   "panel.maintTitle": "Maintenance",

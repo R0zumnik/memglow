@@ -584,6 +584,8 @@
   "panel.prov.openai-compatible": "OpenAI-kompatible API",
   "panel.prov.claude-code": "Claude Code-Abo",
   "panel.bannerAuth": "Pflege gestoppt: {when}.",
+  "panel.bannerAuthToday": "Pflege um {time} gestoppt.",
+  "panel.atTime": "um {time}",
   "panel.bannerAuthRest": "{message} In deinem Gedächtnis wurde nichts geändert. Korrigiere den Schlüssel, dann machen die Worker beim nächsten Lauf weiter.",
   "panel.bannerAuthBtn": "Zum KI-Anbieter",
   "panel.maintTitle": "Pflege",

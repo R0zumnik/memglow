@@ -584,6 +584,8 @@
   "panel.prov.openai-compatible": "OpenAI 兼容 API",
   "panel.prov.claude-code": "Claude Code 订阅",
   "panel.bannerAuth": "维护已停止：{when}。",
+  "panel.bannerAuthToday": "维护已于 {time} 停止。",
+  "panel.atTime": "{time}",
   "panel.bannerAuthRest": "{message} 你的记忆没有任何改动。修正密钥后，维护任务会在下次运行时恢复。",
   "panel.bannerAuthBtn": "查看 AI 提供商",
   "panel.maintTitle": "维护",

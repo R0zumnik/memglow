@@ -584,6 +584,8 @@
   "panel.prov.openai-compatible": "API compatible con OpenAI",
   "panel.prov.claude-code": "Suscripción de Claude Code",
   "panel.bannerAuth": "Mantenimiento detenido {when}.",
+  "panel.bannerAuthToday": "Mantenimiento detenido a las {time}.",
+  "panel.atTime": "a las {time}",
   "panel.bannerAuthRest": "{message} No se cambió nada en tu memoria. Corrige la clave y los agentes se reanudan en su próxima pasada.",
   "panel.bannerAuthBtn": "Ver proveedor de IA",
   "panel.maintTitle": "Mantenimiento",

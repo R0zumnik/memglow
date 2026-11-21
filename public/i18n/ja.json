@@ -584,6 +584,8 @@
   "panel.prov.openai-compatible": "OpenAI 互換 API",
   "panel.prov.claude-code": "Claude Code サブスクリプション",
   "panel.bannerAuth": "メンテナンスが停止しました: {when}。",
+  "panel.bannerAuthToday": "メンテナンスは {time} に停止しました。",
+  "panel.atTime": "{time}",
   "panel.bannerAuthRest": "{message} メモリは何も変更されていません。キーを修正すると、ワーカーは次回の実行で再開します。",
   "panel.bannerAuthBtn": "AI プロバイダーを見る",
   "panel.maintTitle": "メンテナンス",

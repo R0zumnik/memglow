@@ -258,15 +258,15 @@ test("control.js: a refused key changes the whole page — banner with the time,
   const T = controlPage.defaultControlT;
   const html = controlPage.controlRender(nsData({ state: "auth" }), T, {}, NS_NOW, "en");
   assert.match(html, /class="alert" role="alert"/);
-  assert.match(html, /Maintenance stopped 02:13\./);
+  assert.match(html, /Maintenance stopped at 02:13\./);
   assert.match(html, /Nothing in your memory was changed\./);
   assert.match(html, /memglow stopped at 02:13\. Its AI key was refused\./);
   assert.match(html, /Needs you/);
   assert.match(html, /1 of 3 paused/);
   assert.match(html, /Paused/);
-  assert.match(html, /Stopped 02:13\./);
+  assert.match(html, /Stopped at 02:13\./);
   assert.match(html, /Failed to authenticate\. API Error: 401 Invalid bearer token/);
-  assert.match(html, /Key refused 02:13/);
+  assert.match(html, /Key refused at 02:13/);
   assert.match(html, /AI key refused, 1 worker paused/);
   assert.match(html, /statusline--crit/);
   assert.ok(!/sk-ant|apiKey/i.test(html), "never a key");
@@ -441,7 +441,7 @@ test("i18n: v0.4 texts go through keys — journal channel, organisation facts, 
   // Control panel: every section goes through keys.
   const ctrl = controlPage.controlRender(nsData({ state: "auth", issueList: [{ rule: "R1", note: "MEMORY", detail: "x", fixable: false }] }), T, {}, NS_NOW, "en");
   for (const k of [
-    "panel.bannerAuth", "panel.heroStopped", "panel.verdictNeeds", "panel.tallySplit:1", "panel.vitalSaved", "panel.workersPaused:1",
+    "panel.bannerAuthToday", "panel.heroStopped", "panel.verdictNeeds", "panel.tallySplit:1", "panel.vitalSaved", "panel.workersPaused:1",
     "panel.maintTitle", "panel.ledgerSplit", "panel.lanesTitle", "panel.issuesTitle", "panel.rule.R1", "panel.issueReview",
     "control.workerAutoSplit", "panel.statusPaused", "panel.kvLast", "panel.savingsTitle", "panel.byLeverTitle", "panel.byClientTitle",
     "panel.sessionTotal", "panel.providerTitle", "panel.provAuthTitle", "panel.assistantOpen", "panel.settingsTitle", "panel.leversTitle",
