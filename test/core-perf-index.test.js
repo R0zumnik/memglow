@@ -139,3 +139,63 @@ test("core-perf index: an entry keeps numbers, not a second copy of the note's w
     assert.strictEqual(byTerm.size, I.vocab.length);
   } finally { k.close(); }
 });
+
+// ---- per-note keys kept between rebuilds (store lookups, hub resolver, levers' note index) ----
+
+test("core-perf caches: a note's lookup keys follow the note — renamed, retitled, moved or removed", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memglow-core-perf-keys-"));
+  try {
+    fs.mkdirSync(path.join(dir, "memory/a"), { recursive: true });
+    const file = (rel, text) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), text); return fs.statSync(path.join(dir, rel)); };
+    file("memory/a/First Note.md", "---\ntitle: Première Note\npermalink: main/custom/first\n---\n\nbody one\n");
+    file("memory/a/second.md", "body two [[Première Note]]\n");
+    const store = createStore({ root: dir, watch: false, pollMs: 0 });
+    store.start();
+    const rel = (id) => { const n = store.resolve(id); return n ? n.rel : null; };
+    for (let round = 0; round < 2; round++) { // twice: the second pass reads the kept keys
+      for (const id of ["main/custom/first", "custom/first", "memory://main/custom/first", "Première Note", "premiere note", "First Note", "first-note", "memory/a/First Note.md", "memory/a/first note", "main/memory/a/first-note", "memory/a/first-note"]) assert.strictEqual(rel(id), "memory/a/First Note.md", id);
+      assert.strictEqual(rel("second"), "memory/a/second.md");
+      assert.strictEqual(store.graph().incoming.get("memory/a/First Note.md")[0].from.rel, "memory/a/second.md");
+    }
+    // Retitled and given another permalink (same path): the old title and permalink no longer resolve.
+    store.noteWritten("memory/a/First Note.md", "---\ntitle: Autre Titre\npermalink: main/custom/other\n---\n\nbody one\n", file("memory/a/First Note.md", "---\ntitle: Autre Titre\npermalink: main/custom/other\n---\n\nbody one\n"));
+    assert.strictEqual(rel("Première Note"), null);
+    assert.strictEqual(rel("main/custom/first"), null);
+    assert.strictEqual(rel("autre titre"), "memory/a/First Note.md");
+    assert.strictEqual(rel("custom/other"), "memory/a/First Note.md");
+    assert.strictEqual(rel("first-note"), "memory/a/First Note.md", "the file name still resolves");
+    // Moved: the old path is gone, the new one resolves, the other note is untouched.
+    const text = store.resolve("custom/other").raw;
+    store.noteRemoved("memory/a/First Note.md");
+    store.noteWritten("memory/b/Moved.md", text, file("memory/b/Moved.md", text));
+    assert.strictEqual(rel("memory/a/First Note.md"), null);
+    assert.strictEqual(rel("first-note"), null);
+    assert.strictEqual(rel("memory/b/moved"), "memory/b/Moved.md");
+    assert.strictEqual(rel("custom/other"), "memory/b/Moved.md");
+    assert.strictEqual(rel("second"), "memory/a/second.md");
+    // A hub named by a part is found again by the search index after the hub itself was retitled.
+    file("memory/hub.md", "---\ntitle: Jardin\ndescription: potager tomates\n---\n\nhub\n");
+    file("memory/part.md", "---\ntitle: part\npart_of: hub\n---\n\nnothing about it here\n");
+    store.scan();
+    const eng = createSearch(store, null, null);
+    assert.ok(eng.search({ query: "potager" }).results.some((h) => h.note.rel === "memory/part.md"), "the part is found by its hub's words");
+    store.stop();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("core-perf caches: the levers' note order on pre-split paths is lib/memory.js's walk order", () => {
+  const { walkOrder, walkOrderSegs } = require("../memory-server/store-memory");
+  const paths = ["a.md", "a/b.md", "a/b/c.md", "a-b.md", "b.md", "a/a.md", "Z.md", "a/B.md", "a/b", "ab/c.md", "a/b/c/d.md", "é.md", "a/é.md", "", "a"];
+  for (const x of paths) for (const y of paths) assert.strictEqual(Math.sign(walkOrderSegs(x.split("/"), y.split("/"))), Math.sign(walkOrder(x, y)), `${x} / ${y}`);
+  assert.deepStrictEqual(paths.slice().sort((a, b) => walkOrderSegs(a.split("/"), b.split("/"))), paths.slice().sort(walkOrder));
+});
+
+test("core-perf caches: the duplicate hint's note words are the same on every call, and never shared with a changed note", () => {
+  const { duplicateHintCandidates } = require("../lib/levers/duplicate-hint");
+  const notes = [{ id: "garden-watering-plan", label: "Garden watering plan", description: "summer schedule", tokens: 10 }, { id: "router-setup", label: "Router setup", description: "", tokens: 5 }];
+  const first = duplicateHintCandidates(["garden", "watering", "plan"], notes);
+  assert.deepStrictEqual(first, ["garden-watering-plan"]);
+  assert.deepStrictEqual(duplicateHintCandidates(["garden", "watering", "plan"], notes), first);
+  // Same id, another label: its words are looked up again, not taken from the previous version.
+  assert.deepStrictEqual(duplicateHintCandidates(["garden", "watering", "plan"], [{ ...notes[0], label: "Kitchen recipes", id: "kitchen-recipes" }, notes[1]]), []);
+});

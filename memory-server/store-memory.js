@@ -35,6 +35,14 @@ function walkOrder(a, b) {
   return x.length - y.length;
 }
 
+/** walkOrder on paths already split on "/" (core-perf: split once per note, not at every comparison). */
+function walkOrderSegs(x, y) {
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
+  }
+  return x.length - y.length;
+}
+
 function createStoreMemory({ store, memoryDir, config }) {
   const root = path.resolve(store.root);
   const dir = path.resolve(memoryDir);
@@ -42,6 +50,7 @@ function createStoreMemory({ store, memoryDir, config }) {
   const prefix = dir === root ? "" : path.relative(root, dir).split(path.sep).join("/") + "/";
   const { themeOf, subthemeOf } = memoryLib.themeResolver(config || {});
   const META = new WeakMap(); // store note → its lib/memory.js-shaped metadata
+  const PICK = new WeakMap(); // store note → { n, rel, slug, segs } when it is listed, null when not
   let built = null, builtVersion = -1;
   let prevById = new Map(); // id → { rel, fingerprint, mtime } of the last graph (mtime rule)
 
@@ -111,14 +120,21 @@ function createStoreMemory({ store, memoryDir, config }) {
     if (built && builtVersion === v) return built;
     const picked = [];
     for (const n of store.notes().concat(skippedNotes())) {
-      if (prefix && !n.rel.startsWith(prefix)) continue;
-      if (!n.rel.endsWith(".md") || (store.isSymlink && store.isSymlink(n.rel))) continue;
-      const rel = n.rel.slice(prefix.length);
-      const slug = path.posix.basename(rel, ".md");
-      if (!memoryLib.SLUG_RE.test(slug)) continue;
-      picked.push({ n, rel, slug });
+      if (store.isSymlink && store.isSymlink(n.rel)) continue;
+      // core-perf: what only depends on the note's path is worked out once per note version.
+      let p = PICK.get(n);
+      if (p === undefined) {
+        p = null;
+        if ((!prefix || n.rel.startsWith(prefix)) && n.rel.endsWith(".md")) {
+          const rel = n.rel.slice(prefix.length);
+          const slug = path.posix.basename(rel, ".md");
+          if (memoryLib.SLUG_RE.test(slug)) p = { n, rel, slug, segs: rel.split("/") };
+        }
+        PICK.set(n, p);
+      }
+      if (p) picked.push(p);
     }
-    picked.sort((a, b) => walkOrder(a.rel, b.rel));
+    picked.sort((a, b) => walkOrderSegs(a.segs, b.segs));
     const state = new Map(); // id → { rel, note (public shape), n }
     const nextPrev = new Map();
     for (const { n, rel, slug } of picked) {
@@ -176,4 +192,4 @@ function createStoreMemory({ store, memoryDir, config }) {
   };
 }
 
-module.exports = { createStoreMemory, walkOrder };
+module.exports = { createStoreMemory, walkOrder, walkOrderSegs };
