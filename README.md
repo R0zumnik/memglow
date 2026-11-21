@@ -968,7 +968,7 @@ and hardware will differ.
     default: about twice the tokens for the same note and links).
 
   Measured with `bench/core-perf.js` on a 478-note memory (≈ bytes / 4, as the model receives
-  them): a 10-hit search −9 to −10 %, `recent_activity` −37 %, `build_context` −51 %, a note read
+  them): a 10-hit search −9 to −10 %, `recent_activity` −38 %, `build_context` −51 %, a note read
   −1 to −2 % (the JSON escapes of the copy), half the bytes on the wire for every call. JSON
   answers asked explicitly (`output_format: "json"`) keep every field. The levers (stateView,
   dedupe, multiQuery, hints) work unchanged on lean answers. If a client of yours parses the

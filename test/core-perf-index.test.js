@@ -199,3 +199,52 @@ test("core-perf caches: the duplicate hint's note words are the same on every ca
   // Same id, another label: its words are looked up again, not taken from the previous version.
   assert.deepStrictEqual(duplicateHintCandidates(["garden", "watering", "plan"], [{ ...notes[0], label: "Kitchen recipes", id: "kitchen-recipes" }, notes[1]]), []);
 });
+
+// ---- the word tables are bounded ----
+
+test("core-perf index: emptying the word tables changes no answer, for any engine in the process", () => {
+  const { wordTable } = require("../lib/store/search");
+  const a = kb(50), b = kb(40);
+  try {
+    const ea = createSearch(a.store, null, null), eb = createSearch(b.store, null, null);
+    const queries = [{ query: "serveur sauvegarde" }, { query: '"sauvegarde du serveur"' }, { query: "chantier-3 partie" }, { query: "rout*" }, { query: "serveurr" }, { query: "docker NOT \"du routeur\"", page_size: 30 }];
+    const sig = (e) => JSON.stringify(queries.map((q) => e.search(q, 1e12).results.map((h) => [h.note.permalink, h.score, h.match])));
+    const before = [sig(ea), sig(eb)];
+    const note = a.store.notes()[4], snip = snippet(note, ["serveur", "sauvegard"]);
+    assert.ok(wordTable.size() > 50);
+    wordTable.reset();
+    assert.strictEqual(wordTable.size(), 0);
+    assert.strictEqual(snippet(note, ["serveur", "sauvegard"]), snip, "a snippet right after the reset");
+    assert.deepStrictEqual([sig(ea), sig(eb)], before, "both engines rebuilt their index and answer the same");
+    assert.deepStrictEqual([sig(eb), sig(ea)], [before[1], before[0]]);
+  } finally { a.close(); b.close(); }
+});
+
+test("core-perf index: notes rewritten with ever-new words do not grow the word tables for ever", () => {
+  const { wordTable } = require("../lib/store/search");
+  const saved = { ...wordTable.limits };
+  const k = kb(40);
+  try {
+    wordTable.reset();
+    const eng = createSearch(k.store, null, null);
+    eng.warm();
+    Object.assign(wordTable.limits, { min: 100, ratio: 3 });
+    const n = k.store.notes()[2], st = fs.statSync(path.join(k.dir, n.rel));
+    let max = 0;
+    for (let v = 0; v < 60; v++) {
+      const unique = Array.from({ length: 200 }, (_, i) => `tok${v}x${i}`).join(" ");
+      k.store.noteWritten(n.rel, n.raw + "\n\n" + unique + " zorglub\n", st);
+      const r = eng.search({ query: `zorglub tok${v}x7` }).results;
+      assert.strictEqual(r[0].note.rel, n.rel);
+      assert.ok(r[0].match.includes(`tok${v}x7`), r[0].match);
+      max = Math.max(max, wordTable.size());
+    }
+    const vocab = eng.index().vocab.length;
+    assert.ok(max <= 3 * (vocab + 200) + 400, `the tables stayed bounded (max ${max} words for a vocabulary of ${vocab}; 12,000 one-off words were written)`);
+    // And the answers are still those of an engine built from scratch.
+    const fresh = createSearch(k.store, null, null);
+    for (const q of [{ query: "serveur sauvegarde" }, { query: '"sauvegarde du serveur"' }, { query: "tok59x3" }, { query: "tok0x3" }]) {
+      assert.deepStrictEqual(eng.search(q, 1e12).results.map((h) => [h.note.permalink, h.score, h.match]), fresh.search(q, 1e12).results.map((h) => [h.note.permalink, h.score, h.match]), JSON.stringify(q));
+    }
+  } finally { Object.assign(wordTable.limits, saved); k.close(); }
+});
