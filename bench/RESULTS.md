@@ -626,8 +626,10 @@ real tokenizer more than this estimate says; that was not measured.
 | write_note (small new note) | 124 | 124 | 116 | -6 % |
 | edit_note (append) | 60 | 60 | 55 | -8 % |
 
-**Limits.** One machine, shared with other work: latency p95 moves by ±30 % between two runs of
-the same code, p50 by ±10 %; the memory figures are stable to ±3 MB. "Cold start" is a process
+**Limits.** One machine, shared with other work: p50 moves by ±10 % between two runs of the same
+code, and a p95 over 30 or 60 calls is one of the two or three slowest calls — a single pause moves it
+(`memory_core`, a 3 ms cached call this work does not touch, reads 3 → 15 ms in the synthetic table
+and 12 → 7 ms in another pair of runs). Read the p50 columns; the memory figures are stable to ±3 MB. "Cold start" is a process
 start with the files already in the page cache (the benchmark has just copied them). The call mix
 is a list of typical calls, not a recorded session.
 
