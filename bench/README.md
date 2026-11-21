@@ -5,13 +5,46 @@
 > measurements below that mention them are kept as history only; `bench/replay.js` no longer knows those
 > lever names (and ignores `--always-loaded`).
 
-Two very different tools live here:
+Three very different tools live here:
 
 - **`bench/run.js`** — real `claude -p` runs against a real memory server. Costs real money,
   needs a network and an API/subscription budget. See its own header comment and
   `bench/RESULTS.md` for the protocol and the results it has produced so far.
+- **`bench/core-perf.js`** — tokens per call, latency, start-up and memory of the real server
+  process, free and local. See "Core efficiency" below.
 - **`bench/replay.js`** — the **free replay harness** (stage 0.4.2.1b). No model call, no
   network, deterministic. Read on.
+
+## Core efficiency (free): `bench/core-perf.js`
+
+What one session costs and how heavy the engine is — no model call, no network.
+
+```
+node bench/core-perf.js                              # synthetic memory (480 notes + hubs, parts, journals)
+node bench/core-perf.js --root /path/to/knowledge    # a COPY of a real folder (the folder is only read)
+node bench/core-perf.js --server-arg --lean-answers  # the same with a server option
+  --notes N  --n 60  --runs 3  --idle-s 17  --queries "a b|c d|e f"  --env KEY=VALUE  --json  --out FILE
+```
+
+It starts the **real server process** the way production does (`--levers --poll-ms 15000
+--read-write --fsync-mode deferred` and the production lever switches, isolated data folders in a
+temp directory) and talks to it over HTTP with MCP 2026-07-28 stateless requests. It reports:
+
+- **tokens per typical call, as the model receives them**: Claude Code hands the model
+  `structuredContent` (JSON-encoded) when an answer has one, else the text — column "model";
+  column "text" is the text alone. Calls: `tools/list` (fixed reference), `memory_core`, a read of
+  the index note, of the hub with the most parts, of the biggest journal-style note (what
+  `stateView` shortens), of the median-size and the largest note, a second read in the same
+  session, three searches, `build_context` depth 1 (default format and text), `recent_activity`,
+  `list_directory`, a `write_note` and an `edit_note`. Tokens are memglow's own estimate
+  (`ceil(bytes / 4)`): fine to compare a before with an after, not a tokenizer;
+- **latency** p50 / p95 per tool; **start-up**: cold start and restart on the same data folder
+  (index time, first answer, CPU seconds, peak RSS); RSS once ready, after the calls and at rest;
+  idle CPU; **CPU of one scan of the poll loop**.
+
+The report holds numbers only — never note text, and note names only with `--show-names`. A
+real folder is copied (without `.git`) before anything runs; the benchmark's own notes are written
+to the copy. Results so far: `bench/RESULTS.md` "Core efficiency".
 
 ## Replay (free)
 

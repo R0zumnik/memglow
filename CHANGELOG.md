@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased — core efficiency (branch `core-perf`)
+
+Measured with the new `bench/core-perf.js` (the real server process, production flags and levers,
+MCP 2026-07-28 over HTTP) on the production hardware (Celeron J3355), on a copy of a 478-note
+memory and on a synthetic 521-note one. Full tables: `bench/RESULTS.md` "Core efficiency".
+
+### Changed (no change of behaviour)
+
+- **Search index: −70 MB of heap, index build −35 % CPU** (`lib/store/search.js`). Per note the
+  index kept a string holding every folded word again (phrase checks), one Set of term strings
+  per body line (snippets), a Map of counts per field, a Set of all terms, and — for every note
+  ever returned by a search — a Map of each term to its lines. It now keeps one `Int32Array` of
+  word ids (title, description, tags, body) and the end offset of each body line; each distinct
+  word is checked against the stop-words and stemmed once, every index term is one shared string,
+  posting lists are arrays until an incremental update touches them. On the 478-note copy: index
+  heap 91 → 22 MB (129 → 22 MB after a few hundred searches), RSS once ready 208 → 140 MB, steady
+  RSS 292 → 183 MB, cold start 2.4 → 2.1 s (CPU 3.2 → 2.7 s), search p50 9.4 → 6.9 ms. Same
+  results, scores and excerpts: 5,200 queries (words, phrases, NOT, AND, prefixes, typos,
+  observations, pages) compared with the 0.6.3 engine on both memories, 0 difference.
+- **After a write, less to rebuild** (`lib/store/store.js`, `memory-server/store-memory.js`,
+  `lib/levers/duplicate-hint.js`): the lookup keys of a note (permalink variants, path, title,
+  slug), its path segments for the levers' note order, its folded hub keys and its duplicate-hint
+  words are computed once per note version instead of for every note after every write.
+  `edit_note` p50 26 → 15 ms, `write_note` p50 48 → 25 ms on the 478-note copy.
+
+### Added
+
+- **`--lean-answers`** (env `MEMGLOW_MEMORY_LEAN_ANSWERS=1`, or `"memoryServer": { "leanAnswers":
+  true }`; **off by default**, it changes the shape of answers): every answer is sent once (no
+  `structuredContent` copy of the text — Claude Code hands the model that copy JSON-encoded —
+  and no `outputSchema` declared for those tools), `search_notes` drops its `*project*` and
+  `- score:` lines, `recent_activity` and `list_directory` drop the internal ids,
+  `build_context` answers compact Markdown unless `output_format: "json"` is asked. Tokens as
+  the model receives them (≈ bytes / 4) on the 478-note copy: `build_context` of a hub 3,512 →
+  1,731 (−51 %), `recent_activity` 304 → 190 (−37 %), a 10-hit search 711 → 649 (−9 %), a note
+  read −1 to −2 %; half the bytes on the wire. `read_content`, `search`, `fetch` and every
+  `output_format: "json"` answer keep their fields. See README "Lean answers".
+- **`bench/core-perf.js`**: tokens returned per typical call (as the model receives them), latency
+  p50 / p95, cold start and restart (wall, CPU, peak RSS), steady RSS, idle CPU and the CPU cost
+  of one poll scan — on a synthetic memory or on a copy of a real folder (numbers only, never
+  note text). `bench/README.md` "Core efficiency".
+
 ## 0.6.3 — 2026-11-13
 
 ### Fixed
