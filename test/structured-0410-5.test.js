@@ -75,7 +75,8 @@ test("posting lists: a raw search scores only candidate docs, with the same resu
   const srv = createMemoryServer({ root: kb.root, watch: false, pollMs: 0 });
   try {
     const I = srv.tools.engine.index();
-    for (const [t, set] of I.postings) assert.strictEqual(set.size, I.df.get(t), t);
+    // core-perf: a posting list is an array (in doc order) until an incremental update turns it into a Set.
+    for (const [t, list] of I.postings) assert.strictEqual(Array.isArray(list) ? new Set(list).size : list.size, I.df.get(t), t);
     assert.strictEqual(I.postings.size, I.df.size);
     const t0 = process.hrtime.bigint();
     let n = 0;

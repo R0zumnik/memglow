@@ -58,6 +58,13 @@ options:
   --no-structured-read  read_note's text answer carries the note once (in content), without the
                   FastMCP structuredContent copy of the same text (fewer tokens with clients that
                   pass both on). Env MEMGLOW_MEMORY_STRUCTURED_READ=0
+  --lean-answers  fewer tokens per answer (off by default — it changes the shape of answers):
+                  every answer is sent once (no structuredContent copy of the text; tools/list then
+                  declares no outputSchema for those tools), search_notes drops its "*project*" and
+                  "- score:" lines, recent_activity and list_directory drop the internal ids, and
+                  build_context answers compact Markdown unless output_format="json" is asked.
+                  Env MEMGLOW_MEMORY_LEAN_ANSWERS=1, or "memoryServer": { "leanAnswers": true }
+                  in memglow.config.json (MEMGLOW_CONFIG or ~/.memglow only)
   --kebab-filenames  file names of new notes in kebab-case, accents transliterated ("Été à
                   Choisy" → ete-a-choisy.md); the title in the frontmatter stays as given
                   (default: the title as is). Env MEMGLOW_MEMORY_KEBAB_FILENAMES=1
@@ -110,6 +117,7 @@ function parseArgs(argv, env = process.env) {
     levers: /^(1|true|yes|on)$/i.test(String(env.MEMGLOW_MEMORY_LEVERS || "")), name: "", source: "mcp",
     serveFiles: String(env.MEMGLOW_MEMORY_SERVE_FILES || "").toLowerCase() === "any" ? "any" : "text",
     structuredRead: !/^(0|false|no|off)$/i.test(String(env.MEMGLOW_MEMORY_STRUCTURED_READ || "")),
+    leanAnswers: null, // null = not said on the command line: env, then the config file (resolveLeanAnswers)
     indexNote: String(env.MEMGLOW_MEMORY_INDEX || "").split(",").map((s) => s.trim()).filter(Boolean),
     shutdownTimeoutMs: Math.max(0, Number(env.MEMGLOW_MEMORY_SHUTDOWN_TIMEOUT) || 25) * 1000 };
   for (let i = 0; i < argv.length; i++) {
@@ -139,6 +147,8 @@ function parseArgs(argv, env = process.env) {
     else if (a === "--poll-ms") o.pollMs = Math.max(0, Number(argv[++i]) || 0);
     else if (a === "--no-watch") o.watch = false;
     else if (a === "--no-structured-read") o.structuredRead = false;
+    else if (a === "--lean-answers") o.leanAnswers = true;
+    else if (a === "--no-lean-answers") o.leanAnswers = false;
     else if (a === "--shutdown-timeout" || a.startsWith("--shutdown-timeout=")) {
       const v = Number(a === "--shutdown-timeout" ? argv[++i] : a.slice(19));
       if (Number.isFinite(v) && v >= 0) o.shutdownTimeoutMs = v * 1000; else o.badShutdown = true;
@@ -204,6 +214,22 @@ function resolveFsyncMode(o, env = process.env) {
 }
 
 /**
+ * core-perf — lean answers on or off: --lean-answers / --no-lean-answers, else
+ * MEMGLOW_MEMORY_LEAN_ANSWERS, else memglow.config.json "memoryServer.leanAnswers" (MEMGLOW_CONFIG
+ * or ~/.memglow only — same trust boundary as the fsync mode), else off.
+ */
+function resolveLeanAnswers(o, env = process.env) {
+  if (typeof o.leanAnswers === "boolean") return o.leanAnswers;
+  const e = String(env.MEMGLOW_MEMORY_LEAN_ANSWERS || "").trim();
+  if (/^(1|true|yes|on)$/i.test(e)) return true;
+  if (/^(0|false|no|off)$/i.test(e)) return false;
+  let cfg = {};
+  try { cfg = defaultsLib.resolveConfigFiles({ env, allowCwd: false }).config || {}; } catch { cfg = {}; }
+  const ms = cfg && typeof cfg.memoryServer === "object" && cfg.memoryServer ? cfg.memoryServer : {};
+  return ms.leanAnswers === true;
+}
+
+/**
  * 0.5.4: the auto-split worker's own settings — "autoSplit" top-level key of memglow.config.json,
  * allowCwd: false (same restricted trust boundary as every other memory-server setting: a notes
  * folder that is itself an untrusted, cloned repository must never be able to turn this on, point
@@ -261,7 +287,7 @@ function resolveSearchArchivePenalty(env = process.env) {
 }
 
 function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 3000, watch = true, maxFileBytes, log = () => {},
-  fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", structuredRead = true, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne, deferStart = false,
+  fsync = true, fsyncMode = null, cleanupTempsMinAgeMs = 60000, fileMode = null, serveFiles = "text", structuredRead = true, leanAnswers = false, onWrite = "", onWriteDelayMs = 10000, overwriteDefault = false, kebabFilenames = false, updatePermalinksOnMove = false, writerHooks = {}, chownToParent, allInOne, deferStart = false,
   coreMap = {}, dataDir = null, indexNote = ["MEMORY", "index"], autoSplit = null, structure = null, archive = null, duplicates = null, searchUsage = null, archivePenalty }) {
   let tools = null, warmTimer = null, isReady = !deferStart;
   // The search index is rebuilt lazily by the next search anyway; warming it after a change is
@@ -291,7 +317,7 @@ function createMemoryServer({ root, project = "main", readOnly = true, pollMs = 
     const col = store.collisions();
     if (twins.length || col.length) log(`memglow memory server: ${twins.length + col.length} note(s) present under several paths or permalinks (an interrupted move?) — see basic_memory_diagnostics`);
   };
-  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, log, coreMap, dataDir, indexNote, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove }, autoSplit: autoSplitWorker, structure: structureWorker, archive: archiveWorker, searchUsage, archivePenalty });
+  tools = createTools({ store, project, readOnly, writer, serveFiles, structuredRead, leanAnswers, log, coreMap, dataDir, indexNote, writeOptions: { overwriteDefault, kebabFilenames, updatePermalinksOnMove }, autoSplit: autoSplitWorker, structure: structureWorker, archive: archiveWorker, searchUsage, archivePenalty });
   let ready;
   if (!deferStart) {
     store.start();
@@ -401,7 +427,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   // (requests meanwhile wait for it, they never fail).
   const srv = createMemoryServer({ root, project: o.project, readOnly: o.readOnly, pollMs: o.pollMs, watch: o.watch, log,
     coreMap, dataDir, indexNote: o.indexNote.length ? o.indexNote : ["MEMORY", "index"], autoSplit, structure, archive, duplicates, searchUsage, archivePenalty,
-    fsync: o.fsync, fsyncMode: fsyncInfo.mode, fileMode: o.fileMode, serveFiles: o.serveFiles, structuredRead: o.structuredRead, onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
+    fsync: o.fsync, fsyncMode: fsyncInfo.mode, fileMode: o.fileMode, serveFiles: o.serveFiles, structuredRead: o.structuredRead, leanAnswers: resolveLeanAnswers(o, env), onWrite: o.onWrite, onWriteDelayMs: o.onWriteDelayMs, overwriteDefault: o.overwriteDefault, kebabFilenames: o.kebabFilenames, updatePermalinksOnMove: o.updatePermalinksOnMove,
     // 0.5.4: when BOTH --levers and autoSplit are on, sizeWarning's hint (lib/proxy-levers.js)
     // tells the AI memglow will split the note itself, instead of asking it to call split_plan —
     // this env var is the only channel: it must never leak to a standalone MCP proxy in front of
@@ -461,4 +487,4 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
 if (require.main === module) { const code = main(); if (code != null) process.exitCode = code; }
 
-module.exports = { main, parseArgs, createMemoryServer, runStdio, resolveFsyncMode, HELP };
+module.exports = { main, parseArgs, createMemoryServer, runStdio, resolveFsyncMode, resolveLeanAnswers, HELP };

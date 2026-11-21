@@ -955,6 +955,24 @@ and hardware will differ.
   −30 to −40 % tokens per 10-hit search. `--no-structured-read` (env
   `MEMGLOW_MEMORY_STRUCTURED_READ=0`) also drops the FastMCP `structuredContent` copy of the note
   from `read_note`'s text answer.
+- **Lean answers** (`--lean-answers`, env `MEMGLOW_MEMORY_LEAN_ANSWERS=1`, or
+  `"memoryServer": { "leanAnswers": true }` in `memglow.config.json`; **off by default** — it
+  changes the shape of answers, nothing else): fewer tokens per call, same information.
+  - Every answer is sent **once**: no `structuredContent` copy of the text (Claude Code hands
+    the model that copy JSON-encoded — `{"result":"…\n…"}` — instead of the plain text), and
+    `tools/list` then declares no `outputSchema` for those tools, so the answers stay valid MCP.
+    `read_content` and the ChatGPT-style `search` / `fetch` keep their structured answers.
+  - `search_notes` text: no `*project: …*` line, no `- score:` line (the order is the ranking).
+  - `recent_activity` and `list_directory` text: no internal `id:` (no tool takes it).
+  - `build_context`: compact Markdown unless `output_format: "json"` is asked (it was JSON by
+    default: about twice the tokens for the same note and links).
+
+  Measured with `bench/core-perf.js` on a 478-note memory (≈ bytes / 4, as the model receives
+  them): a 10-hit search −9 to −10 %, `recent_activity` −38 %, `build_context` −51 %, a note read
+  −1 to −2 % (the JSON escapes of the copy), half the bytes on the wire for every call. JSON
+  answers asked explicitly (`output_format: "json"`) keep every field. The levers (stateView,
+  dedupe, multiQuery, hints) work unchanged on lean answers. If a client of yours parses the
+  `- score:` line or reads `structuredContent.result`, leave it off.
 - **Read tools**: `search_notes`, `read_note`, `read_content`, `view_note`,
   `build_context`, `recent_activity`, `list_directory`, `list_memory_projects`,
   `list_workspaces`, `search` / `fetch`, `basic_memory_diagnostics`, `memory_core`,

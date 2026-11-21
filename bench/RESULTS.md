@@ -496,3 +496,142 @@ docker rm -f mg-bench-bm && rm -rf /tmp/mg-bench
 Options: `--questions q01,q09`, `--seed`, `--budget-run` (per run, default 0.30 $), `--resume`
 (re-run only what is missing), `--proxy-root <other checkout>` (compare another proxy version),
 `--keep-streams <dir>` (raw transcripts). Raw results of this report: `bench/results/*.jsonl`.
+
+## Core efficiency (`bench/core-perf.js`, 2026-11-21)
+
+**Question.** What does the engine itself cost — tokens returned per call, latency, start-up,
+memory — and what do the `core-perf` changes buy? No model call: the real server process, started
+like production (`--levers --poll-ms 15000 --read-write --fsync-mode deferred`, the production lever
+switches), over HTTP with MCP 2026-07-28 stateless requests, on the production hardware (Synology,
+Celeron J3355, 2 cores, btrfs). "0.6.3" is the tag, "core-perf" the branch with the default
+settings, "`--lean-answers`" the same with the new opt-in flag. Both columns of a table were
+measured back to back on a quiet machine (load average ≈ 1); medians of 3 (real copy) or 2
+(synthetic) starts, 60 or 30 calls per tool.
+
+**Short answer.**
+
+1. **Memory: −70 MB of live heap, −110 MB of steady RSS** on a 478-note memory (RSS once ready
+   208 → 140 MB, after a few hundred calls 292 → 183 MB). The search index kept each note's words
+   three times over in strings and Sets; it now keeps word ids.
+2. **Start-up −14 % wall, −15 % CPU** (2.4 → 2.1 s; the index build itself −35 %), **search −27 %**
+   p50, **writes about twice as fast** (`edit_note` 26 → 15 ms, `write_note` 48 → 25 ms p50).
+3. **Tokens: unchanged by default** (answers are byte-identical). With `--lean-answers`:
+   `build_context` −51 %, `recent_activity` −38 %, a 10-hit search −9 to −10 %, a note read
+   −1 to −2 %. The reads dominate a session and barely move: what a read costs is the note
+   itself (the largest note of this memory is 29,000 tokens, 62 notes are over 5,000).
+4. **The poll loop is not a cost worth cutting**: one scan of 478 notes ≈ 33 ms of CPU every 15 s
+   (0.2 % of one core); idle CPU of the whole process 0.2–0.3 %.
+
+Tokens are memglow's estimate (`ceil(UTF-8 bytes / 4)`), the same on both sides of a comparison —
+not a tokenizer. The JSON escapes of the `structuredContent` copy (`\n`, `\"`) probably cost a
+real tokenizer more than this estimate says; that was not measured.
+
+### Copy of a real 478-note memory
+
+| Engine | 0.6.3 | core-perf | change |
+|---|---:|---:|---:|
+| cold start: index ready (ms) | 2429 | 2077 | -14 % |
+| cold start: first answer (ms) | 2687 | 2355 | -12 % |
+| cold start: CPU (s) | 3.16 | 2.7 | -15 % |
+| peak RSS at start (MB) | 207.07 | 145 | -30 % |
+| RSS once ready (MB) | 208.11 | 140.32 | -33 % |
+| steady RSS after the calls (MB) | 291.61 | 183.01 | -37 % |
+| idle CPU (%) | 0.24 | 0.29 | +21 % |
+| one poll scan: CPU p50 (ms) | 33 | 34 | +3 % |
+| search_notes p50 (ms) | 9.4 | 6.87 | -27 % |
+| search_notes p95 (ms) | 19.81 | 16.4 | -17 % |
+| read_note p50 (ms) | 3.8 | 2.86 | -25 % |
+| read_note p95 (ms) | 9.77 | 5.53 | -43 % |
+| build_context p50 (ms) | 3.96 | 3.68 | -7 % |
+| build_context p95 (ms) | 9.85 | 9.5 | -4 % |
+| memory_core p50 (ms) | 2.62 | 2.65 | +1 % |
+| memory_core p95 (ms) | 6.58 | 7.57 | +15 % |
+| recent_activity p50 (ms) | 2.71 | 2.91 | +7 % |
+| recent_activity p95 (ms) | 3.66 | 3.75 | +2 % |
+| write_note p50 (ms) | 48.34 | 24.75 | -49 % |
+| write_note p95 (ms) | 121.72 | 91.37 | -25 % |
+| edit_note (append) p50 (ms) | 26.52 | 14.59 | -45 % |
+| edit_note (append) p95 (ms) | 33.53 | 25.08 | -25 % |
+| search_notes right after a write p50 (ms) | 9.29 | 6.1 | -34 % |
+| search_notes right after a write p95 (ms) | 14.11 | 10.84 | -23 % |
+
+| Tokens as the model receives them (≈ bytes / 4) | 0.6.3 | core-perf | core-perf `--lean-answers` | change |
+|---|---:|---:|---:|---:|
+| tools/list (fixed reference) | 4807 | 4807 | 4807 | 0 % |
+| memory_core | 305 | 305 | 297 | -3 % |
+| read_note: index note | 4363 | 4363 | 4323 | -1 % |
+| read_note: hub | 1464 | 1464 | 1450 | -1 % |
+| read_note: big journal | 11377 | 11377 | 11135 | -2 % |
+| read_note: median-size note | 2002 | 2002 | 1979 | -1 % |
+| read_note: largest note | 29546 | 29546 | 29146 | -1 % |
+| read_note: hub, 2nd read in the same session | 100 | 100 | 96 | -4 % |
+| search_notes: query 1 (3 words) | 711 | 711 | 649 | -9 % |
+| search_notes: query 2 (2 words) | 598 | 598 | 536 | -10 % |
+| search_notes: query 3 (3 words) | 655 | 655 | 594 | -9 % |
+| build_context: hub, depth 1 (default format) | 3512 | 3512 | 1731 | -51 % |
+| build_context: hub, depth 1, output_format text | 1748 | 1748 | 1731 | -1 % |
+| recent_activity (default) | 304 | 304 | 190 | -38 % |
+| recent_activity (timeframe 30d) | 304 | 304 | 190 | -38 % |
+| list_directory: memory, depth 2 | 203 | 203 | 196 | -3 % |
+| write_note (small new note) | 124 | 124 | 116 | -6 % |
+| edit_note (append) | 60 | 60 | 55 | -8 % |
+
+### Synthetic memory (521 notes)
+
+| Engine | 0.6.3 | core-perf | change |
+|---|---:|---:|---:|
+| cold start: index ready (ms) | 1416 | 1235 | -13 % |
+| cold start: first answer (ms) | 1670 | 1493 | -11 % |
+| cold start: CPU (s) | 1.97 | 1.76 | -11 % |
+| peak RSS at start (MB) | 138 | 109.44 | -21 % |
+| RSS once ready (MB) | 141.61 | 112.86 | -20 % |
+| steady RSS after the calls (MB) | 206.14 | 143.25 | -31 % |
+| idle CPU (%) | 0.18 | 0.23 | +28 % |
+| one poll scan: CPU p50 (ms) | 26 | 23 | -12 % |
+| search_notes p50 (ms) | 11.15 | 9.38 | -16 % |
+| search_notes p95 (ms) | 36.74 | 26.47 | -28 % |
+| read_note p50 (ms) | 2.97 | 2.63 | -11 % |
+| read_note p95 (ms) | 6 | 5.52 | -8 % |
+| build_context p50 (ms) | 3.32 | 3.15 | -5 % |
+| build_context p95 (ms) | 6.96 | 10.2 | +47 % |
+| memory_core p50 (ms) | 2.47 | 2.79 | +13 % |
+| memory_core p95 (ms) | 2.92 | 14.97 | +413 % |
+| recent_activity p50 (ms) | 3.76 | 3.84 | +2 % |
+| recent_activity p95 (ms) | 5.84 | 5.64 | -3 % |
+| write_note p50 (ms) | 68.71 | 52.05 | -24 % |
+| write_note p95 (ms) | 113.07 | 76.7 | -32 % |
+| edit_note (append) p50 (ms) | 23.24 | 12.1 | -48 % |
+| edit_note (append) p95 (ms) | 29.83 | 22.65 | -24 % |
+| search_notes right after a write p50 (ms) | 11.75 | 7.56 | -36 % |
+| search_notes right after a write p95 (ms) | 15.66 | 10.71 | -32 % |
+
+| Tokens as the model receives them (≈ bytes / 4) | 0.6.3 | core-perf | core-perf `--lean-answers` | change |
+|---|---:|---:|---:|---:|
+| tools/list (fixed reference) | 4807 | 4807 | 4807 | 0 % |
+| memory_core | 176 | 176 | 169 | -4 % |
+| read_note: index note | 141 | 141 | 133 | -6 % |
+| read_note: hub | 580 | 580 | 566 | -2 % |
+| read_note: big journal | 1239 | 1239 | 1207 | -3 % |
+| read_note: median-size note | 1452 | 1452 | 1420 | -2 % |
+| read_note: largest note | 1239 | 1239 | 1207 | -3 % |
+| read_note: hub, 2nd read in the same session | 98 | 98 | 94 | -4 % |
+| search_notes: query 1 (2 words) | 305 | 305 | 244 | -20 % |
+| search_notes: query 2 (3 words) | 431 | 431 | 371 | -14 % |
+| search_notes: query 3 (3 words) | 395 | 395 | 336 | -15 % |
+| build_context: hub, depth 1 (default format) | 1751 | 1751 | 732 | -58 % |
+| build_context: hub, depth 1, output_format text | 749 | 749 | 732 | -2 % |
+| recent_activity (default) | 255 | 255 | 141 | -45 % |
+| recent_activity (timeframe 30d) | 255 | 255 | 141 | -45 % |
+| list_directory: memory, depth 2 | 298 | 298 | 247 | -17 % |
+| write_note (small new note) | 124 | 124 | 116 | -6 % |
+| edit_note (append) | 60 | 60 | 55 | -8 % |
+
+**Limits.** One machine, shared with other work: p50 moves by ±10 % between two runs of the same
+code, and a p95 over 30 or 60 calls is one of the two or three slowest calls — a single pause moves it
+(`memory_core`, a 3 ms cached call this work does not touch, reads 3 → 15 ms in the synthetic table
+and 12 → 7 ms in another pair of runs). Read the p50 columns; the memory figures are stable to ±3 MB. "Cold start" is a process
+start with the files already in the page cache (the benchmark has just copied them). The call mix
+is a list of typical calls, not a recorded session.
+
+**Reproduce.** `node bench/core-perf.js` (synthetic), `node bench/core-perf.js --root DIR`
+(a copy of your folder), add `--server-arg --lean-answers` for the third column.
