@@ -27,6 +27,27 @@
   text is the only text (every `tools.profile`); the longer explanations live in the README (search
   syntax, edit operations, memory_core matching).
 
+## Unreleased
+
+### Changed
+
+- **Control panel redesigned, on its own page** (`/panel`, `public/panel.html`, `panel.css`, `control.js`):
+  a first screen that says in one sentence whether all is well (all good / needs you / not set up yet),
+  the maintenance week (7-day lanes per worker, weekly ledger, "Needs your eye" from the structure
+  audit's R1–R7 and D1, one card per worker with its error in plain words), token savings (total, per day,
+  per lever, measured session-start cost), the workers' AI provider (key set / refused / none; a refused
+  key puts a banner on the whole page: stopped at HH:MM, nothing was changed), and the settings (default /
+  changed here / locked by an environment variable; a danger zone confirmed in place). Light and dark
+  themes, phone layout, 8 languages, no network font (Bricolage Grotesque is shipped, OFL-1.1). Settings →
+  Control on the memory page now leads there; the old tile is gone. A lever switch now saves at once.
+
+### Added
+
+- **Memory server: `GET /api/maintenance/events`** — the last 7 days of each worker's event log, the
+  weekly counts per day and each worker's last/next scan (same token as `GET /api/maintenance`, whose
+  shape is unchanged). The viewer relays it at its own `GET /api/maintenance/events`.
+- **Viewer: `savingsByDay` in `GET /api/cost`** — tokens saved and relayed per day over 30 days.
+
 ## 0.6.3 — 2026-11-13
 
 ### Fixed

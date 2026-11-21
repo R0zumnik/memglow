@@ -116,7 +116,7 @@ structure audit as rule **D1** (report-only, no AI, no merge). See the [CHANGELO
 | 🛡️ **Protected groups** | At first run, pick the big groups no assistant may ever move notes across (rename how they are shown if you like). [More](#protected-groups) |
 | 🗄️ **Archive tier** | Sections unused for months (≈ 3.5 by default) move, word for word, to an archive note of the same theme, with a one-line summary each; the live memory stays small, nothing is lost. [More](#archive) |
 | 🎛️ **Tune it live** | Background, glow, bubble size, size by links or token cost, names and name distance, spread, gravity, spacing, signal speed, links at rest, auto-rotate, find-a-note. Saved in your browser. [Settings](#settings) |
-| 🎚️ **Control panel** | Settings → Control: every [MCP proxy lever](#mcp-proxy) in one place — current value, where it comes from (env / page / file / default), locked by an environment variable or not — switch the day-one ones from the page itself. [More](#control-panel) |
+| 🎚️ **Control panel** | Settings → Control (`/panel`): one sentence that says whether all is well, what the maintenance workers did this week and when, what needs your eye, what was saved, the AI provider's state, and every [MCP proxy lever](#mcp-proxy) as a switch — light and dark, phone-ready. [More](#control-panel) |
 | 🌐 **8 languages** | English, French, German, Spanish, Brazilian Portuguese, Japanese, Korean, Simplified Chinese — picks your browser's language, switch it any time. [Languages](#languages) |
 | 🔒 **Private by design** | Localhost by default, read-only access to your notes (the optional assistant writes only what you approve), secret-looking lines masked. Hooks send note names only, never content. No CDN, no analytics. |
 | 📦 **Zero dependencies** | One command, Node 18+. No build step, no database. Or one Docker container. |
@@ -1807,25 +1807,49 @@ The open-source edition stays free and MIT.
 <a id="control-panel"></a>
 ## 🎚️ Control panel
 
-**Settings → Control** is one place to see — and, for the levers, change — the settings that used
-to be scattered across `memglow.config.json`, environment variables and the [MCP proxy](#mcp-proxy)'s
-own defaults:
+**Settings → Control** opens the control panel on its own page, **`/panel`** (same access rule as
+the memory page). It answers four questions in order: is everything fine, what did memglow do
+while nobody was using the memory, what does it need from you, and what does it save.
 
-- **Token savings** — every proxy lever (see [MCP proxy](#mcp-proxy) for what each one does), with
-  its current value and where that value comes from: an environment variable (locked, shown
-  disabled), this page, `memglow.config.json`, or the built-in default. Day-one levers
-  (`sizeWarning`, `multiQuery`, `aliases`, `learnAliases`, `indexWarning`) are shown first; the
-  rest are under "Advanced". **Saving needs the MCP proxy restarted** — it reads its levers once,
-  at start.
-- **Memory maintenance** — the last scheduled scan's time and how many opportunities it found, a
-  **Run now** button, and five tuning fields (scan interval, archive-after days, index-trim
-  candidate line length, the index's own "too large" threshold, sessions/day) — same priority as
-  everywhere else: environment variable > this page > `memglow.config.json` > default.
-- **Memory server** — if `MEMGLOW_MEMORY_URL` points at a [memglow memory server](#memory-server),
-  its health (reachable, read-only or read-write, whether it needs a token, version, notes
-  count) — read-only, never a secret.
-- **Measures** — whether the MCP proxy has reported in recently, and per-AI-tool and per-lever
-  token totals (the same counts [Memory cost](#memory-cost)'s "By AI tool" line already uses).
+- **First screen** — one sentence ("memglow tidied 9 things in your memory this week", "memglow
+  stopped at 02:14. Its AI key was refused.", "Maintenance is not set up yet.") with a verdict
+  (*All good* / *Needs you* / *Not set up yet*), the week's tally per worker and the last 24 hours
+  as a strip with the night hours shaded. Three cards under it: tokens saved over 7 days, the
+  state of the workers, the AI provider.
+- **Maintenance** — needs `MEMGLOW_MEMORY_URL` pointing at a [memglow memory server](#memory-server).
+  *Who worked when*: one lane per worker (auto-split, structure guardian, auto-archive) over 7
+  days, a dot per action, a crossed red ring for an error. *This week*: the weekly report as a
+  ledger with one bar per day. *Needs your eye*: what the structure audit reports and never fixes
+  alone (rules R1–R7, possible duplicates D1), what needs a decision first. One card per worker:
+  running / paused / off, its AI, last and next pass, queue, last events, and its error in plain
+  words.
+- **Token savings** — the 7-day total, one bar per day over 30 days, a ranking per lever and per
+  AI tool, and the **measured cost of a session start** (the average `memory_core` answer plus the
+  average `tools/list` answer the proxy served).
+- **AI provider** — the provider the workers use, with its state: key set, key refused ("stopped
+  at HH:MM, nothing in your memory was changed" — the whole page reacts, with a banner under the
+  top bar), no key, or no provider (nothing red: the memory is not at risk). The key is never
+  shown. The provider itself is set on the memory server (`MEMGLOW_AI_PROVIDER`, …), not here; the
+  on-demand assistant keeps its own **AI settings** on the memory page, one click away.
+- **Settings** — every proxy lever (see [MCP proxy](#mcp-proxy)) as a switch that saves at once,
+  with a badge for where its value comes from: *Default*, *Changed here* (with "Reset to
+  default"), *From memglow.config.json*, or *Locked by MEMGLOW_…* (an environment variable always
+  wins; the switch is disabled). Day-one levers first, the rest under "Advanced levers". **A lever
+  change needs the MCP proxy restarted** — it reads its levers once, at start. The schedule card
+  holds the five tuning fields (scan interval, archive-after days, index-trim line length, the
+  index's own "too large" threshold, sessions/day) and **Run now**; same priority as everywhere
+  else: environment variable > this page > `memglow.config.json` > default. The **danger zone**
+  (reset every lever changed here, forget an AI key saved from the browser) confirms inside its
+  own row, never with a browser dialog.
+
+Light and dark themes (system by default, switchable, remembered in the browser), a phone layout,
+8 languages, reduced motion honoured. The page makes no outside request: its one display typeface
+(Bricolage Grotesque, OFL-1.1) is shipped in `public/vendor/fonts/`.
+
+Behind it, two additive read-only answers: the memory server's `GET /api/maintenance/events` (the
+last 7 days of each worker's event log, the weekly counts per day, each worker's last and next
+scan — same token as `GET /api/maintenance`, whose own shape is unchanged; the viewer relays it at
+its own `GET /api/maintenance/events`), and `savingsByDay` in the viewer's `GET /api/cost`.
 
 The panel never shows (not even as a field to type into) the memory server's own `--token`,
 `--read-write`, `--allow-origin`, `--on-write`, `--file-mode` or `--no-fsync`, any API key or

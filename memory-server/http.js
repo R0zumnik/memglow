@@ -153,6 +153,34 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
       duplicateCandidates: stat && stat.issues && stat.issues.byRule ? stat.issues.byRule.D1 || 0 : 0,
     });
   }
+  /**
+   * Night Shift panel (GET /api/maintenance/events): the last 7 days of each worker's own event
+   * log, oldest first, bounded (the newest EVENTS_MAX per worker), the same counts as `weekly`
+   * per local calendar day, and each worker's last/next scan time. A separate route on purpose:
+   * GET /api/maintenance keeps its exact shape. Titles and the worker's own short detail only —
+   * never a note's text, never a key.
+   */
+  const EVENTS_MAX = 300;
+  function maintenanceEvents() {
+    const now = Date.now();
+    const since = weeklyReport.weeklyReportSince(now);
+    const evOf = (w) => (w && typeof w.recentEvents === "function" ? w.recentEvents(since) : []);
+    const pub = (arr) => arr.slice(-EVENTS_MAX).map((e) => ({ t: iso(e.t), kind: String(e.kind || "").slice(0, 40), note: e.note != null ? String(e.note).slice(0, 200) : null, detail: e.detail != null ? String(e.detail).slice(0, 300) : null }));
+    const as = evOf(autoSplit), st = evOf(structure), ar = evOf(archive);
+    const sched = (w) => { const s = w && w.status ? w.status() : null; return { lastScanAt: iso(s ? s.lastScanAt : null), nextScanAt: iso(s ? s.nextScanAt : null) }; };
+    const ss = structure && structure.status ? structure.status() : null;
+    return {
+      since: iso(since), now: iso(now),
+      days: weeklyReport.buildDailyReport({ autoSplitEvents: as, structureEvents: st, archiveEvents: ar }, now, 7),
+      autoSplit: pub(as), structure: pub(st), archive: pub(ar),
+      schedule: {
+        autoSplit: sched(autoSplit),
+        structure: { ...sched(structure), ai: ss && ss.ai ? { enabled: !!ss.ai.enabled, provider: String(ss.ai.provider || ""), model: String(ss.ai.model || "") } : { enabled: false, provider: "", model: "" },
+          fixable: ss && ss.issues ? ss.issues.fixable || 0 : 0, needsReview: ss && ss.issues ? ss.issues.needsReview || 0 : 0 },
+        archive: sched(archive),
+      },
+    };
+  }
   function maintenanceStatus() {
     const as = autoSplit && autoSplit.status ? autoSplit.status() : { enabled: false, provider: "", model: "", keySet: false, thresholdTokens: 0, pendingCount: 0, lastScanAt: null, nextScanAt: null, lastError: null };
     const st = structure && structure.status ? structure.status() : { enabled: false, ai: { enabled: false, provider: "", model: "" }, issues: { total: 0, fixable: 0, needsReview: 0, byRule: {} }, issueList: [], lastScanAt: null, nextScanAt: null, lastError: null };
@@ -220,6 +248,7 @@ function createHttpServer({ rpc, store, path: mcpPath = "/mcp", log = () => {}, 
     // healthz pattern) and anyone else that wants it — same auth as every other request here,
     // never the API key itself (only "keySet": true/false).
     if (p === "/api/maintenance" && req.method === "GET") return send(res, 200, maintenanceStatus());
+    if (p === "/api/maintenance/events" && req.method === "GET") return send(res, 200, maintenanceEvents());
     if (p !== mcpPath && !(p === "/" && mcpPath === "/")) {
       return send(res, 404, { jsonrpc: "2.0", id: null, error: { code: -32000, message: `Not found: ${url.pathname} (the MCP endpoint is ${mcpPath})` } });
     }

@@ -169,141 +169,241 @@ test("i18n: app.js/cost.js/assistant.js/zones.js English fallbacks match public/
   }
 });
 
-test("control.js: controlRenderMaintenanceWorkers (0.5.4) — auto-split/structure lines, silent when not configured/reachable, never a secret", () => {
-  const T = controlPage.defaultControlT;
-  assert.strictEqual(controlPage.controlRenderMaintenanceWorkers(null, T), "");
-  assert.strictEqual(controlPage.controlRenderMaintenanceWorkers({ configured: false }, T), "");
-  assert.strictEqual(controlPage.controlRenderMaintenanceWorkers({ configured: true, ok: false, error: "unreachable" }, T), "");
-  const html = controlPage.controlRenderMaintenanceWorkers({
-    configured: true, ok: true,
-    autoSplit: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5", keySet: true, pendingCount: 2 },
-    structure: { enabled: false, issues: 0 },
-  }, T);
-  assert.match(html, /Auto-split: on — anthropic claude-haiku-4-5, 2 notes pending/);
-  assert.match(html, /Structure guardian: off/);
-  assert.ok(!/<input|<select|<button/.test(html), "a read-only view, never a control");
-  const offHtml = controlPage.controlRenderMaintenanceWorkers({ configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: true, issues: 1 } }, T);
-  assert.match(offHtml, /Auto-split: off/);
-  assert.match(offHtml, /Structure guardian: on — 1 issue found/);
+// ---- control panel ("Night Shift", public/control.js): pure renderers ----
+
+const NS_NOW = new Date(2026, 10, 4, 9, 12).getTime();
+const nsIso = (h) => new Date(new Date(2026, 10, 4).getTime() + h * 3600000).toISOString();
+function nsData({ state = "ok", issueList, weekly, events } = {}) {
+  const off = state === "off";
+  const err = state === "auth" ? { t: nsIso(2.23), message: "Failed to authenticate. API Error: 401 Invalid bearer token" } : null;
+  return {
+    setup: {
+      control: {
+        proxy: { levers: [{ key: "sizeWarning", value: true, source: "default", envLocked: false, day1: true }, { key: "dedupe", value: true, source: "page", envLocked: false, day1: false }, { key: "indexWarning", value: true, source: "env", envLocked: true, env: "MEMGLOW_PROXY_INDEX_WARNING", day1: true }], caps: [{ key: "largeNoteTokens", value: 5000, source: "default" }] },
+        maintenance: { generatedAt: NS_NOW },
+        memoryServer: { configured: true, ok: true, readOnly: false, tokenRequired: true, version: "0.6.3", notes: 12 },
+        memoryMaintenance: state === "nomem" ? { configured: false } : state === "down" ? { configured: true, ok: false, error: "unreachable" } : {
+          configured: true, ok: true,
+          autoSplit: { enabled: !off, provider: off ? "" : "anthropic", model: off ? "" : "claude-haiku-4-5", keySet: !off, pendingCount: 2, lastError: err },
+          structure: { enabled: !off, issues: (issueList || []).length, issueList: issueList || [], lastError: null },
+          archive: { enabled: !off, provider: off ? "" : "anthropic", model: off ? "" : "claude-haiku-4-5", keySet: !off, keepDays: 90, lastScanAt: nsIso(0.6), nextScanAt: nsIso(24.6), lastError: null, recent: [] },
+          duplicates: { enabled: !off, foundCount: 0, checkedCount: 0, reported: [], recent: [] },
+          weekly: weekly || { notesSplit: 1, structureFixes: 3, structureFixesByKind: { R2: 3 }, sectionsArchived: 2, duplicatesFound: 0, aiCalls: 12, cachedVerdicts: 4, errors: state === "auth" ? 1 : 0 },
+        },
+        proxySeen: { t: NS_NOW - 5000, durationMs: 42 },
+      },
+      tuning: { maintenanceEveryHours: 24, archiveAfterDays: 105, indexTrimMaxChars: 90, indexWarningTokens: 2000, sessionsPerDay: 5, locked: {} },
+      assistant: { enabled: false, provider: "claude-code", providers: [{ id: "claude-code", label: "Claude Code", key: "not needed", keySource: "" }] },
+    },
+    maintenance: { items: [{ id: "a" }] },
+    cost: {
+      clientTokens: { days: 7, byClient: { "claude-code": { tokens: 100, calls: 2 } }, byLever: { dedupe: { tokens: 50, calls: 1 } }, sessionStart: { memoryCoreAvg: 1800, toolsListAvg: 3100, total: 4900, memoryCoreServed: 6, toolsListServed: 6 } },
+      savingsByDay: [{ day: "2026-11-03", saved: 20, relayed: 60, calls: 1 }, { day: "2026-11-04", saved: 30, relayed: 40, calls: 1 }],
+    },
+    events: events === null ? null : events || {
+      configured: true, ok: true, since: nsIso(-168), now: nsIso(9.2), days: [{ day: "2026-11-04", notesSplit: 1, structureFixes: 3, sectionsArchived: 2, aiCalls: 12, cachedVerdicts: 4, errors: 0 }],
+      autoSplit: [{ t: nsIso(0.7), kind: "split", note: "trip<script>", detail: "3 parts" }].concat(state === "auth" ? [{ t: nsIso(2.23), kind: "auth-error", note: "x", detail: "401" }] : []),
+      structure: [{ t: nsIso(1.3), kind: "fix", note: "bike", detail: "R2 — Up line added" }, { t: nsIso(1.4), kind: "ai-call", note: "bike", detail: "R5" }],
+      archive: [{ t: nsIso(2.6), kind: "archived", note: "old", detail: "2 section(s) → archive" }],
+      schedule: { autoSplit: { lastScanAt: nsIso(0.6), nextScanAt: nsIso(24.6) }, structure: { lastScanAt: nsIso(0.6), nextScanAt: nsIso(24.6), ai: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5" }, fixable: 1, needsReview: 1 }, archive: { lastScanAt: nsIso(0.6), nextScanAt: nsIso(24.6) } },
+    },
+  };
+}
+
+test("control.js: controlModel — the verdict (ok / needs / setup / unreachable) from lastError, enabled and weekly", () => {
+  const ok = controlPage.controlModel(nsData(), NS_NOW);
+  assert.strictEqual(ok.kind, "ok");
+  assert.strictEqual(ok.tidied, 6, "1 split + 3 fixes + 2 sections");
+  assert.strictEqual(ok.provState, "ok");
+  assert.deepStrictEqual(ok.prov.usedBy, ["split", "structure", "archive"]);
+  const auth = controlPage.controlModel(nsData({ state: "auth" }), NS_NOW);
+  assert.strictEqual(auth.kind, "needs");
+  assert.strictEqual(auth.provState, "auth");
+  assert.strictEqual(auth.paused.length, 1);
+  assert.match(auth.auth.message, /401/);
+  assert.strictEqual(auth.waiting, 1, "the refused key counts as one thing waiting");
+  assert.strictEqual(controlPage.controlModel(nsData({ state: "off" }), NS_NOW).kind, "setup");
+  assert.strictEqual(controlPage.controlModel(nsData({ state: "off" }), NS_NOW).provState, "none");
+  assert.strictEqual(controlPage.controlModel(nsData({ state: "nomem" }), NS_NOW).kind, "setup");
+  assert.strictEqual(controlPage.controlModel(nsData({ state: "down" }), NS_NOW).kind, "unreachable");
+  // Never throws on nothing at all (the very first paint, an older server).
+  assert.strictEqual(controlPage.controlModel({}, NS_NOW).kind, "setup");
+  assert.strictEqual(controlPage.controlModel(nsData({ events: null }), NS_NOW).hasEvents, false);
 });
 
-test("control.js: controlRenderMaintenanceWorkers (0.5.10) — the structure issue sample, collapsible, silent when empty/absent/disabled", () => {
+test("control.js: first screen — one sentence, the tally, the verdict, three summary cards", () => {
   const T = controlPage.defaultControlT;
-  // No issueList at all (an older memory server): no collapsible block, no crash.
-  const noList = controlPage.controlRenderMaintenanceWorkers({
-    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: true, issues: 1 },
-  }, T);
-  assert.doesNotMatch(noList, /Structure issues/);
-  assert.doesNotMatch(noList, /<details/);
+  const ok = controlPage.controlRender(nsData(), T, {}, NS_NOW, "en");
+  assert.match(ok, /memglow tidied 6 things in your memory this week\./);
+  assert.match(ok, /All good/);
+  assert.match(ok, /1 note split/);
+  assert.match(ok, /3 structure fixes/);
+  assert.match(ok, /2 sections archived/);
+  assert.match(ok, /3 of 3 running/);
+  assert.match(ok, /Tokens saved, last 7 days/);
+  assert.match(ok, /Anthropic API/);
+  assert.doesNotMatch(ok, /role="alert"/, "no banner when nothing is wrong");
+  const quiet = controlPage.controlRender(nsData({ weekly: { notesSplit: 0, structureFixes: 0, structureFixesByKind: {}, sectionsArchived: 0, duplicatesFound: 0, aiCalls: 0, cachedVerdicts: 0, errors: 0 } }), T, {}, NS_NOW, "en");
+  assert.match(quiet, /Your memory is in order/);
+  const off = controlPage.controlRender(nsData({ state: "off" }), T, {}, NS_NOW, "en");
+  assert.match(off, /Not set up yet/);
+  assert.match(off, /Your memory is not at risk/, "no provider: calm, nothing red");
+  assert.doesNotMatch(off, /statusline--crit|role="alert"/);
+  const down = controlPage.controlRender(nsData({ state: "down" }), T, {}, NS_NOW, "en");
+  assert.match(down, /cannot reach the memory server/);
+  assert.match(down, /unreachable/);
+});
 
-  // Enabled with issues: a collapsed <details> list, one <li> per issue, fixable vs needs-review
-  // worded differently, escaped (never raw HTML from a note's own title/detail).
-  const html = controlPage.controlRenderMaintenanceWorkers({
-    configured: true, ok: true, autoSplit: { enabled: false },
-    structure: {
-      enabled: true, issues: 2,
-      issueList: [
-        { rule: "R3", note: "hub<script>", detail: 'missing "## Parts" line for part "spoke"', fixable: true },
-        { rule: "R5", note: "orphan", detail: "not in the index, not a part, not named in any hub's \"## Parts\"", fixable: false },
-      ],
-    },
-  }, T);
-  assert.match(html, /Structure issues/);
-  assert.match(html, /<details class="mg-control__advanced"><summary>Structure issues<\/summary>/);
-  assert.match(html, /R3 — hub&lt;script&gt;: missing &quot;## Parts&quot; line for part &quot;spoke&quot; \(auto-fixable\)/);
-  assert.match(html, /R5 — orphan: not in the index.* \(needs review\)/);
+test("control.js: a refused key changes the whole page — banner with the time, verdict, paused worker, provider card, never a secret", () => {
+  const T = controlPage.defaultControlT;
+  const html = controlPage.controlRender(nsData({ state: "auth" }), T, {}, NS_NOW, "en");
+  assert.match(html, /class="alert" role="alert"/);
+  assert.match(html, /Maintenance stopped at 02:13\./);
+  assert.match(html, /Nothing in your memory was changed\./);
+  assert.match(html, /memglow stopped at 02:13\. Its AI key was refused\./);
+  assert.match(html, /Needs you/);
+  assert.match(html, /1 of 3 paused/);
+  assert.match(html, /Paused/);
+  assert.match(html, /Stopped at 02:13\./);
+  assert.match(html, /Failed to authenticate\. API Error: 401 Invalid bearer token/);
+  assert.match(html, /Key refused at 02:13/);
+  assert.match(html, /AI key refused, 1 worker paused/);
+  assert.match(html, /statusline--crit/);
+  assert.ok(!/sk-ant|apiKey/i.test(html), "never a key");
+});
+
+test("control.js: \"Needs your eye\" — structure issueList (R1–R7, D1), what needs a decision first, escaped, calm when empty", () => {
+  const T = controlPage.defaultControlT;
+  const m = controlPage.controlModel(nsData({ issueList: [
+    { rule: "R3", note: "hub<script>", detail: 'missing "## Parts" line for part "spoke"', fixable: true },
+    { rule: "R5", note: "orphan", detail: "not in the index", fixable: false },
+    { rule: "D1", note: "meal-plan", detail: 'possible duplicate of "weekly-meals"', fixable: false },
+    { rule: "R9", note: "x", detail: "y", fixable: false },
+  ] }), NS_NOW);
+  assert.strictEqual(m.review, 3);
+  assert.strictEqual(m.waiting, 3);
+  const html = controlPage.controlRenderIssues(m, T, "en");
+  assert.ok(html.indexOf("Orphan note") < html.indexOf("A hub&#39;s list of parts is out of date"), "needs-review before auto-fixable");
+  assert.match(html, /Possible duplicate/);
+  assert.match(html, /Structure issue/, "an unknown rule still gets a title");
+  assert.match(html, /hub&lt;script&gt;/);
+  assert.match(html, /missing &quot;## Parts&quot; line for part &quot;spoke&quot;/);
+  assert.match(html, /memglow fixes this on its next pass/);
+  assert.match(html, /Yours to decide/);
   assert.doesNotMatch(html, /<script>/);
-
-  // Disabled: never shown even if a stale issueList is still present from before it was turned off.
-  const disabledHtml = controlPage.controlRenderMaintenanceWorkers({
-    configured: true, ok: true, autoSplit: { enabled: false },
-    structure: { enabled: false, issues: 1, issueList: [{ rule: "R5", note: "x", detail: "y", fixable: false }] },
-  }, T);
-  assert.doesNotMatch(disabledHtml, /Structure issues/);
-
-  // Enabled but empty: silent.
-  const emptyHtml = controlPage.controlRenderMaintenanceWorkers({
-    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: true, issues: 0, issueList: [] },
-  }, T);
-  assert.doesNotMatch(emptyHtml, /Structure issues/);
+  assert.match(html, /1 tidy-up suggestion is waiting/);
+  // More than six: the rest folds under "Show n more".
+  const many = controlPage.controlModel(nsData({ issueList: Array.from({ length: 9 }, (_, i) => ({ rule: "R5", note: "n" + i, detail: "", fixable: false })) }), NS_NOW);
+  assert.match(controlPage.controlRenderIssues(many, T, "en"), /<details class="more"[^>]*><summary>Show 4 more<\/summary>/);
+  // Nothing at all: one calm line, no list.
+  const none = controlPage.controlModel(Object.assign(nsData(), { maintenance: { items: [] } }), NS_NOW);
+  const empty = controlPage.controlRenderIssues(none, T, "en");
+  assert.match(empty, /Nothing needs you/);
+  assert.doesNotMatch(empty, /<ul/);
+  // A stale issueList of a structure worker that is off is never shown.
+  const d = nsData({ issueList: [{ rule: "R5", note: "x", detail: "y", fixable: false }] });
+  d.setup.control.memoryMaintenance.structure.enabled = false;
+  assert.strictEqual(controlPage.controlModel(d, NS_NOW).issues.length, 0);
 });
 
-test("control.js: controlRenderMaintenanceWorkers (0.5.4 bug fix) — a worker's lastError becomes a visible warning line, named per worker", () => {
+test("control.js: weekly ledger, worker cards and lanes — figures, per-day bars, status, last events, an error as a crossed ring", () => {
   const T = controlPage.defaultControlT;
-  const html = controlPage.controlRenderMaintenanceWorkers({
-    configured: true, ok: true,
-    autoSplit: { enabled: true, provider: "anthropic", model: "claude-haiku-4-5", pendingCount: 1, lastError: { t: "2026-10-27T12:00:00.000Z", message: "Failed to authenticate. API Error: 401 Invalid bearer token" } },
-    structure: { enabled: true, issues: 0, lastError: null },
-  }, T);
-  assert.match(html, /mg-control__line--bad/);
-  assert.match(html, /Auto-split: stopped — auth error: Failed to authenticate\. API Error: 401 Invalid bearer token/);
-  assert.ok((html.match(/mg-control__line--bad/g) || []).length === 1, "only autoSplit has a lastError here, structure stays silent");
+  const m = controlPage.controlModel(nsData({ state: "auth" }), NS_NOW);
+  const ledger = controlPage.controlRenderLedger(m, T, "en");
+  for (const s of ["Notes split", "Structure fixes", "by rule: R2 3", "Sections archived", "Possible duplicates", "AI calls", "Verdicts reused", "Errors"]) assert.ok(ledger.includes(s), s);
+  assert.match(ledger, /ledger__n--crit">1</);
+  assert.match(ledger, /<svg class="mini"/);
+  const workers = controlPage.controlRenderWorkers(m, T, "en");
+  assert.strictEqual((workers.match(/<article/g) || []).length, 3, "one card per worker");
+  assert.match(workers, /data-worker="split"[\s\S]*Paused[\s\S]*data-worker="structure"/);
+  assert.match(workers, /Anthropic API, claude-haiku-4-5/);
+  assert.match(workers, /2 notes waiting to go quiet/);
+  assert.match(workers, /After the key is fixed/);
+  assert.match(workers, /Note split: trip&lt;script&gt;, 3 parts/);
+  assert.match(workers, /Sections unread for 90 days/);
+  assert.ok(!/<input|<select|<button/.test(workers), "status only: the workers are configured on the memory server");
+  const svg = controlPage.controlLanesSvg({ from: NS_NOW - 7 * 86400000, to: NS_NOW, w: 900, workers: m.workers, T, lang: "en", aria: "x" });
+  assert.match(svg, /^<svg /);
+  assert.strictEqual((svg.match(/class="dot"/g) || []).length, 4, "3 actions + 1 error are focusable marks; a pass that changed nothing is a faint tick");
+  assert.match(svg, /stroke="var\(--crit\)"/);
+  assert.match(svg, /data-tip-t="Auto-split, 00:42"/);
+  assert.doesNotMatch(svg, /<script>/);
+  assert.match(controlPage.controlLanesSvg({ from: NS_NOW - 86400000, to: NS_NOW, w: 320, workers: m.workers, compact: true, T, lang: "en" }), /fill="var\(--c-night\)"/);
+  assert.strictEqual(controlPage.controlEventClass("split-failed"), "err");
+  assert.strictEqual(controlPage.controlEventClass("left"), "minor");
+  // A memory server too old to send its timeline: a sentence, not an empty chart.
+  assert.match(controlPage.controlRenderMaintenance(controlPage.controlModel(nsData({ events: null }), NS_NOW), T, "en"), /does not send its timeline yet/);
 });
 
-test("control.js: controlRenderMaintenanceWorkers (0.5.6) — auto-archive/duplicates lines, counts, last scan, last error, recent archives and reported pairs with reason", () => {
+test("control.js: savings — total, per-day bars, per-lever ranking, and the measured session-start cost", () => {
   const T = controlPage.defaultControlT;
-  // Off (or simply absent, an older memory server): silent "off" lines, no detail lists, never a secret.
-  const offHtml = controlPage.controlRenderMaintenanceWorkers({
-    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: false },
-  }, T);
-  assert.match(offHtml, /Auto-archive: off/);
-  assert.match(offHtml, /Duplicates: off/);
-  assert.doesNotMatch(offHtml, /Recently archived/);
-  assert.doesNotMatch(offHtml, /Possible duplicate pairs/);
-
-  const html = controlPage.controlRenderMaintenanceWorkers({
-    configured: true, ok: true,
-    autoSplit: { enabled: false }, structure: { enabled: false },
-    archive: {
-      enabled: true, keepDays: 60, lastScanAt: "2026-10-28T10:00:00.000Z", lastError: null,
-      recent: [{ t: "2026-10-28T09:00:00.000Z", kind: "archived", note: "old-incident", detail: "1 section(s) → old-incident-archive" }],
-    },
-    duplicates: {
-      enabled: true, lastScanAt: "2026-10-28T10:00:00.000Z", lastError: null,
-      // 0.6.0: report-only D1 candidates (lexical, no AI): each pair carries its score.
-      reported: [
-        { a: "coffee-a", b: "coffee-b", duplicate: true, score: 0.8 },
-        { a: "tea-a", b: "tea-b", duplicate: true, score: 0.75 },
-      ],
-    },
-  }, T);
-  assert.match(html, /Auto-archive: on — 1 note archived recently/);
-  assert.match(html, /Possible duplicates: 2 \(report only, no AI\)/);
-  assert.match(html, /Recently archived/);
-  assert.match(html, /old-incident — 1 section\(s\) → old-incident-archive/);
-  assert.match(html, /Possible duplicate pairs/);
-  assert.match(html, /coffee-a \/ coffee-b: score 0.8/);
-  assert.match(html, /tea-a \/ tea-b: score 0.75/);
-  assert.ok(!/<input|<select|<button/.test(html), "a read-only view, never a control");
-
-  const errHtml = controlPage.controlRenderMaintenanceWorkers({
-    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: false },
-    archive: { enabled: true, lastError: { t: "2026-10-27T12:00:00.000Z", message: "Failed to authenticate. API Error: 401 Invalid bearer token" } },
-  }, T);
-  assert.match(errHtml, /Auto-archive: stopped — auth error:/);
-  assert.strictEqual((errHtml.match(/mg-control__line--bad/g) || []).length, 1);
+  const m = controlPage.controlModel(nsData(), NS_NOW);
+  assert.strictEqual(m.saved7, 50);
+  const html = controlPage.controlRenderSavings(m, T, "en");
+  assert.match(html, /class="big num">≈ 50</);
+  assert.match(html, /data-chart="bars"/);
+  assert.match(html, /Unchanged re-reads/, "a lever is named in words, not by its key");
+  assert.match(html, /claude-code/);
+  assert.match(html, /≈ 4,900 tokens per session start/);
+  assert.match(html, /memory_core[\s\S]*≈ 1,800[\s\S]*tools\/list[\s\S]*≈ 3,100/);
+  assert.match(html, /average of 6 answers/);
+  const bars = controlPage.controlBarsSvg(m.byDay, 600, T, "en");
+  assert.strictEqual((bars.match(/class="dot"/g) || []).length, 2);
+  assert.match(bars, /≈ 30 tokens saved/);
+  const empty = controlPage.controlRenderSavings(controlPage.controlModel({}, NS_NOW), T, "en");
+  assert.match(empty, /Nothing measured yet/);
+  assert.match(empty, /Not measured yet/);
 });
 
-test("control.js: controlRenderMaintenanceWorkers (0.5.8) — the weekly maintenance report block, silent when absent, an error line only when errors > 0", () => {
+test("control.js: settings — Default / Changed here / Locked by env badges, schedule fields, danger zone with an inline confirmation", () => {
   const T = controlPage.defaultControlT;
-  const noWeekly = controlPage.controlRenderMaintenanceWorkers({
-    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: false },
-  }, T);
-  assert.doesNotMatch(noWeekly, /This week:/, "an older memory server with no `weekly` field: silent, never a crash");
+  const m = controlPage.controlModel(nsData(), NS_NOW);
+  const html = controlPage.controlRenderSettings(m, T, "en", {});
+  assert.match(html, /<span class="src">Default<\/span>/);
+  assert.match(html, /<span class="src src--changed">Changed here<\/span>/);
+  assert.match(html, /<span class="src src--lock">Locked by MEMGLOW_PROXY_INDEX_WARNING<\/span>/);
+  assert.match(html, /data-lever="indexWarning" checked disabled/);
+  assert.match(html, /Advanced lever \(1\)/);
+  assert.match(html, /≈ 50 saved in 7 days/);
+  for (const k of ["maintenanceEveryHours", "archiveAfterDays", "indexTrimMaxChars", "indexWarningTokens", "sessionsPerDay"]) assert.ok(html.includes('data-maint="' + k + '"'), k);
+  assert.match(html, /id="mg-control-run-now"/);
+  assert.match(html, /id="mg-control-restart" role="status" hidden/);
+  assert.match(controlPage.controlRenderSettings(m, T, "en", { restart: true }), /id="mg-control-restart" role="status">Restart the MCP proxy/);
+  const dz = controlPage.controlRenderDanger(m, T);
+  assert.match(dz, /Danger zone/);
+  assert.match(dz, /1 lever was changed from this page/);
+  assert.match(dz, /data-dz="levers">Reset levers</);
+  assert.match(dz, /class="confirm" data-confirm="levers" hidden/);
+  assert.match(dz, /data-dz="key" disabled/, "no key saved from the browser: nothing to forget");
+  const withKey = nsData();
+  withKey.setup.assistant.providers.push({ id: "anthropic", label: "Anthropic API", key: "set", keySource: "page" });
+  assert.match(controlPage.controlRenderDanger(controlPage.controlModel(withKey, NS_NOW), T), /data-dz-ok="key-anthropic" data-provider="anthropic"/);
+  assert.ok(!/confirm\(/.test(fs.readFileSync(path.join(PUBLIC, "control.js"), "utf8")), "never a browser confirm() dialog");
+});
 
-  const html = controlPage.controlRenderMaintenanceWorkers({
-    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: false },
-    weekly: { notesSplit: 1, structureFixes: 3, structureFixesByKind: { R2: 3 }, sectionsArchived: 2, duplicatesFound: 0, aiCalls: 12, cachedVerdicts: 4, errors: 0 },
-  }, T);
-  assert.match(html, /This week: 1 split, 3 structure fixes, 2 archived, 0 possible duplicates, 12 AI calls/);
-  assert.doesNotMatch(html, /error this week|errors this week/);
-
-  const errHtml = controlPage.controlRenderMaintenanceWorkers({
-    configured: true, ok: true, autoSplit: { enabled: false }, structure: { enabled: false },
-    weekly: { notesSplit: 0, structureFixes: 0, structureFixesByKind: {}, sectionsArchived: 0, duplicatesFound: 0, aiCalls: 0, cachedVerdicts: 0, errors: 2 },
-  }, T);
-  assert.match(errHtml, /2 errors this week/);
-  assert.match(errHtml, /mg-control__line--bad/);
+test("control.js: the panel page — own stylesheet with light and dark tokens, no network font, every static text behind a key", () => {
+  const html = fs.readFileSync(path.join(PUBLIC, "panel.html"), "utf8");
+  const css = fs.readFileSync(path.join(PUBLIC, "panel.css"), "utf8");
+  assert.ok(!/https?:\/\/(?!www\.w3\.org)/.test(html.replace(/xmlns='http:\/\/www\.w3\.org\/2000\/svg'/g, "")), "panel.html: no outside URL");
+  assert.ok(!/https?:\/\//.test(css), "panel.css: no outside URL, fonts are self-hosted");
+  assert.match(css, /@font-face[\s\S]*\/vendor\/fonts\/bricolage-grotesque-latin\.woff2/);
+  assert.match(css, /prefers-color-scheme: dark/);
+  assert.match(css, /:root\[data-theme="dark"\]/);
+  assert.match(css, /prefers-reduced-motion: reduce/);
+  for (const f of ["bricolage-grotesque-latin.woff2", "bricolage-grotesque-latin-ext.woff2"]) assert.ok(fs.statSync(path.join(PUBLIC, "vendor", "fonts", f)).size > 10000, f);
+  assert.match(fs.readFileSync(path.join(PUBLIC, "..", "THIRD_PARTY_LICENSES"), "utf8"), /Bricolage Grotesque[\s\S]*SIL Open Font License/);
+  const en = loadLang("en");
+  for (const m of html.matchAll(/data-i18n="([^"]+)"/g)) assert.ok(Object.prototype.hasOwnProperty.call(en, m[1]), "panel.html: " + m[1]);
+  for (const m of html.matchAll(/data-i18n-attr="[a-z-]+:([^"]+)"/g)) assert.ok(Object.prototype.hasOwnProperty.call(en, m[1]), "panel.html: " + m[1]);
+  // Every visible text node of the static shell sits in an element that carries data-i18n
+  // (the brand name, the language autonyms and the template placeholders are not translated).
+  const autonyms = LANGS.map((c) => loadLang(c)._meta.autonym);
+  for (const m of html.replace(/<script[\s\S]*?<\/script>/g, "").matchAll(/<([a-z0-9]+)([^>]*)>([^<>]*[A-Za-z][^<>]*)</g)) {
+    const text = m[3].trim();
+    if (!text || /^\{\{title\}\}/.test(text) || autonyms.includes(text) || m[1] === "title") continue;
+    assert.ok(/data-i18n=/.test(m[2]), `panel.html: "${text}" has no data-i18n`);
+  }
+  assert.match(fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8"), /<a class="bn-btn" id="mem-control" href="\/panel" data-i18n="settings.control">/);
 });
 
 test("i18n: defaultT helpers resolve English outside a browser (Node require, no window)", () => {
@@ -338,29 +438,20 @@ test("i18n: v0.4 texts go through keys — journal channel, organisation facts, 
   // Assistant: regroup and archive jobs.
   assert.ok(aiPage.aiRenderJob({ id: "j", kind: "archive", state: "running", note: { label: "L" }, chars: 3 }, "X", T).includes("[ai.askingArchive]"));
   assert.ok(aiPage.aiAskForm("rg-1", "L", [], "", "regroup", T).includes("[ai.regroupAskMsg]"));
-  // Control panel: levers, maintenance, memory server and measures sections all go through keys.
-  const ctrl = controlPage.controlRender({
-    setup: { control: {
-      proxy: {
-        levers: [{ key: "sizeWarning", value: true, source: "default", envLocked: false, day1: true }, { key: "dedupe", value: false, source: "env", envLocked: true, env: "MEMGLOW_PROXY_DEDUPE", day1: false }],
-        caps: [{ key: "largeNoteTokens", value: 5000, source: "default" }],
-      },
-      maintenance: { generatedAt: Date.UTC(2026, 9, 1) }, memoryServer: { configured: true, ok: true, readOnly: true, tokenRequired: false, version: "0.9", notes: 3 },
-      proxySeen: { t: Date.UTC(2026, 9, 1) - 5000, durationMs: 42 },
-    }, tuning: { maintenanceEveryHours: 24, archiveAfterDays: 105, indexTrimMaxChars: 90, indexWarningTokens: 2000, sessionsPerDay: 5, locked: {} } },
-    maintenance: { items: [{ id: "a" }] },
-    cost: { clientTokens: { byClient: { "claude-code": { tokens: 100, calls: 2 } }, byLever: { dedupe: { tokens: 50, calls: 1 } } } },
-  }, T);
+  // Control panel: every section goes through keys.
+  const ctrl = controlPage.controlRender(nsData({ state: "auth", issueList: [{ rule: "R1", note: "MEMORY", detail: "x", fixable: false }] }), T, {}, NS_NOW, "en");
   for (const k of [
-    "control.sectionSavings", "control.locked", "control.sectionMaintenance", "control.maintenanceItems:1",
-    "control.sectionMemoryServer", "control.memoryServerOk", "control.sectionMeasures", "control.proxySeen",
-    "control.byClientTitle", "control.byLeverTitle", "control.runNow", "control.maintEveryHoursLabel",
-    "control.archiveAfterDaysLabel", "control.indexTrimMaxCharsLabel", "control.indexWarningTokensLabel",
-    "control.sessionsPerDayLabel", "aiset.save",
+    "panel.bannerAuthToday", "panel.heroStopped", "panel.verdictNeeds", "panel.tallySplit:1", "panel.vitalSaved", "panel.workersPaused:1",
+    "panel.maintTitle", "panel.ledgerSplit", "panel.lanesTitle", "panel.issuesTitle", "panel.rule.R1", "panel.issueReview",
+    "control.workerAutoSplit", "panel.statusPaused", "panel.kvLast", "panel.savingsTitle", "panel.byLeverTitle", "panel.byClientTitle",
+    "panel.sessionTotal", "panel.providerTitle", "panel.provAuthTitle", "panel.assistantOpen", "panel.settingsTitle", "panel.leversTitle",
+    "control.locked", "panel.badgeChanged", "control.resetToDefault", "control.maintEveryHoursLabel", "control.archiveAfterDaysLabel",
+    "control.indexTrimMaxCharsLabel", "control.indexWarningTokensLabel", "control.sessionsPerDayLabel", "aiset.save", "control.runNow",
+    "control.memoryServerOk", "control.proxySeen", "panel.dangerTitle", "panel.dangerResetBtn", "panel.foot",
   ]) {
     assert.ok(ctrl.includes("[" + k), k);
   }
-  assert.ok(ctrl.includes("sizeWarning") && ctrl.includes("dedupe") && ctrl.includes("largeNoteTokens"), "lever/cap names shown verbatim, never translated");
+  assert.ok(ctrl.includes("sizeWarning") && ctrl.includes("dedupe") && ctrl.includes("largeNoteTokens"), "lever/threshold keys shown verbatim, never translated");
 });
 
 test("control.js: controlCollectProxy diffs against the effective value (minor 2, 0.4.7.6) — only a REAL change is ever sent", () => {
@@ -492,7 +583,7 @@ test("i18n: no hardcoded English UI text remains outside the English fallback bl
   for (const phrase of [
     "Loading the graph…", "Settings", "Find a note", "Release all bubbles", "Live activity",
     "What are your big themes?", "Protected groups", "Not now", "Light",
-    "Set up memglow", "AI settings", "First-run setup", "Skip set-up", "Control panel",
+    "Set up memglow", "AI settings", "First-run setup", "Skip set-up",
   ]) {
     let i = index.indexOf(phrase);
     assert.ok(i >= 0, `index.html should still show "${phrase}" as the pre-JS default`);

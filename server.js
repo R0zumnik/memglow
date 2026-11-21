@@ -29,7 +29,7 @@ const memoryRules = require("./lib/memory-rules");
 const hubSpoke = require("./lib/hub-spoke");
 const { createFindTime } = require("./lib/find-time");
 const { createEngineSpeed, cleanDuration } = require("./lib/engine-speed");
-const { readClientSavings, proxyConfig } = require("./lib/proxy-levers");
+const { readClientSavings, readDailySavings, proxyConfig } = require("./lib/proxy-levers");
 
 const PUBLIC = path.join(__dirname, "public");
 // Interface languages shipped (public/i18n/<code>.json); must match lib/view.js SETTINGS.language
@@ -42,6 +42,12 @@ const STATIC = {
   "/zones.js": ["zones.js", "text/javascript; charset=utf-8"],
   "/setup.js": ["setup.js", "text/javascript; charset=utf-8"],
   "/control.js": ["control.js", "text/javascript; charset=utf-8"],
+  // The control panel ("Night Shift", GET /panel): its own stylesheet and one self-hosted display
+  // face (Bricolage Grotesque, OFL-1.1 — THIRD_PARTY_LICENSES); never a network font.
+  "/panel.css": ["panel.css", "text/css; charset=utf-8"],
+  "/panel-boot.js": ["panel-boot.js", "text/javascript; charset=utf-8"],
+  "/vendor/fonts/bricolage-grotesque-latin.woff2": ["vendor/fonts/bricolage-grotesque-latin.woff2", "font/woff2"],
+  "/vendor/fonts/bricolage-grotesque-latin-ext.woff2": ["vendor/fonts/bricolage-grotesque-latin-ext.woff2", "font/woff2"],
   "/i18n.js": ["i18n.js", "text/javascript; charset=utf-8"],
   "/vendor/memglow-graph.js": ["vendor/memglow-graph.js", "text/javascript; charset=utf-8"],
   ...Object.fromEntries(I18N_LANGS.map((code) => [`/i18n/${code}.json`, [`i18n/${code}.json`, "application/json; charset=utf-8"]])),
@@ -192,6 +198,7 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
   const statics = { ...STATIC, "/assistant.js": ["assistant.js", "text/javascript; charset=utf-8"] };
   const template = fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8");
   const assistantPanelHtml = fs.readFileSync(path.join(PUBLIC, "assistant.html"), "utf8");
+  const panelTemplate = fs.readFileSync(path.join(PUBLIC, "panel.html"), "utf8");
   const fingerprints = {};
   for (const [url, [file]] of Object.entries(statics)) {
     fingerprints[url] = crypto.createHash("sha1").update(fs.readFileSync(path.join(PUBLIC, file))).digest("hex").slice(0, 10);
@@ -530,6 +537,21 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
     if (Date.now() - memoryMaintenanceCacheAt > MEMORY_SERVER_CACHE_MS) refreshMemoryMaintenanceInBackground();
     return memoryMaintenanceCache;
   }
+  // Night Shift panel: the memory server's 7-day worker events (GET /api/maintenance/events) —
+  // same 30 s cache and background refresh as the two above.
+  let memoryEventsCache = { configured: false };
+  let memoryEventsCacheAt = 0;
+  let memoryEventsRefreshing = false;
+  function memoryEventsNow() {
+    if (Date.now() - memoryEventsCacheAt > MEMORY_SERVER_CACHE_MS && !memoryEventsRefreshing) {
+      memoryEventsRefreshing = true;
+      setupLib.memoryMaintenanceEvents({ url: runEnv.MEMGLOW_MEMORY_URL, token: runEnv.MEMGLOW_MEMORY_TOKEN, fetchImpl })
+        .then((ev) => { memoryEventsCache = ev; })
+        .catch(() => { memoryEventsCache = { configured: false }; })
+        .finally(() => { memoryEventsCacheAt = Date.now(); memoryEventsRefreshing = false; });
+    }
+    return memoryEventsCache;
+  }
   /** Hosts a key may be sent to, per provider, with the settings in effect now. */
   const destinations = () => Object.fromEntries(setupLib.PROVIDER_IDS.map((id) => {
     const row = setupLib.publicSetup({ config, saved: {}, env: runEnv, dataDir, memglowHome, req: null }).assistant.providers.find((x) => x.id === id);
@@ -833,6 +855,16 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       });
       return res.end(page());
     }
+    if (p === "/panel") {
+      // Warm the three memory-server caches: the page's own first requests then find an answer.
+      memoryServerNow(); memoryMaintenanceNow(); memoryEventsNow();
+      headers(res, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+      });
+      return res.end(panelTemplate.replace(/{{title}}/g, esc(config.title)).replace(/{{v:([a-z0-9/.-]+)}}/g, (_, u) => fingerprints["/" + u] || "0"));
+    }
     if (statics[p] && (p !== "/assistant.js" || assistant)) {
       const [file, type] = statics[p];
       headers(res, { "Content-Type": type, "Cache-Control": url.searchParams.has("v") ? "public, max-age=31536000, immutable" : "no-cache" });
@@ -850,7 +882,8 @@ function createServer(config, memory, { counters, views, zones, assistantEnv, fi
       return;
     }
     if (p === "/api/graph") return json(res, 200, memory.graph());
-    if (p === "/api/cost") return json(res, 200, { ...cost(), alwaysLoaded: alwaysLoaded(), findTime: findTimeNow(), engineSpeed: engineSpeed.summary(), clientTokens: clientTokensNow() });
+    if (p === "/api/cost") return json(res, 200, { ...cost(), alwaysLoaded: alwaysLoaded(), findTime: findTimeNow(), engineSpeed: engineSpeed.summary(), clientTokens: clientTokensNow(), savingsByDay: readDailySavings(dataDir, { now: Date.now() }) });
+    if (p === "/api/maintenance/events") return json(res, 200, memoryEventsNow());
     if (p === "/api/maintenance") { maintenanceEnsureStarted(); return json(res, 200, maintenanceStore.read()); }
     if (p === "/api/zones") {
       const z = zones.read();
