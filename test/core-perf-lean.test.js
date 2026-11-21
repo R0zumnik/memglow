@@ -98,6 +98,7 @@ test("lean answers: each answer is sent once, and tools/list declares no outputS
       }
     }
     const bc = listed.find((t) => t.name === "build_context");
+    assert.ok(/Compact Markdown by default/.test(bc.description) && !/JSON by default/.test(bc.description), "lean description says text is the default");
     assert.strictEqual(bc.inputSchema.properties.output_format.default, "text");
     assert.deepStrictEqual([...bc.inputSchema.properties.output_format.enum].sort(), ["json", "text"]);
     assert.strictEqual(TOOLS.find((t) => t.name === "build_context").inputSchema.properties.output_format.default, "json", "the shared list is not modified");

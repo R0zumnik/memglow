@@ -119,7 +119,7 @@ function leanToolList(tools) {
     const { outputSchema, ...rest } = t;
     if (t.name !== "build_context" || !rest.inputSchema || !rest.inputSchema.properties || !rest.inputSchema.properties.output_format) return rest;
     const of = rest.inputSchema.properties.output_format;
-    return { ...rest, description: String(rest.description).replace('JSON by default, or compact Markdown with output_format="text".', 'Compact Markdown by default, or JSON with output_format="json".'),
+    return { ...rest, description: String(rest.description).replace('JSON by default, output_format="text" for compact Markdown.', 'Compact Markdown by default, output_format="json" for JSON.'),
       inputSchema: { ...rest.inputSchema, properties: { ...rest.inputSchema.properties, output_format: { ...of, default: "text", enum: ["text", "json"] } } } };
   });
 }
